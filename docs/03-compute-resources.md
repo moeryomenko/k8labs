@@ -153,5 +153,26 @@ do
 done
 ```
 
+## Container runtime
+
+Install custom container runtime crun + cri-o(see https://cri-o.io/):
+
+```
+# export OS=CentOS_8_Stream
+# export VERSION=1.23
+# curl -L -o /etc/yum.repos.d/devel:kubic:libcontainers:stable.repo https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/$OS/devel:kubic:libcontainers:stable.repo
+# curl -L -o /etc/yum.repos.d/devel:kubic:libcontainers:stable:cri-o:$VERSION.repo https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable:cri-o:$VERSION/$OS/devel:kubic:libcontainers:stable:cri-o:$VERSION.repo
+# dnf -y install crun cri-o
+```
+
+After installation set crun as default runtime, need edit /etc/crio/crio.conf
+
+```
+# The crio.runtime table contains settings pertaining to the OCI runtime used
+# and options for how to set up and manage the OCI runtime.
+[crio.runtime]
+default_runtime="crun"
+```
+
 
 Next: [Provisioning a CA and Generating TLS Certificates](04-certificate-authority.md)
