@@ -165,13 +165,24 @@ Install custom container runtime crun + cri-o(see https://cri-o.io/):
 # dnf -y install crun cri-o
 ```
 
-After installation set crun as default runtime, need edit /etc/crio/crio.conf
+After installation set crun as default runtime, need edit /etc/crio/crio.conf and /etc/crio/crio.conf.d/00-default.conf
 
 ```
+# /etc/crio/crio.conf
+
 # The crio.runtime table contains settings pertaining to the OCI runtime used
 # and options for how to set up and manage the OCI runtime.
 [crio.runtime]
 default_runtime="crun"
+```
+
+```
+# /etc/crio/crio.conf.d/00-default.conf
+
+[crio.runtime.runtimes.crun]
+runtime_path = "/bin/crun"
+runtime_type = "oci"
+runtime_root = "/run/crun"
 ```
 
 
