@@ -186,4 +186,4 @@ runtime_root = "/run/crun"
 ```
 
 
-Next: [Provisioning a CA and Generating TLS Certificates](04-certificate-authority.md)
+Next: [Instaling kubeadm](04-installing-kubeadm.md)
