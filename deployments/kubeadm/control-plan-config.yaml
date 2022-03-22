@@ -14,7 +14,7 @@ localAPIEndpoint:
 nodeRegistration:
   criSocket: /var/run/crio/crio.sock
   imagePullPolicy: IfNotPresent
-  name: node
+  name: master1
   taints: null
 skipPhases:
   - addon/kube-proxy
@@ -25,7 +25,9 @@ apiServer:
   timeoutForControlPlane: 4m0s
 certificatesDir: /etc/kubernetes/pki
 clusterName: kubernetes
-controllerManager: {}
+controllerManager:
+  extraArgs:
+    "allocate-node-cidrs": "true"
 dns: {}
 etcd:
   local:
@@ -34,8 +36,10 @@ imageRepository: k8s.gcr.io
 kubernetesVersion: 1.23.0
 networking:
   dnsDomain: cluster.local
+  podSubnet: 10.200.1.0/24
   serviceSubnet: 10.96.0.0/12
 scheduler: {}
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
+cgroupDriver: systemd
