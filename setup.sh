@@ -8,6 +8,7 @@ helm install cilium cilium/cilium --version ${CILIUM_VERSION} \
    --set k8sServiceHost=192.168.111.20 \
    --set k8sServicePort=6443 \
    --set nodeinit.enabled=true \
+   --set nodeinit.reconfigureKubelet=true \
    --set kubeProxyReplacement=strict \
    --set hostServices.enabled=false \
    --set externalIPs.enabled=true \
@@ -18,4 +19,6 @@ helm install cilium cilium/cilium --version ${CILIUM_VERSION} \
    --set ipam.mode=kubernetes \
    --set hubble.enabled=true \
    --set hubble.relay.enabled=true \
-   --set hubble.ui.enabled=true
+   --set hubble.ui.enabled=true \
+   --set prometheus.enabled=true \
+   --set operator.prometheus.enabled=true
