@@ -47,7 +47,8 @@ packer/crash.log
 # version control as they are data points which are potentially sensitive and
 # subject to change depending on the environment.
 #
-packer/*.pkrvars.hcl
+#packer/*.pkrvars.hcl
 
 # For built boxes
 packer/*.box
+packer/artifacts/
