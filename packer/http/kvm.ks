@@ -1,89 +1,79 @@
-text
-lang en_US.UTF-8
-keyboard us
-timezone --utc Europe/Moscow
-# add console and reorder in %post
-bootloader --timeout=1 --location=mbr --append="console=ttyS0,115200n8 no_timer_check crashkernel=auto net.ifnames=0"
-auth --enableshadow --passalgo=sha512
-#authselect select sssd
-selinux --enforcing
-firewall --enabled --service=ssh
-network --bootproto=dhcp --device=link --activate --onboot=on
-#services --enabled=sshd,ovirt-guest-agent --disabled kdump,rhsmcertd
-services --enabled=sshd,NetworkManager,cloud-init,cloud-init-local,cloud-config,cloud-final --disabled kdump,rhsmcertd
-rootpw --iscrypted nope
+# Kickstart file to build CentOS-Stream-9 Guest image.
+# This image is used to test CentOS-Stream-9 content for
+# the cloud instances. This image provides minimally configured
+# system image.
 
-#
-# Partition Information. Change this as necessary
-# This information is used by appliance-tools but
-# not by the livecd tools.
-#
+url --url="http://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os/"
+text
+firstboot --disable
+keyboard --vckeymap=us --xlayouts='us'
+lang en_US.UTF-8
+network --bootproto=dhcp --device=eth0 --ipv6=auto --activate
+network --hostname=centos9.localdomain
+selinux --disabled
+rootpw testtest
+user --groups=wheel --name=user --password=testtest --uid=1000 --gecos="user" --gid=1000
+sshkey --username=user "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDUXg2vJmOBNIHd5j6gWFBs0/I4IWXp1jIHBn93FyUQsgiVOG82jhCA69G2SqCYbZHRJSJhwOFSMtMsvDno5Gz+tZMSASliiQnDD26YxiqZZUOApqCpdYKYEhwjVcokjKfm1rVdYhysk1K/qmlL6D0SVAzZxsepl7x8JksMVjvOsuGsZywsvh/Ck7JqEMt9O/NDWv0iFGkGy7J888eAnc+bMyiVV4ND+yYPqpCtL+fPU/dY7+LMR9uDoiJK8fAOmCrBvRLwmKOCh4NNRsHk58L36gl3ArUpNlqWrotpLROHhrXcuh4hSmPuTVsxQOTrzaHM2oVkw/+LBpFFqMLJrAaM8sVrfUBAhRD91cFHjazXg7RvXE1dbkPWDH6THJ71CS1FLyz2htMd7nYuJX/3J2bk533JKZVy/nOEtb0k2s1yCw4WNhT7M+RSFjsvgFsJJkvcGKPpIUwdkctzAXj4hAC1sdhiLsdh/j9E5yw2Tr6rRZ4nuBGDUOqlHABSZBm1d6k= packer-kvm-default-key"
+sshkey --username=root "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDUXg2vJmOBNIHd5j6gWFBs0/I4IWXp1jIHBn93FyUQsgiVOG82jhCA69G2SqCYbZHRJSJhwOFSMtMsvDno5Gz+tZMSASliiQnDD26YxiqZZUOApqCpdYKYEhwjVcokjKfm1rVdYhysk1K/qmlL6D0SVAzZxsepl7x8JksMVjvOsuGsZywsvh/Ck7JqEMt9O/NDWv0iFGkGy7J888eAnc+bMyiVV4ND+yYPqpCtL+fPU/dY7+LMR9uDoiJK8fAOmCrBvRLwmKOCh4NNRsHk58L36gl3ArUpNlqWrotpLROHhrXcuh4hSmPuTVsxQOTrzaHM2oVkw/+LBpFFqMLJrAaM8sVrfUBAhRD91cFHjazXg7RvXE1dbkPWDH6THJ71CS1FLyz2htMd7nYuJX/3J2bk533JKZVy/nOEtb0k2s1yCw4WNhT7M+RSFjsvgFsJJkvcGKPpIUwdkctzAXj4hAC1sdhiLsdh/j9E5yw2Tr6rRZ4nuBGDUOqlHABSZBm1d6k= packer-kvm-default-key"
+timezone Europe/Paris --utc
+bootloader --location=mbr --append=" net.ifnames=0 biosdevname=0 crashkernel=no"
+# Clear the Master Boot Record
 zerombr
+# Remove partitions
 clearpart --all --initlabel
-reqpart
-part / --fstype="xfs" --mkfsoptions "-m bigtime=0,inobtcount=0" --ondisk=vda --size=20000
+# Automatically create partitions using LVM
+autopart --type=lvm
+# Reboot after successful installation
 reboot
 
-%packages --ignoremissing
-# dnf group info minimal-environment
-@^minimal-environment
+# Packages
+%packages --excludedocs
 sudo
-# Exclude unnecessary firmwares
+qemu-guest-agent
+openssh-server
+-kexec-tools
+-dracut-config-rescue
+-plymouth*
 -iwl*firmware
 %end
 
-%post --nochroot --logfile=/mnt/sysimage/root/ks-post.log
+%addon com_redhat_kdump --disable
+%end
+
+%post
 # Update time
-/usr/sbin/ntpdate -bu 0.ru.pool.ntp.org 1.ru.pool.ntp.org
+#/usr/sbin/ntpdate -bu 0.fr.pool.ntp.org 1.fr.pool.ntp.org
 
-# sudo
-echo "centos ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-
-chmod 0700 -R /home/centos/.ssh
-chown centos:centos -R /home/centos/.ssh
-sed -i 's/^.*requiretty/#Defaults requiretty/' /etc/sudoers
+#sed -i 's/^.*requiretty/#Defaults requiretty/' /etc/sudoers
 sed -i 's/rhgb //' /etc/default/grub
 
 # Disable consistent network device naming
-/usr/bin/ln -s /dev/null /etc/udev/rules.d/80-net-name-slot.rules
+#/usr/bin/ln -s /dev/null /etc/udev/rules.d/80-net-name-slot.rules
 
 # sshd PermitRootLogin yes
-sed -i "s/#PermitRootLogin yes/PermitRootLogin yes/g" /etc/ssh/sshd_config
+sed -i "s/#PermitRootLogin prohibit-password/PermitRootLogin yes/g" /etc/ssh/sshd_config
+#echo "user ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+cat <<EOF >> /etc/sudoers
+Defaults !requiretty
+root ALL=(ALL) ALL
+user ALL=(ALL) NOPASSWD: ALL
+EOF
 
 # Enable NetworkManager, sshd and disable firewalld
 #/usr/bin/systemctl enable NetworkManager
 /usr/bin/systemctl enable sshd
-/usr/bin/systemctl disable firewalld
+/usr/bin/systemctl start sshd
+#/usr/bin/systemctl disable firewalld
 
 # Need for host/guest communication
 /usr/bin/systemctl enable qemu-guest-agent
-
-sed -i 's|^enabled=1|enabled=0|' /etc/yum/pluginconf.d/product-id.conf
-sed -i 's|^enabled=1|enabled=0|' /etc/yum/pluginconf.d/subscription-manager.conf
+/usr/bin/systemctl start qemu-guest-agent
 
 # Update all packages
-/usr/bin/yum -y update
-# clean up installation logs"
-rm -rf /var/log/yum.log
-rm -rf /var/lib/yum/*
-rm -rf /root/install.log
-rm -rf /root/install.log.syslog
-rm -rf /root/anaconda-ks.cfg
-rm -rf /var/log/anaconda*
+#/usr/bin/yum -y update
+#/usr/bin/yum clean all
 
-echo "Fixing SELinux contexts."
-touch /var/log/cron
-touch /var/log/boot.log
-mkdir -p /var/cache/yum
-/usr/sbin/fixfiles -R -a restore
-
-# remove random-seed so it's not the same every time
-rm -f /var/lib/systemd/random-seed
-
-# Remove machine-id on the pre generated images
-cat /dev/null > /etc/machine-id
-
-# Anaconda is writing to /etc/resolv.conf from the generating environment.
-# The system should start out with an empty file.
-truncate -s 0 /etc/resolv.conf
+# Not really needed since the kernel update already did this. Furthermore,
+# running this here reverts the grub menu to the current kernel.
+grub2-mkconfig -o /boot/grub2/grub.cfg
 %end

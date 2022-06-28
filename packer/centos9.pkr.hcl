@@ -25,12 +25,12 @@ variable "iso_checksum_type" {
 
 variable "iso_checksum" {
   type    = string
-  default = "df0901a8482237587101581a74e62742fa95ef493435d077a23d4bbe9508d63a"
+  default = "sha256:5ed4e78fb85e11f4ea82a6513cf4a56a5b0604f3cc703144f105d1c7a8191ec8"
 }
 
 variable "iso_url" {
   type    = string
-  default = "http://mirror.stream.centos.org/9-stream/BaseOS/x86_64/iso/CentOS-Stream-9-20220425.0-x86_64-boot.iso"
+  default = "http://mirror.stream.centos.org/9-stream/BaseOS/x86_64/iso/CentOS-Stream-9-20220627.1-x86_64-boot.iso"
 }
 
 variable "ssh_password" {
@@ -51,20 +51,20 @@ source "qemu" "centos9" {
   disk_compression = true
   disk_discard     = "unmap"
   disk_interface   = "virtio"
-  disk_size        = "${var.disk_size}"
+  disk_size        = var.disk_size
   format           = "qcow2"
-  headless         = "${var.headless}"
+  headless         = var.headless
   http_directory   = "http"
-  iso_url          = "${var.iso_url}"
-  iso_checksum     = "${var.iso_checksum_type}:${var.iso_checksum}"
+  iso_url          = var.iso_url
+  iso_checksum     = var.iso_checksum
   net_device       = "virtio-net"
   output_directory = "artifacts/"
   qemu_binary      = "/sbin/qemu-system-x86_64"
   qemuargs         = [["-m", "${var.ram}M"], ["-smp", "${var.cpu}"], ["-cpu", "host"]]
   shutdown_command = "sudo /usr/sbin/shutdown -h now"
-  ssh_password     = "${var.ssh_password}"
-  ssh_username     = "${var.ssh_username}"
-  ssh_wait_timeout = "30m"
+  ssh_password     = var.ssh_password
+  ssh_username     = var.ssh_username
+  ssh_wait_timeout = "40m"
 }
 
 build {
