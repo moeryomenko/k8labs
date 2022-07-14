@@ -74,4 +74,8 @@ build {
     execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     inline          = ["yum -y install epel-release", "yum repolist"]
   }
+
+  provisioner "shell" {
+    script = "install.sh"
+  }
 }
