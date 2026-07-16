@@ -29,21 +29,36 @@ base: ## Build the base OS image via Packer
 
 SYSEXT_NAMES := kubelet cri-o crun cni
 
-.PHONY: $(addprefix sysext/,$(SYSEXT_NAMES)) sysexts
+.PHONY: $(addprefix sysext/,$(SYSEXT_NAMES)) sysexts download-sysexts
 
-sysext/kubelet: ## Build sysext kubelet extension
-	@echo 'Building sysext kubelet...'
+download-sysexts: ## Download pre-built sysext binaries from upstream
+	extensions/download-sysexts.sh
 
-sysext/cri-o: ## Build sysext cri-o extension
-	@echo 'Building sysext cri-o...'
+sysext/kubelet:
+	@echo 'Downloading kubelet binary...'
+	extensions/download-sysexts.sh kubelet
+	@echo 'Packaging kubelet sysext...'
+	extensions/build.sh sysext sysext/kubelet kubelet
 
-sysext/crun: ## Build sysext crun extension
-	@echo 'Building sysext crun...'
+sysext/cri-o:
+	@echo 'Downloading cri-o binaries...'
+	extensions/download-sysexts.sh cri-o
+	@echo 'Packaging cri-o sysext...'
+	extensions/build.sh sysext sysext/cri-o cri-o
 
-sysext/cni: ## Build sysext cni extension
-	@echo 'Building sysext cni...'
+sysext/crun:
+	@echo 'Downloading crun binary...'
+	extensions/download-sysexts.sh crun
+	@echo 'Packaging crun sysext...'
+	extensions/build.sh sysext sysext/crun crun
 
-sysexts: $(addprefix sysext/,$(SYSEXT_NAMES)) ## Build all sysext extensions
+sysext/cni:
+	@echo 'Downloading CNI plugins...'
+	extensions/download-sysexts.sh cni
+	@echo 'Packaging CNI sysext...'
+	extensions/build.sh sysext sysext/cni cni
+
+sysexts: download-sysexts $(addprefix sysext/,$(SYSEXT_NAMES)) ## Build all sysext extensions
 	@echo 'All sysext extensions built.'
 
 # --- Config Extensions ---

@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+extensions/release/*.raw
+
+# Sysext binary files — downloaded at build time, never committed
+sysext/cri-o/usr/bin/crio
+sysext/cri-o/usr/bin/crictl
+sysext/cri-o/usr/bin/crio-conmon
+sysext/cri-o/usr/bin/crio-conmonrs
+sysext/crun/usr/bin/crun
+sysext/kubelet/usr/bin/kubelet
+sysext/cni/usr/lib/cni/bandwidth
+sysext/cni/usr/lib/cni/bridge
+sysext/cni/usr/lib/cni/firewall
+sysext/cni/usr/lib/cni/host-local
+sysext/cni/usr/lib/cni/loopback
+sysext/cni/usr/lib/cni/portmap
+sysext/cni/usr/lib/cni/tuning
