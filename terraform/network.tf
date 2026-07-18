@@ -13,7 +13,12 @@ resource "libvirt_network" "cluster" {
   ips = [{
     address = cidrhost(var.network_cidr, 1)
     prefix  = tonumber(split("/", var.network_cidr)[1])
-    dhcp    = {}
+    dhcp = {
+      ranges = [{
+        start = cidrhost(var.network_cidr, 10)
+        end   = cidrhost(var.network_cidr, 200)
+      }]
+    }
   }]
 
   dns = {

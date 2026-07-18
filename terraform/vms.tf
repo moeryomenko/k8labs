@@ -3,8 +3,12 @@
 # ---------------------------------------------------------------------------
 
 resource "libvirt_volume" "control_plane_root" {
-  name = "${var.control_plane.name}-root"
-  pool = libvirt_pool.cluster.name
+  name     = "${var.control_plane.name}-root"
+  pool     = libvirt_pool.cluster.name
+  capacity = var.control_plane.disk * 1024 * 1024  # MB → bytes
+  target = {
+    format = { type = "qcow2" }
+  }
 
   backing_store = {
     path   = libvirt_volume.base_image.path
@@ -13,9 +17,13 @@ resource "libvirt_volume" "control_plane_root" {
 }
 
 resource "libvirt_volume" "worker_root" {
-  count = length(var.workers)
-  name  = "${var.workers[count.index].name}-root"
-  pool  = libvirt_pool.cluster.name
+  count    = length(var.workers)
+  name     = "${var.workers[count.index].name}-root"
+  pool     = libvirt_pool.cluster.name
+  capacity = var.workers[count.index].disk * 1024 * 1024  # MB → bytes
+  target = {
+    format = { type = "qcow2" }
+  }
 
   backing_store = {
     path   = libvirt_volume.base_image.path
@@ -43,15 +51,22 @@ resource "libvirt_cloudinit_disk" "commoninit" {
 resource "libvirt_domain" "control_plane" {
   name   = var.control_plane.name
   type   = "kvm"
-  memory = var.control_plane.ram
+  memory = var.control_plane.ram * 1024  # MB → KiB
   vcpu   = var.control_plane.cpu
 
+  running   = true
   autostart = true
+
+  features = {
+    acpi = true
+  }
 
   os = {
     type         = "hvm"
     type_arch    = "x86_64"
-    type_machine = "q35"
+    type_machine = "pc"
+    type_arch    = "x86_64"
+    type_machine = "pc"
   }
 
   devices = {
@@ -62,6 +77,10 @@ resource "libvirt_domain" "control_plane" {
             pool   = libvirt_pool.cluster.name
             volume = libvirt_volume.control_plane_root.name
           }
+        }
+        driver = {
+          name = "qemu"
+          type = "qcow2"
         }
         target = {
           dev = "vda"
@@ -89,6 +108,7 @@ resource "libvirt_domain" "control_plane" {
             network = libvirt_network.cluster.name
           }
         }
+        model = { type = "virtio" }
       }
     ]
 
@@ -115,15 +135,20 @@ resource "libvirt_domain" "worker" {
   count  = length(var.workers)
   name   = var.workers[count.index].name
   type   = "kvm"
-  memory = var.workers[count.index].ram
+  memory = var.workers[count.index].ram * 1024  # MB → KiB
   vcpu   = var.workers[count.index].cpu
 
+  running   = true
   autostart = true
+
+  features = {
+    acpi = true
+  }
 
   os = {
     type         = "hvm"
     type_arch    = "x86_64"
-    type_machine = "q35"
+    type_machine = "pc"
   }
 
   devices = {
@@ -134,6 +159,10 @@ resource "libvirt_domain" "worker" {
             pool   = libvirt_pool.cluster.name
             volume = libvirt_volume.worker_root[count.index].name
           }
+        }
+        driver = {
+          name = "qemu"
+          type = "qcow2"
         }
         target = {
           dev = "vda"
@@ -161,6 +190,7 @@ resource "libvirt_domain" "worker" {
             network = libvirt_network.cluster.name
           }
         }
+        model = { type = "virtio" }
       }
     ]
 

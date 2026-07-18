@@ -8,13 +8,16 @@ resource "libvirt_pool" "cluster" {
 }
 
 resource "libvirt_volume" "base_image" {
-  name = "k8labs-base"
-  pool = libvirt_pool.cluster.name
+  name   = "k8labs-base"
+  pool   = libvirt_pool.cluster.name
+  target = {
+    format = { type = "qcow2" }
+  }
 
-  backing_store = {
-    path = var.base_image_path
-    format = {
-      type = "qcow2"
+  create = {
+    content = {
+      # base_image_path is relative to terraform/ directory: ../build/k8labs-base.qcow2
+      url = "file://${abspath(var.base_image_path)}"
     }
   }
 }
