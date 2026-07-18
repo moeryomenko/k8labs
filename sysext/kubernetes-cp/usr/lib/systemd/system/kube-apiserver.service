@@ -1,0 +1,39 @@
+[Unit]
+Description=kube-apiserver: The Kubernetes API Server
+Documentation=https://kubernetes.io/docs/home/
+
+[Service]
+ExecStart=/usr/bin/kube-apiserver \
+  --advertise-address={{CP_IP}} \
+  --allow-privileged=true \
+  --authorization-mode=Node,RBAC \
+  --client-ca-file=/etc/kubernetes/pki/ca.pem \
+  --enable-admission-plugins=NodeRestriction \
+  --enable-bootstrap-token-auth=true \
+  --etcd-cafile=/etc/kubernetes/pki/ca.pem \
+  --etcd-certfile=/etc/kubernetes/pki/kubernetes.pem \
+  --etcd-keyfile=/etc/kubernetes/pki/kubernetes-key.pem \
+  --etcd-servers=https://{{CP_IP}}:2379 \
+  --kubelet-client-certificate=/etc/kubernetes/pki/kubernetes.pem \
+  --kubelet-client-key=/etc/kubernetes/pki/kubernetes-key.pem \
+  --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname \
+  --proxy-client-cert-file=/etc/kubernetes/pki/front-proxy-client.pem \
+  --proxy-client-key-file=/etc/kubernetes/pki/front-proxy-client-key.pem \
+  --requestheader-allowed-names=front-proxy-client \
+  --requestheader-client-ca-file=/etc/kubernetes/pki/front-proxy-ca.pem \
+  --requestheader-extra-headers-prefix=X-Remote-Extra- \
+  --requestheader-group-headers=X-Remote-Group \
+  --requestheader-username-headers=X-Remote-User \
+  --secure-port=6443 \
+  --service-account-issuer=https://{{CP_IP}}:6443 \
+  --service-account-key-file=/etc/kubernetes/pki/service-account.pem \
+  --service-account-signing-key-file=/etc/kubernetes/pki/service-account-key.pem \
+  --service-cluster-ip-range=10.96.0.0/12 \
+  --service-node-port-range=30000-32767 \
+  --tls-cert-file=/etc/kubernetes/pki/kubernetes.pem \
+  --tls-private-key-file=/etc/kubernetes/pki/kubernetes-key.pem
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=etcd: Distributed key-value store
+Documentation=https://etcd.io/docs/
+
+[Service]
+ExecStart=/usr/bin/etcd --config-file /etc/etcd/etcd.conf.yml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

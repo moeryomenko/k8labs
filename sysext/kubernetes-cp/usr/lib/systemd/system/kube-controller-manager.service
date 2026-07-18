@@ -1,0 +1,22 @@
+[Unit]
+Description=kube-controller-manager: The Kubernetes Controller Manager
+Documentation=https://kubernetes.io/docs/home/
+
+[Service]
+ExecStart=/usr/bin/kube-controller-manager \
+  --bind-address=0.0.0.0 \
+  --cluster-cidr=10.244.0.0/16 \
+  --cluster-name=k8labs \
+  --cluster-signing-cert-file=/etc/kubernetes/pki/ca.pem \
+  --cluster-signing-key-file=/etc/kubernetes/pki/ca-key.pem \
+  --kubeconfig=/etc/kubernetes/controller-manager.kubeconfig \
+  --leader-elect=true \
+  --root-ca-file=/etc/kubernetes/pki/ca.pem \
+  --service-account-private-key-file=/etc/kubernetes/pki/service-account-key.pem \
+  --service-cluster-ip-range=10.96.0.0/12 \
+  --use-service-account-credentials=true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
