@@ -21,9 +21,9 @@ sysext/kubernetes-cp/usr/bin/*
 ansible/collections/
 
 # Generated TLS certificates, kubeconfigs, and cluster admin config
-certs/
+/certs/*
+!/certs/.gitkeep
 kubeconfig
-!certs/.gitkeep
 
 # Local .terraform directories and state
 .terraform/

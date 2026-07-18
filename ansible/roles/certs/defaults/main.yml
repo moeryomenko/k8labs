@@ -1,0 +1,24 @@
+---
+# defaults/main.yml — certs role defaults
+
+# Control-plane IP (must be set externally from inventory)
+cp_ip: "{{ hostvars[groups['control_plane'][0]]['ansible_host'] | default('127.0.0.1') }}"
+
+# Kubernetes API service IP (from service CIDR)
+kubernetes_svc_ip: "10.96.0.1"
+
+# Output directory for generated certificates
+certs_dir: "{{ playbook_dir }}/../../certs"
+
+# Cluster domain
+cluster_domain: "cluster.local"
+
+# Certificate validity (days)
+cert_validity_days: 3650
+
+# Node names (from inventory or variable)
+node_names: "{{ groups['cluster'] | default([]) }}"
+
+# Kubernetes service and pod CIDRs (for SANs)
+service_cidr: "10.96.0.0/12"
+pod_cidr: "10.244.0.0/16"

@@ -29,6 +29,7 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  tags: certs
   vars:
     certs_dir: "{{ playbook_dir }}/../../certs"
     cp_ip: "{{ hostvars[groups['control_plane'][0]]['ansible_host'] }}"

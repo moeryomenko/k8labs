@@ -1,0 +1,450 @@
+---
+# tasks/main.yml — TLS certificate and kubeconfig generation for KTHW
+#
+# Generates the full PKI infrastructure for a Kubernetes The Hard Way
+# cluster using community.crypto Ansible collection.
+#
+# Output at {{ certs_dir }}/
+#
+# Prerequisites:
+#   - community.crypto collection installed
+#   - kubectl in PATH for kubeconfig generation
+
+- name: Ensure certs output directory exists
+  ansible.builtin.file:
+    path: "{{ certs_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure kubelets cert subdirectory exists
+  ansible.builtin.file:
+    path: "{{ certs_dir }}/kubelets"
+    state: directory
+    mode: "0755"
+
+# ---------------------------------------------------------------------------
+# 1. Certificate Authority
+# ---------------------------------------------------------------------------
+- name: Generate CA private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/ca-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate CA CSR
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/ca.csr"
+    privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    common_name: "Kubernetes"
+    organization_name: "Kubernetes"
+    basic_constraints:
+      - CA:TRUE
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+    state: present
+
+- name: Generate CA certificate (self-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/ca.pem"
+    csr_path: "{{ certs_dir }}/ca.csr"
+    privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 2. Admin Client Certificate
+# ---------------------------------------------------------------------------
+- name: Generate admin private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/admin-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate admin CSR
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/admin.csr"
+    privatekey_path: "{{ certs_dir }}/admin-key.pem"
+    common_name: "admin"
+    organization_name: "system:masters"
+    key_usage:
+      - keyEncipherment
+      - digitalSignature
+    extended_key_usage:
+      - clientAuth
+    state: present
+
+- name: Generate admin certificate (CA-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/admin.pem"
+    csr_path: "{{ certs_dir }}/admin.csr"
+    ownca_path: "{{ certs_dir }}/ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 3. Kube-APIserver Certificate
+# ---------------------------------------------------------------------------
+- name: Generate kube-apiserver private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/kubernetes-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate kube-apiserver CSR with SANs
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/kubernetes.csr"
+    privatekey_path: "{{ certs_dir }}/kubernetes-key.pem"
+    common_name: "kubernetes"
+    organization_name: "Kubernetes"
+    subject_alt_name:
+      - "IP:{{ cp_ip }}"
+      - "IP:{{ kubernetes_svc_ip }}"
+      - "IP:127.0.0.1"
+      - "DNS:kubernetes"
+      - "DNS:kubernetes.default"
+      - "DNS:kubernetes.default.svc"
+      - "DNS:kubernetes.default.svc.{{ cluster_domain }}"
+    key_usage:
+      - keyEncipherment
+      - digitalSignature
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+    state: present
+
+- name: Generate kube-apiserver certificate (CA-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/kubernetes.pem"
+    csr_path: "{{ certs_dir }}/kubernetes.csr"
+    ownca_path: "{{ certs_dir }}/ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 4. Kube-Controller-Manager Certificate
+# ---------------------------------------------------------------------------
+- name: Generate kube-controller-manager private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/kube-controller-manager-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate kube-controller-manager CSR
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/kube-controller-manager.csr"
+    privatekey_path: "{{ certs_dir }}/kube-controller-manager-key.pem"
+    common_name: "system:kube-controller-manager"
+    organization_name: "system:kube-controller-manager"
+    key_usage:
+      - keyEncipherment
+      - digitalSignature
+    extended_key_usage:
+      - clientAuth
+    state: present
+
+- name: Generate kube-controller-manager certificate (CA-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/kube-controller-manager.pem"
+    csr_path: "{{ certs_dir }}/kube-controller-manager.csr"
+    ownca_path: "{{ certs_dir }}/ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 5. Kube-Scheduler Certificate
+# ---------------------------------------------------------------------------
+- name: Generate kube-scheduler private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/kube-scheduler-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate kube-scheduler CSR
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/kube-scheduler.csr"
+    privatekey_path: "{{ certs_dir }}/kube-scheduler-key.pem"
+    common_name: "system:kube-scheduler"
+    organization_name: "system:kube-scheduler"
+    key_usage:
+      - keyEncipherment
+      - digitalSignature
+    extended_key_usage:
+      - clientAuth
+    state: present
+
+- name: Generate kube-scheduler certificate (CA-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/kube-scheduler.pem"
+    csr_path: "{{ certs_dir }}/kube-scheduler.csr"
+    ownca_path: "{{ certs_dir }}/ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 6. Service Account Key Pair (no CSR — self-signed key)
+# ---------------------------------------------------------------------------
+- name: Generate service-account private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/service-account-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate service-account CSR
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/service-account.csr"
+    privatekey_path: "{{ certs_dir }}/service-account-key.pem"
+    common_name: "service-accounts"
+    organization_name: "Kubernetes"
+    key_usage:
+      - digitalSignature
+    extended_key_usage:
+      - clientAuth
+    state: present
+
+- name: Generate service-account certificate (CA-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/service-account.pem"
+    csr_path: "{{ certs_dir }}/service-account.csr"
+    ownca_path: "{{ certs_dir }}/ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 7. Etcd Certificate
+# ---------------------------------------------------------------------------
+- name: Generate etcd private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/etcd-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate etcd CSR with SANs
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/etcd.csr"
+    privatekey_path: "{{ certs_dir }}/etcd-key.pem"
+    common_name: "etcd"
+    organization_name: "Kubernetes"
+    subject_alt_name:
+      - "IP:{{ cp_ip }}"
+      - "IP:127.0.0.1"
+      - "DNS:localhost"
+    key_usage:
+      - keyEncipherment
+      - digitalSignature
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+    state: present
+
+- name: Generate etcd certificate (CA-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/etcd.pem"
+    csr_path: "{{ certs_dir }}/etcd.csr"
+    ownca_path: "{{ certs_dir }}/ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 8. Kubeconfigs
+# ---------------------------------------------------------------------------
+- name: Set kubernetes API server endpoint
+  ansible.builtin.set_fact:
+    k8s_endpoint: "https://{{ cp_ip }}:6443"
+
+- name: Generate admin kubeconfig
+  ansible.builtin.shell: |
+    set -e
+    KUBECONFIG={{ certs_dir }}/admin.kubeconfig \
+    kubectl config set-cluster k8s-labs \
+      --server={{ k8s_endpoint }} \
+      --certificate-authority={{ certs_dir }}/ca.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/admin.kubeconfig \
+    kubectl config set-credentials admin \
+      --client-certificate={{ certs_dir }}/admin.pem \
+      --client-key={{ certs_dir }}/admin-key.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/admin.kubeconfig \
+    kubectl config set-context default \
+      --cluster=k8s-labs \
+      --user=admin 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/admin.kubeconfig \
+    kubectl config use-context default 2>/dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+  # Creates admin.kubeconfig from certs
+
+- name: Generate controller-manager kubeconfig
+  ansible.builtin.shell: |
+    set -e
+    KUBECONFIG={{ certs_dir }}/controller-manager.kubeconfig \
+    kubectl config set-cluster k8s-labs \
+      --server={{ k8s_endpoint }} \
+      --certificate-authority={{ certs_dir }}/ca.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/controller-manager.kubeconfig \
+    kubectl config set-credentials system:kube-controller-manager \
+      --client-certificate={{ certs_dir }}/kube-controller-manager.pem \
+      --client-key={{ certs_dir }}/kube-controller-manager-key.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/controller-manager.kubeconfig \
+    kubectl config set-context default \
+      --cluster=k8s-labs \
+      --user=system:kube-controller-manager 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/controller-manager.kubeconfig \
+    kubectl config use-context default 2>/dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Generate scheduler kubeconfig
+  ansible.builtin.shell: |
+    set -e
+    KUBECONFIG={{ certs_dir }}/scheduler.kubeconfig \
+    kubectl config set-cluster k8s-labs \
+      --server={{ k8s_endpoint }} \
+      --certificate-authority={{ certs_dir }}/ca.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/scheduler.kubeconfig \
+    kubectl config set-credentials system:kube-scheduler \
+      --client-certificate={{ certs_dir }}/kube-scheduler.pem \
+      --client-key={{ certs_dir }}/kube-scheduler-key.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/scheduler.kubeconfig \
+    kubectl config set-context default \
+      --cluster=k8s-labs \
+      --user=system:kube-scheduler 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/scheduler.kubeconfig \
+    kubectl config use-context default 2>/dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+# ---------------------------------------------------------------------------
+# 9. Per-node kubelet certificates and kubeconfigs
+# ---------------------------------------------------------------------------
+- name: Generate per-node kubelet private keys
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/kubelets/{{ item }}-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+  loop: "{{ node_names }}"
+  when: item | length > 0
+
+- name: Generate per-node kubelet CSRs
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/kubelets/{{ item }}.csr"
+    privatekey_path: "{{ certs_dir }}/kubelets/{{ item }}-key.pem"
+    common_name: "system:node:{{ item }}"
+    organization_name: "system:nodes"
+    key_usage:
+      - keyEncipherment
+      - digitalSignature
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+    state: present
+  loop: "{{ node_names }}"
+  when: item | length > 0
+
+- name: Generate per-node kubelet certificates
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/kubelets/{{ item }}.pem"
+    csr_path: "{{ certs_dir }}/kubelets/{{ item }}.csr"
+    ownca_path: "{{ certs_dir }}/ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+  loop: "{{ node_names }}"
+  when: item | length > 0
+
+- name: Generate per-node kubelet kubeconfigs
+  ansible.builtin.shell: |
+    set -e
+    KUBECONFIG={{ certs_dir }}/kubelets/{{ item }}.kubeconfig \
+    kubectl config set-cluster k8s-labs \
+      --server={{ k8s_endpoint }} \
+      --certificate-authority={{ certs_dir }}/ca.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/kubelets/{{ item }}.kubeconfig \
+    kubectl config set-credentials system:node:{{ item }} \
+      --client-certificate={{ certs_dir }}/kubelets/{{ item }}.pem \
+      --client-key={{ certs_dir }}/kubelets/{{ item }}-key.pem \
+      --embed-certs=true 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/kubelets/{{ item }}.kubeconfig \
+    kubectl config set-context default \
+      --cluster=k8s-labs \
+      --user=system:node:{{ item }} 2>/dev/null
+    KUBECONFIG={{ certs_dir }}/kubelets/{{ item }}.kubeconfig \
+    kubectl config use-context default 2>/dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+  loop: "{{ node_names }}"
+  when: item | length > 0
+
+# ---------------------------------------------------------------------------
+# 10. Encryption Configuration
+# ---------------------------------------------------------------------------
+- name: Generate random encryption key
+  ansible.builtin.set_fact:
+    encryption_key: "{{ lookup('community.general.random_string', length=32, override_special='') | b64encode }}"
+
+- name: Create encryption-config.yaml
+  ansible.builtin.copy:
+    dest: "{{ certs_dir }}/encryption-config.yaml"
+    content: |
+      kind: EncryptionConfiguration
+      apiVersion: apiserver.config.k8s.io/v1
+      resources:
+        - resources:
+            - secrets
+          providers:
+            - aescbc:
+                keys:
+                  - name: key1
+                    secret: {{ encryption_key }}
+            - identity: {}
+    mode: "0644"
+
+# ---------------------------------------------------------------------------
+# 11. Cleanup — remove intermediate CSR files
+# ---------------------------------------------------------------------------
+- name: Remove intermediate CSR files
+  ansible.builtin.file:
+    path: "{{ certs_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - "ca.csr"
+    - "admin.csr"
+    - "kubernetes.csr"
+    - "kube-controller-manager.csr"
+    - "kube-scheduler.csr"
+    - "service-account.csr"
+    - "etcd.csr"
+
+- name: Remove kubelet CSR files
+  ansible.builtin.file:
+    path: "{{ certs_dir }}/kubelets/{{ item }}.csr"
+    state: absent
+  loop: "{{ node_names }}"
+  when: item | length > 0
+  # Keep only .pem, .kubeconfig, and encryption-config.yaml
