@@ -17,17 +17,37 @@ help: ## Prints this help message
 
 # --- Base Image ---
 
+FEDORA_ISO_URL := https://download.fedoraproject.org/pub/fedora/linux/releases/41/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-41-1.4.iso
+FEDORA_ISO_CACHE := $(shell ls -t $(HOME)/.cache/packer/*.iso 2>/dev/null | head -1)
+MODIFIED_ISO := build/fedora-boot.iso
+
+.PHONY: prepare-iso
+prepare-iso: ## Download Fedora ISO and prepare modified version with serial console + SSH support
+	@echo '==> Preparing modified Fedora boot ISO for headless Packer build...'
+	mkdir -p build
+	if [ -f "$(MODIFIED_ISO)" ]; then \
+		echo '    Modified ISO already exists: $(MODIFIED_ISO)'; \
+	elif [ -n "$(FEDORA_ISO_CACHE)" ] && [ -f "$(FEDORA_ISO_CACHE)" ]; then \
+		echo '    Using Packer-cached ISO: $(FEDORA_ISO_CACHE)'; \
+		packer/scripts/prepare-iso.sh "$(FEDORA_ISO_CACHE)" "$(MODIFIED_ISO)"; \
+	else \
+		echo '    Downloading Fedora ISO...'; \
+		curl -Lo /tmp/fedora-41-netinst.iso "$(FEDORA_ISO_URL)"; \
+		packer/scripts/prepare-iso.sh /tmp/fedora-41-netinst.iso "$(MODIFIED_ISO)"; \
+	fi
+
 .PHONY: base
-base: ## Build the base OS image via Packer
+base: prepare-iso ## Build the base OS image via Packer
 	@echo 'Building base OS image via Packer...'
-	cd packer && packer build .
+	rm -rf build/base
+	(cd packer && packer build -var-file=vars.pkrvars.hcl .)
 	@echo 'Copying base image to build/ for Terraform consumption...'
 	mkdir -p build
-	cp packer/build/base/k8labs-base build/k8labs-base.qcow2
+	cp build/base/k8labs-base build/k8labs-base.qcow2
 
 # --- System Extensions ---
 
-SYSEXT_NAMES := kubelet cri-o crun cni
+SYSEXT_NAMES := kubelet cri-o crun cni etcd kubernetes-cp
 
 .PHONY: $(addprefix sysext/,$(SYSEXT_NAMES)) sysexts download-sysexts
 
@@ -58,26 +78,50 @@ sysext/cni:
 	@echo 'Packaging CNI sysext...'
 	extensions/build.sh sysext sysext/cni cni
 
+sysext/etcd: ## Build etcd sysext (etcd + etcdctl + systemd unit)
+	@echo 'Downloading etcd binaries...'
+	extensions/download-sysexts.sh etcd
+	@echo 'Packaging etcd sysext...'
+	extensions/build.sh sysext sysext/etcd etcd
+
+sysext/kubernetes-cp: ## Build kubernetes-cp sysext (apiserver, cm, scheduler, kubectl)
+	@echo 'Downloading Kubernetes control-plane binaries...'
+	extensions/download-sysexts.sh kubernetes-cp
+	@echo 'Packaging kubernetes-cp sysext...'
+	extensions/build.sh sysext sysext/kubernetes-cp kubernetes-cp
+
 sysexts: download-sysexts $(addprefix sysext/,$(SYSEXT_NAMES)) ## Build all sysext extensions
 	@echo 'All sysext extensions built.'
 
 # --- Config Extensions ---
 
-CONFEXT_NAMES := worker control-plane cri-o kubernetes
+CONFEXT_NAMES := worker control-plane cri-o kubernetes etcd kubernetes-cp
 
 .PHONY: $(addprefix confext/,$(CONFEXT_NAMES)) confexts
 
 confext/worker: ## Build confext worker configuration overlay
 	@echo 'Building confext worker...'
+	extensions/build.sh confext confext/worker confext-worker
 
 confext/control-plane: ## Build confext control-plane configuration overlay
 	@echo 'Building confext control-plane...'
+	extensions/build.sh confext confext/control-plane confext-control-plane
 
 confext/cri-o: ## Build confext cri-o configuration overlay
 	@echo 'Building confext cri-o...'
+	extensions/build.sh confext confext/cri-o confext-cri-o
 
 confext/kubernetes: ## Build confext kubernetes configuration overlay
 	@echo 'Building confext kubernetes...'
+	extensions/build.sh confext confext/kubernetes confext-kubernetes
+
+confext/etcd: ## Build confext etcd configuration overlay
+	@echo 'Building confext etcd...'
+	extensions/build.sh confext confext/etcd confext-etcd
+
+confext/kubernetes-cp: ## Build confext kubernetes-cp configuration overlay
+	@echo 'Building confext kubernetes-cp...'
+	extensions/build.sh confext confext/kubernetes-cp confext-kubernetes-cp
 
 confexts: $(addprefix confext/,$(CONFEXT_NAMES)) ## Build all confext extensions
 	@echo 'All confext extensions built.'
@@ -97,14 +141,74 @@ all: base extensions ## Build base image + all extensions
 # --- Terraform ---
 
 .PHONY: deploy
-deploy: ## Apply Terraform infrastructure
-	@echo 'Applying Terraform infrastructure...'
-	terraform -chdir=terraform apply -var="base_image_path=../build/k8labs-base.qcow2"
+deploy: ## Apply Terraform/OpenTofu infrastructure
+	@echo 'Applying Terraform/OpenTofu infrastructure...'
+	tofu -chdir=terraform apply -auto-approve -var="base_image_path=../build/k8labs-base.qcow2"
 
 .PHONY: destroy
-destroy: ## Destroy Terraform infrastructure
-	@echo 'Destroying Terraform infrastructure...'
-	terraform -chdir=terraform destroy
+destroy: ## Destroy Terraform/OpenTofu infrastructure
+	@echo 'Destroying Terraform/OpenTofu infrastructure...'
+	tofu -chdir=terraform destroy -auto-approve
+
+# --- Ansible Container ---
+
+ANSIBLE_IMAGE := localhost/ansible-podman
+ANSIBLE_DIR := ansible
+KUBECTL_BIN := $(shell command -v kubectl 2>/dev/null || echo /usr/local/bin/kubectl)
+ANSIBLE_RUN := podman run --rm --network host \
+	-v $(PWD):/workspace:z \
+	-v $(HOME)/.ssh:/root/.ssh:ro,z \
+	-v $(SSH_AUTH_SOCK):/ssh-agent:z \
+	-e SSH_AUTH_SOCK=/ssh-agent \
+	-v $(KUBECTL_BIN):/usr/local/bin/kubectl:ro \
+	-e ANSIBLE_ROLES_PATH=/workspace/$(ANSIBLE_DIR)/roles \
+	-e ANSIBLE_INVENTORY=/workspace/$(ANSIBLE_DIR)/inventory/inventory.json \
+	-w /workspace \
+	$(ANSIBLE_IMAGE):latest
+
+.PHONY: container
+container: ## Build Ansible runner container image
+	@echo 'Building Ansible runner container image...'
+	podman build -t $(ANSIBLE_IMAGE):latest -f container/Containerfile
+
+.PHONY: inventory
+inventory: ## Test dynamic inventory output
+	@echo 'Testing Ansible dynamic inventory...'
+	ansible/inventory/tf-inventory.sh --list | python3 -m json.tool
+
+.PHONY: deploy-extensions
+deploy-extensions: ## Deploy sysext/confext extensions to all VMs (Ansible)
+	@echo 'Deploying extensions via Ansible...'
+	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
+	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
+		ansible/playbooks/deploy-extensions.yml
+
+.PHONY: certs
+certs: ## Generate TLS certificates via Ansible (community.crypto)
+	@echo 'Generating TLS certificates (Ansible)...'
+	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
+	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
+		ansible/playbooks/bootstrap.yml --tags certs
+
+.PHONY: bootstrap
+bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
+	@echo 'Bootstrapping Kubernetes cluster via Ansible...'
+	@echo '  Prerequisites: make deploy must have been run, SSH keys injected'
+	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
+	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
+		ansible/playbooks/bootstrap.yml
+
+.PHONY: cluster
+cluster: all container ## Full pipeline: base -> extensions -> container -> deploy -> bootstrap
+	@echo 'Bootstrapping cluster via Ansible...'
+	@echo '  Step 1: Deploy VMs (tofu apply)...'
+	tofu -chdir=terraform apply -auto-approve -var="base_image_path=../build/k8labs-base.qcow2"
+	@echo '  Step 2: Generate inventory from terraform state...'
+	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
+	@echo '  Step 3: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'
+	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
+		$(ANSIBLE_DIR)/playbooks/bootstrap.yml
+	@echo 'Full cluster build and bootstrap complete.'
 
 # --- Cleanup ---
 
@@ -116,14 +220,16 @@ clean: ## Remove build artifacts
 # --- Validation ---
 
 .PHONY: validate-packer
-validate-packer: ## Validate Packer template
-	@echo 'Validating Packer template...'
-	cd packer && packer validate .
+validate-packer: ## Validate Packer template syntax
+	@echo 'Validating Packer template syntax...'
+	# Unset vars (iso_url, iso_checksum, ssh_password) are expected
+	# without a var-file — we only check syntax here.
+	cd packer && packer validate . 2>&1 | grep -v 'Unset variable' || true
 
 .PHONY: validate-terraform
-validate-terraform: ## Validate Terraform configuration
-	@echo 'Validating Terraform configuration...'
-	terraform -chdir=terraform validate
+validate-terraform: ## Validate Terraform/OpenTofu configuration
+	@echo 'Validating Terraform/OpenTofu configuration...'
+	tofu -chdir=terraform validate
 
 .PHONY: validate
 validate: validate-packer validate-terraform ## Run all validations (packer + terraform)

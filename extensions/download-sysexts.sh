@@ -11,7 +11,7 @@
 #   --dry-run     Print what would be downloaded without downloading
 #   sysext-name   Download only the specified sysext(s); default: all
 #
-# Supported sysexts: cri-o, crun, kubelet, cni
+# Supported sysexts: cri-o, crun, kubelet, cni, etcd, kubernetes-cp
 
 set -u
 
@@ -28,9 +28,16 @@ CRUN_VERSION="1.28"
 CNI_VERSION="v1.9.1"
 
 KUBELET_URL="https://dl.k8s.io/${KUBELET_VERSION}/bin/linux/amd64/kubelet"
-CRIO_URL="https://github.com/cri-o/cri-o/releases/download/${CRIO_VERSION}/crio-${CRIO_VERSION}-linux-amd64.tar.gz"
+# cri-o releases are now distributed via Google Cloud Storage
+CRIO_URL="https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.${CRIO_VERSION}.tar.gz"
 CRUN_URL="https://github.com/containers/crun/releases/download/${CRUN_VERSION}/crun-${CRUN_VERSION}-linux-amd64"
 CNI_URL="https://github.com/containernetworking/plugins/releases/download/${CNI_VERSION}/cni-plugins-linux-amd64-${CNI_VERSION}.tgz"
+
+ETCD_VERSION="v3.5.17"
+KUBERNETES_CP_VERSION="v1.32.13"
+
+ETCD_URL="https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+KUBERNETES_CP_URL="https://dl.k8s.io/${KUBERNETES_CP_VERSION}/kubernetes-server-linux-amd64.tar.gz"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,7 +52,7 @@ Arguments:
   --dry-run     Print what would be downloaded without downloading
   sysext-name   Download only the specified sysext(s); default: all
 
-Supported sysexts: cri-o, crun, kubelet, cni
+Supported sysexts: cri-o, crun, kubelet, cni, etcd, kubernetes-cp
 USAGE_EOF
 }
 
@@ -137,21 +144,23 @@ download_kubelet() {
 }
 
 download_crio() {
-    tmpdir="${SYSEXT_DIR}/crio/.download.tmp"
+    tmpdir="${SYSEXT_DIR}/cri-o/.download.tmp"
     archive="${tmpdir}/crio.tar.gz"
     mkdir -p "$tmpdir"
 
     download_archive "$CRIO_URL" "$archive" "cri-o ${CRIO_VERSION}"
 
     if [ "$dry_run" -eq 0 ]; then
-        target_dir="${SYSEXT_DIR}/crio/usr/bin"
+        target_dir="${SYSEXT_DIR}/cri-o/usr/bin"
         mkdir -p "$target_dir"
 
         # Extract only the binaries we need from the tarball
         tar -xzf "$archive" -C "$tmpdir" 2>/dev/null || die "failed to extract cri-o archive"
 
         # The tarball contains bin/ with the binaries
-        for bin in crio crictl crio-conmon crio-conmonrs; do
+        # Note: crio-conmon and crio-conmonrs are distributed separately
+        # from the containers/conmon and containers/conmon-rs projects.
+        for bin in crio crictl pinns; do
             found=0
             for f in "${tmpdir}"/*/bin/"${bin}" "${tmpdir}"/bin/"${bin}"; do
                 if [ -f "$f" ]; then
@@ -196,12 +205,80 @@ download_cni() {
     fi
 }
 
+download_etcd() {
+    tmpdir="${SYSEXT_DIR}/etcd/.download.tmp"
+    archive="${tmpdir}/etcd.tar.gz"
+    mkdir -p "$tmpdir"
+
+    download_archive "$ETCD_URL" "$archive" "etcd ${ETCD_VERSION}"
+
+    if [ "$dry_run" -eq 0 ]; then
+        target_dir="${SYSEXT_DIR}/etcd/usr/bin"
+        mkdir -p "$target_dir"
+
+        tar -xzf "$archive" -C "$tmpdir" 2>/dev/null || die "failed to extract etcd archive"
+
+        # The tarball contains a single directory: etcd-v3.5.17-linux-amd64/
+        for bin in etcd etcdctl; do
+            found=0
+            for f in "${tmpdir}"/*/"${bin}" "${tmpdir}"/"${bin}"; do
+                if [ -f "$f" ]; then
+                    cp "$f" "${target_dir}/${bin}"
+                    chmod 755 "${target_dir}/${bin}"
+                    echo "  Extracted ${bin} from etcd archive"
+                    found=1
+                    break
+                fi
+            done
+            if [ "$found" -eq 0 ]; then
+                echo "  Warning: ${bin} not found in etcd archive" >&2
+            fi
+        done
+
+        rm -rf "$tmpdir"
+    fi
+}
+
+download_kubernetes_cp() {
+    tmpdir="${SYSEXT_DIR}/kubernetes-cp/.download.tmp"
+    archive="${tmpdir}/kubernetes-server.tar.gz"
+    mkdir -p "$tmpdir"
+
+    download_archive "$KUBERNETES_CP_URL" "$archive" "kubernetes-server ${KUBERNETES_CP_VERSION}"
+
+    if [ "$dry_run" -eq 0 ]; then
+        target_dir="${SYSEXT_DIR}/kubernetes-cp/usr/bin"
+        mkdir -p "$target_dir"
+
+        tar -xzf "$archive" -C "$tmpdir" 2>/dev/null || die "failed to extract kubernetes-server archive"
+
+        # The tarball contains kubernetes/server/bin/
+        for bin in kube-apiserver kube-controller-manager kube-scheduler kubectl; do
+            found=0
+            for f in "${tmpdir}"/kubernetes/server/bin/"${bin}" "${tmpdir}"/server/bin/"${bin}" "${tmpdir}"/bin/"${bin}"; do
+                if [ -f "$f" ]; then
+                    cp "$f" "${target_dir}/${bin}"
+                    chmod 755 "${target_dir}/${bin}"
+                    echo "  Extracted ${bin} from kubernetes-server archive"
+                    found=1
+                    break
+                fi
+            done
+            if [ "$found" -eq 0 ]; then
+                echo "  Warning: ${bin} not found in kubernetes-server archive" >&2
+            fi
+        done
+
+        rm -rf "$tmpdir"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 main() {
     # Map of sysext name -> download function
-    downloads="cri-o crun kubelet cni"
+    downloads="cri-o crun kubelet cni etcd kubernetes-cp"
 
     if [ -n "$requested" ]; then
         downloads="$requested"
@@ -212,7 +289,9 @@ main() {
             cri-o)    info "Downloading cri-o...";    download_crio ;;
             crun)     info "Downloading crun...";     download_crun ;;
             kubelet)  info "Downloading kubelet...";  download_kubelet ;;
-            cni)      info "Downloading cni...";      download_cni ;;
+            cni)           info "Downloading cni...";           download_cni ;;
+            etcd)          info "Downloading etcd...";          download_etcd ;;
+            kubernetes-cp) info "Downloading kubernetes-cp..."; download_kubernetes_cp ;;
             *)
                 echo "Warning: unknown sysext '${name}' — skipping" >&2
                 ;;

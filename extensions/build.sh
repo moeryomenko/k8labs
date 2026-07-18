@@ -125,7 +125,7 @@ else
     output_file="${RELEASE_DIR}/${output_name}.raw"
 
     if command -v mksquashfs >/dev/null 2>&1; then
-        mksquashfs "$source_dir" "$output_file" -noappend
+        mksquashfs "$source_dir" "$output_file" -noappend -all-root
     elif command -v genisoimage >/dev/null 2>&1; then
         genisoimage -output "$output_file" "$source_dir"
     else

@@ -1,18 +1,51 @@
-# Build artifacts
+# Build artifacts (base image, ISOs)
 build/
+build/base/
+
+# Extension release artifacts — squashfs images and directory-mode copies
 extensions/release/*.raw
+extensions/release/*/
+
+# Download temporary directories
+sysext/*/.download.tmp/
 
 # Sysext binary files — downloaded at build time, never committed
-sysext/cri-o/usr/bin/crio
-sysext/cri-o/usr/bin/crictl
-sysext/cri-o/usr/bin/crio-conmon
-sysext/cri-o/usr/bin/crio-conmonrs
+sysext/cri-o/usr/bin/*
 sysext/crun/usr/bin/crun
 sysext/kubelet/usr/bin/kubelet
-sysext/cni/usr/lib/cni/bandwidth
-sysext/cni/usr/lib/cni/bridge
-sysext/cni/usr/lib/cni/firewall
-sysext/cni/usr/lib/cni/host-local
-sysext/cni/usr/lib/cni/loopback
-sysext/cni/usr/lib/cni/portmap
-sysext/cni/usr/lib/cni/tuning
+sysext/cni/usr/lib/cni/*
+sysext/etcd/usr/bin/*
+sysext/kubernetes-cp/usr/bin/*
+
+# Ansible Galaxy collections — installed at build time
+ansible/collections/
+
+# Generated TLS certificates, kubeconfigs, and cluster admin config
+certs/
+kubeconfig
+!certs/.gitkeep
+
+# Local .terraform directories and state
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Crash log files
+crash.log
+crash.*.log
+
+# .tfvars files contain sensitive data — never commit
+*.tfvars
+*.tfvars.json
+
+# Override files are local-only
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration files (local to each developer)
+.terraformrc
+terraform.rc
+ansible/inventory/inventory.json
