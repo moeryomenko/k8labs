@@ -1,0 +1,16 @@
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: JoinConfiguration
+discovery:
+  bootstrapToken:
+    # token and apiServerEndpoint are injected at cluster bootstrap time
+    # token: <token>
+    # apiServerEndpoint: <control-plane-ip>:6443
+    apiServerEndpoint: "CONTROL_PLANE_IP:6443"
+    token: "TOKEN"
+    unsafeSkipCAVerification: true
+nodeRegistration:
+  criSocket: unix:///var/run/crio/crio.sock
+  name: "NODE_NAME"
+  kubeletExtraArgs:
+    - name: node-ip
+      value: "NODE_IP"
