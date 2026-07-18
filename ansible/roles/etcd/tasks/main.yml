@@ -1,0 +1,35 @@
+---
+# etcd — Configure and start etcd on the control-plane node
+
+- name: Ensure etcd data directory exists
+  ansible.builtin.file:
+    path: /var/lib/etcd
+    state: directory
+    mode: "0700"
+
+- name: Resolve {{CP_IP}} placeholder in etcd config
+  ansible.builtin.replace:
+    path: /etc/etcd/etcd.conf.yml
+    regexp: "{{ '{{CP_IP}}' }}"
+    replace: "{{ cp_ip }}"
+  failed_when: false
+
+- name: Start etcd service
+  ansible.builtin.systemd:
+    name: etcd
+    state: started
+    enabled: true
+
+- name: Wait for etcd to become healthy
+  ansible.builtin.command:
+    cmd: >
+      etcdctl
+      --cacert=/etc/kubernetes/pki/ca.pem
+      --cert=/etc/kubernetes/pki/etcd.pem
+      --key=/etc/kubernetes/pki/etcd-key.pem
+      endpoint health
+  register: etcd_health
+  retries: 12
+  delay: 5
+  until: etcd_health is succeeded
+  changed_when: false

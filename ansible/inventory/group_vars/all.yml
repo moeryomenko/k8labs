@@ -1,0 +1,24 @@
+---
+# Global variables for all k8labs cluster nodes
+ansible_user: root
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+ansible_python_interpreter: /usr/bin/python3.13
+ansible_playbook_python: /usr/local/bin/python3
+
+# Kubernetes networking
+pod_cidr: "10.244.0.0/16"
+service_cidr: "10.96.0.0/12"
+cluster_dns_ip: "10.96.0.10"
+kubernetes_svc_ip: "10.96.0.1"
+
+# LoadBalancer IP pool for Cilium L2 announcements
+lb_pool_cidr: "10.0.10.0/24"
+
+# Paths on the host machine (resolved locally)
+project_dir: "{{ playbook_dir }}/../.."
+extensions_release_dir: "{{ project_dir }}/extensions/release"
+certs_dir: "{{ project_dir }}/certs"
+cilium_manifests_dir: "{{ project_dir }}/cilium"
+
+# Cilium version
+cilium_version: "1.16.5"

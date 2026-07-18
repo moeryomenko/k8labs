@@ -1,0 +1,175 @@
+---
+# bootstrap.yml — Full KTHW cluster bootstrap via Ansible
+#
+# Stages:
+#   1. deploy-extensions — Copy .raw files + activate sysext/confext
+#   2. generate-certs   — Generate TLS certificates (locally, via community.crypto)
+#   3. distribute-certs — Copy certs to control-plane
+#   4. start-etcd      — Configure and start etcd on CP
+#   5. start-cp        — Start kube-apiserver, controller-manager, scheduler on CP
+#   6. distribute-kubelet-certs — Per-node kubelet certs + kubeconfigs
+#   7. start-kubelet   — Start kubelet on all nodes
+#   8. kubelet-rbac    — Apply RBAC rules for kubelet self-registration
+#   9. install-cilium  — Install Cilium CNI + L2 manifests
+#   10. host-route     — Add host route for LB pool
+#   11. health-check   — Verify cluster health
+#
+# Usage:
+#   cd ansible && ansible-playbook playbooks/bootstrap.yml
+#
+# Prerequisites:
+#   - tofu apply has been run (VMs exist with SSH access)
+#   - Extensions built (make sysexts confexts)
+#   - community.crypto collection installed (ansible-galaxy collection install -r requirements.yml)
+
+- name: Stage 1 — Deploy extensions to all cluster nodes
+  ansible.builtin.import_playbook: deploy-extensions.yml
+
+- name: Stage 2 — Generate TLS certificates locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    certs_dir: "{{ playbook_dir }}/../../certs"
+    cp_ip: "{{ hostvars[groups['control_plane'][0]]['ansible_host'] }}"
+    kubernetes_svc_ip: "10.96.0.1"
+  roles:
+    - role: certs
+      run_once: true
+
+- name: Stage 3 — Distribute certs and start control-plane
+  hosts: control_plane
+  gather_facts: false
+  vars:
+    certs_dir: "{{ playbook_dir }}/../../certs"
+    cp_ip: "{{ ansible_host }}"
+  tasks:
+    - name: Ensure /etc/kubernetes directories exist
+      ansible.builtin.raw: mkdir -p /etc/kubernetes/pki /etc/kubernetes/manifests /var/lib/kubelet/pki
+      changed_when: false
+
+    - name: Copy admin kubeconfig to CP
+      ansible.builtin.copy:
+        src: "{{ certs_dir }}/admin.kubeconfig"
+        dest: /etc/kubernetes/admin.kubeconfig
+        mode: "0600"
+
+    - name: Include kubernetes-cp role
+      ansible.builtin.include_role:
+        name: kubernetes-cp
+
+- name: Stage 4 — Start etcd on control-plane
+  hosts: control_plane
+  gather_facts: false
+  roles:
+    - role: etcd
+
+- name: Stage 5 — Apply kubelet RBAC rules
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Check if RBAC rules already applied
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig=/etc/kubernetes/admin.kubeconfig get clusterrole system:kubelet-bootstrap
+      register: rbac_check
+      changed_when: false
+      failed_when: false
+
+    - name: Apply kubelet RBAC ClusterRole and bindings
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.kubeconfig apply -f - <<'RBAC_EOF'
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: system:kubelet-bootstrap
+        rules:
+        - apiGroups: ["certificates.k8s.io"]
+          resources: ["certificatesigningrequests"]
+          verbs: ["create", "get", "list", "watch"]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: system:kubelet-bootstrap
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: system:kubelet-bootstrap
+        subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: system:nodes
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: system:nodes
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: system:node
+        subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: system:nodes
+        RBAC_EOF
+      args:
+        executable: /bin/bash
+      when: rbac_check.rc != 0
+
+- name: Stage 6 — Start kubelet on all cluster nodes
+  hosts: cluster
+  gather_facts: false
+  vars:
+    certs_dir: "{{ playbook_dir }}/../../certs"
+  roles:
+    - role: kubelet
+
+- name: Stage 7 — Install Cilium + L2 announcements
+  hosts: control_plane
+  gather_facts: false
+  roles:
+    - role: cilium
+
+- name: Stage 8 — Add host route for LB pool
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check if route already exists
+      ansible.builtin.command:
+        cmd: ip route show 10.0.10.0/24
+      register: route_check
+      changed_when: false
+      failed_when: false
+
+    - name: Add route for LB pool CIDR via virbr0
+      ansible.builtin.command:
+        cmd: ip route add 10.0.10.0/24 dev virbr0
+      become: true
+      when: "'virbr0' not in (route_check.stdout | default(''))"
+
+- name: Stage 9 — Cluster health check
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check nodes
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ playbook_dir }}/../../kubeconfig get nodes -o wide
+      register: nodes
+      changed_when: false
+
+    - name: Display nodes
+      ansible.builtin.debug:
+        var: nodes.stdout_lines
+
+    - name: Check control-plane services
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ playbook_dir }}/../../kubeconfig get pods -n kube-system
+      register: pods
+      changed_when: false
+
+    - name: Display kube-system pods
+      ansible.builtin.debug:
+        var: pods.stdout_lines

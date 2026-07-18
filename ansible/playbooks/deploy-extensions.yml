@@ -1,0 +1,54 @@
+---
+- name: Deploy sysext and confext extensions to all cluster nodes
+  hosts: cluster
+  gather_facts: false
+  vars:
+    project_dir: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Deploy sysext binaries and confext configs via tar-over-SSH
+      ansible.builtin.raw: |
+        set -e
+        HOST="{{ ansible_host }}"
+        ROOT="{{ project_dir }}"
+        
+        # Sysexts
+        for src in "$ROOT"/sysext/*/usr; do
+          [ -d "$src" ] || continue
+          name=$(basename "$(dirname "$src")")
+          echo "Deploying sysext: $name"
+          tar cf - -C "$src/.." usr/ 2>/dev/null | ssh -o StrictHostKeyChecking=no root@$HOST 'cd / && tar xpf - 2>/dev/null' || true
+        done
+        
+        # Confexts  
+        for src in "$ROOT"/confext/*/etc; do
+          [ -d "$src" ] || continue
+          name=$(basename "$(dirname "$src")")
+          echo "Deploying confext: $name"
+          tar cf - -C "$src/.." etc/ 2>/dev/null | ssh -o StrictHostKeyChecking=no root@$HOST 'cd / && tar xpf - 2>/dev/null' || true
+        done
+        
+        echo "Deployment complete"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Reload systemd daemon
+      ansible.builtin.raw: systemctl daemon-reload
+      changed_when: false
+
+    - name: Restart CRI-O to pick up new config
+      ansible.builtin.raw: systemctl restart crio 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: Verify binaries
+      ansible.builtin.raw: |
+        for b in crio crun kubelet etcd etcdctl kube-apiserver kube-controller-manager kube-scheduler kubectl; do
+          path="/usr/bin/$b"
+          if [ -f "$path" ] && [ -x "$path" ]; then echo "OK: $path"; else echo "MISSING: $path"; fi
+        done
+      register: binary_check
+      changed_when: false
+
+    - name: Display binary verification
+      ansible.builtin.debug:
+        var: binary_check.stdout_lines

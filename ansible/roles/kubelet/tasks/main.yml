@@ -1,0 +1,58 @@
+---
+# kubelet — Configure and start kubelet on all cluster nodes
+#
+# Runs on both control-plane and worker nodes.
+# Distributing per-node kubeconfig + certs, then starting kubelet.
+
+- name: Create kubelet PKI directory
+  ansible.builtin.file:
+    path: /var/lib/kubelet/pki
+    state: directory
+    mode: "0755"
+
+- name: Create kubelet data directory
+  ansible.builtin.file:
+    path: /var/lib/kubelet
+    state: directory
+    mode: "0755"
+
+- name: Copy CA certificate
+  ansible.builtin.copy:
+    src: "{{ hostvars['localhost'].certs_dir }}/ca.pem"
+    dest: /var/lib/kubelet/pki/ca.pem
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Copy kubelet certificate
+  ansible.builtin.copy:
+    src: "{{ hostvars['localhost'].certs_dir }}/kubelets/{{ node_name }}.pem"
+    dest: /var/lib/kubelet/pki/{{ node_name }}.pem
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Copy kubelet key
+  ansible.builtin.copy:
+    src: "{{ hostvars['localhost'].certs_dir }}/kubelets/{{ node_name }}-key.pem"
+    dest: /var/lib/kubelet/pki/{{ node_name }}-key.pem
+    mode: "0600"
+  delegate_to: localhost
+
+- name: Copy kubelet kubeconfig
+  ansible.builtin.copy:
+    src: "{{ hostvars['localhost'].certs_dir }}/kubelets/{{ node_name }}.kubeconfig"
+    dest: /var/lib/kubelet/kubeconfig
+    mode: "0600"
+  delegate_to: localhost
+
+- name: Resolve {{NODE_IP}} placeholder in kubelet config
+  ansible.builtin.replace:
+    path: /etc/kubernetes/kubelet/config.yaml
+    regexp: "{{ '{{NODE_IP}}' }}"
+    replace: "{{ node_ip }}"
+  failed_when: false
+
+- name: Start kubelet
+  ansible.builtin.systemd:
+    name: kubelet
+    state: started
+    enabled: true

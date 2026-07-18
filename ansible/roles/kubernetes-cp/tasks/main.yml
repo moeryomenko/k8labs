@@ -1,0 +1,166 @@
+---
+# kubernetes-cp — Configure and start control-plane services on CP node
+#
+# Distributes TLS certificates from the host to the CP node,
+# then starts kube-apiserver, kube-controller-manager, kube-scheduler.
+
+# ---------------------------------------------------------------------------
+# Certificate distribution
+# ---------------------------------------------------------------------------
+- name: Create PKI directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/pki
+    state: directory
+    mode: "0755"
+
+- name: Create manifests directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/manifests
+    state: directory
+    mode: "0755"
+
+- name: Copy CA certificate
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/ca.pem"
+    dest: /etc/kubernetes/pki/ca.pem
+    mode: "0644"
+
+- name: Copy kube-apiserver certificate (as kubernetes.pem)
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/kubernetes.pem"
+    dest: /etc/kubernetes/pki/kubernetes.pem
+    mode: "0644"
+
+- name: Copy kube-apiserver key
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/kubernetes-key.pem"
+    dest: /etc/kubernetes/pki/kubernetes-key.pem
+    mode: "0600"
+
+- name: Copy service-account cert
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/service-account.pem"
+    dest: /etc/kubernetes/pki/service-account.pem
+    mode: "0644"
+
+- name: Copy service-account key
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/service-account-key.pem"
+    dest: /etc/kubernetes/pki/service-account-key.pem
+    mode: "0600"
+
+- name: Copy admin cert
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/admin.pem"
+    dest: /etc/kubernetes/pki/admin.pem
+    mode: "0644"
+
+- name: Copy admin key
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/admin-key.pem"
+    dest: /etc/kubernetes/pki/admin-key.pem
+    mode: "0600"
+
+- name: Copy controller-manager cert
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/kube-controller-manager.pem"
+    dest: /etc/kubernetes/pki/kube-controller-manager.pem
+    mode: "0644"
+
+- name: Copy controller-manager key
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/kube-controller-manager-key.pem"
+    dest: /etc/kubernetes/pki/kube-controller-manager-key.pem
+    mode: "0600"
+
+- name: Copy scheduler cert
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/kube-scheduler.pem"
+    dest: /etc/kubernetes/pki/kube-scheduler.pem
+    mode: "0644"
+
+- name: Copy scheduler key
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/kube-scheduler-key.pem"
+    dest: /etc/kubernetes/pki/kube-scheduler-key.pem
+    mode: "0600"
+
+- name: Copy etcd cert
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/etcd.pem"
+    dest: /etc/kubernetes/pki/etcd.pem
+    mode: "0644"
+
+- name: Copy etcd key
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/etcd-key.pem"
+    dest: /etc/kubernetes/pki/etcd-key.pem
+    mode: "0600"
+
+- name: Copy admin kubeconfig
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/admin.kubeconfig"
+    dest: /etc/kubernetes/admin.kubeconfig
+    mode: "0600"
+
+- name: Copy controller-manager kubeconfig
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/controller-manager.kubeconfig"
+    dest: /etc/kubernetes/controller-manager.kubeconfig
+    mode: "0600"
+
+- name: Copy scheduler kubeconfig
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/scheduler.kubeconfig"
+    dest: /etc/kubernetes/scheduler.kubeconfig
+    mode: "0600"
+
+- name: Copy encryption config
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/encryption-config.yaml"
+    dest: /etc/kubernetes/encryption-config.yaml
+    mode: "0644"
+
+# ---------------------------------------------------------------------------
+# Resolve CP_IP placeholder in systemd unit files
+# ---------------------------------------------------------------------------
+- name: Resolve {{CP_IP}} placeholder in kube-apiserver systemd unit
+  ansible.builtin.replace:
+    path: /usr/lib/systemd/system/kube-apiserver.service
+    regexp: "{{ '{{CP_IP}}' }}"
+    replace: "{{ cp_ip }}"
+  failed_when: false
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# ---------------------------------------------------------------------------
+# Start control-plane services
+# ---------------------------------------------------------------------------
+- name: Start kube-apiserver
+  ansible.builtin.systemd:
+    name: kube-apiserver
+    state: started
+    enabled: true
+
+- name: Wait for kube-apiserver to be reachable
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig=/etc/kubernetes/admin.kubeconfig get nodes --request-timeout=2s
+  register: api_health
+  retries: 24
+  delay: 5
+  until: api_health is succeeded
+  changed_when: false
+
+- name: Start kube-controller-manager
+  ansible.builtin.systemd:
+    name: kube-controller-manager
+    state: started
+    enabled: true
+
+- name: Start kube-scheduler
+  ansible.builtin.systemd:
+    name: kube-scheduler
+    state: started
+    enabled: true
