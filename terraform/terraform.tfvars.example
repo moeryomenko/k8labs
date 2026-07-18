@@ -1,0 +1,23 @@
+libvirt_uri       = "qemu:///system"
+base_image_path   = "../build/base/k8labs-base"
+pool_path         = "/var/lib/libvirt/k8s-pool"
+
+control_plane = {
+  name = "k8s-cp-1"
+  cpu  = 2
+  ram  = 2048
+  disk = 20480
+}
+
+workers = [
+  {
+    name = "k8s-worker-1"
+    cpu  = 2
+    ram  = 4096
+    disk = 40960
+  }
+]
+
+network_cidr     = "192.168.124.0/24"
+bridge_name      = "virbr0"
+ssh_public_key_path = "~/.ssh/id_rsa.pub"
