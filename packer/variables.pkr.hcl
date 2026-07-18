@@ -44,10 +44,12 @@ variable "output_directory" {
   default = "../build/base"
 }
 
-# Fedora installer boot command with kickstart URL
+# Fedora installer boot command — minimal, just select "Install Fedora 41"
+# Kickstart is auto-detected by anaconda from the OEMDRV CD volume.
+# Kernel params (console=ttyS0, inst.sshd=1) are baked into the modified grub.cfg.
 variable "boot_command" {
   type    = list(string)
-  default = ["<tab><wait>", " inst.ks=http://{{ .HTTPIP }}:{{ .HTTPPort }}/ks.cfg<enter><wait>"]
+  default = ["<up>", "<enter>"]
 }
 
 # Path to the kickstart file served via Packer HTTP

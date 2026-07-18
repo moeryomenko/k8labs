@@ -10,19 +10,29 @@ source "qemu" "kvm" {
   disk_size        = var.vm_disk_size
   format           = "qcow2"
   accelerator      = "kvm"
-  http_directory   = "fedora"
   ssh_username     = var.ssh_username
   ssh_password     = var.ssh_password
-  ssh_timeout      = "20m"
-  boot_wait        = "10s"
+  ssh_timeout      = "30m"
+  boot_wait        = "30s"
   boot_command     = var.boot_command
   vm_name          = var.vm_name
   memory           = var.vm_memory
   cores            = var.vm_cpu_cores
   disk_interface   = "virtio"
   net_device       = "virtio-net"
-  headless         = true
-  qemu_binary      = "qemu-system-x86_64"
+  headless            = true
+  use_default_display = true
+  vnc_bind_address    = "127.0.0.1"
+  qemu_binary         = "qemu-system-x86_64"
+
+  # Attach kickstart as OEMDRV volume (auto-detected by anaconda)
+  cd_files = ["fedora/ks.cfg"]
+  cd_label = "OEMDRV"
+
+  # Capture serial console for debugging
+  qemuargs = [
+    ["-serial", "file:/tmp/packer-serial.log"]
+  ]
 }
 
 build {
