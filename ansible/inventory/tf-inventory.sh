@@ -105,13 +105,14 @@ output_list() {
   local -A node_ips=()
   local tofu_has_ip=0
 
-  # Try tofu outputs
-  local cp_ip_addr="" worker_ip_addr=""
+  # Try tofu outputs — collect IPs into arrays
+  local cp_ip_addr=""
+  local -a worker_ip_addrs=()
   while IFS='=' read -r key val; do
     [ -z "$key" ] && continue
     case "$key" in
       cp_ip) cp_ip_addr="$val" ;;
-      worker_ip) worker_ip_addr="$val" ;;
+      worker_ip) worker_ip_addrs+=("$val") ;;
     esac
   done < <(get_tofu_ips || true)
 
@@ -120,11 +121,11 @@ output_list() {
     node_ips["$cp_name"]="$cp_ip_addr"
     tofu_has_ip=1
   fi
-  if [ -n "$worker_ip_addr" ] && [ ${#node_names[@]} -gt 1 ]; then
-    node_ips["${node_names[1]}"]="$worker_ip_addr"
-  elif [ -n "$worker_ip_addr" ] && [ ${#node_names[@]} -eq 1 ]; then
-    node_ips["worker-1"]="$worker_ip_addr"
-  fi
+  # Assign worker IPs in order
+  for i in "${!worker_ip_addrs[@]}"; do
+    local w_name="${worker_names[$i]:-worker-$((i+1))}"
+    node_ips["$w_name"]="${worker_ip_addrs[$i]}"
+  done
 
   # If tofu has no IPs, try virsh leases
   if [ "$tofu_has_ip" -eq 0 ]; then

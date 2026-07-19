@@ -2,8 +2,7 @@
 # Global variables for all k8labs cluster nodes
 ansible_user: root
 ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-ansible_python_interpreter: /usr/bin/python3.13
-ansible_playbook_python: /usr/local/bin/python3
+ansible_python_interpreter: /usr/bin/python3
 
 # Kubernetes networking
 pod_cidr: "10.244.0.0/16"
