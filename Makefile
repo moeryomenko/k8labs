@@ -37,13 +37,29 @@ prepare-iso: ## Download Fedora ISO and prepare modified version with serial con
 	fi
 
 .PHONY: base
-base: prepare-iso ## Build the base OS image via Packer
+BASE_IMAGE_DEST := build/k8labs-base.qcow2
+
+base: prepare-iso ## Build the base OS image via Packer (skip if already built)
+	@if [ -f "$(BASE_IMAGE_DEST)" ]; then \
+		echo 'Base image already exists: $(BASE_IMAGE_DEST)'; \
+		echo 'To force a rebuild, run: make base-rebuild'; \
+		exit 0; \
+	fi
 	@echo 'Building base OS image via Packer...'
 	rm -rf build/base
 	(cd packer && packer build -var-file=vars.pkrvars.hcl .)
 	@echo 'Copying base image to build/ for Terraform consumption...'
 	mkdir -p build
-	cp build/base/k8labs-base build/k8labs-base.qcow2
+	cp build/base/k8labs-base $(BASE_IMAGE_DEST)
+
+.PHONY: base-rebuild
+base-rebuild: prepare-iso ## Force rebuild of the base OS image via Packer
+	@echo 'Forcing base OS image rebuild via Packer...'
+	rm -f $(BASE_IMAGE_DEST)
+	rm -rf build/base
+	(cd packer && packer build -var-file=vars.pkrvars.hcl .)
+	mkdir -p build
+	cp build/base/k8labs-base $(BASE_IMAGE_DEST)
 
 # --- System Extensions ---
 
@@ -198,17 +214,65 @@ bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
 		ansible/playbooks/bootstrap.yml
 
+.PHONY: wait-ips
+wait-ips: ## Wait for ALL VMs to get DHCP leases after tofu apply
+	@echo '  Waiting for all VM IP addresses (DHCP leases)...'
+	@for i in $$(seq 1 60); do \
+		tofu -chdir=terraform refresh -var="base_image_path=../build/k8labs-base.qcow2" >/dev/null 2>&1; \
+		cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null); \
+		w_count=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(len([x for x in json.load(sys.stdin) if x]))" 2>/dev/null || echo 0); \
+		w_total=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0); \
+		if [ -n "$$cp_ip" ] && [ "$$w_count" -ge "$$w_total" ] && [ "$$w_total" -gt 0 ]; then \
+			w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(' '.join(filter(None, json.load(sys.stdin))))"); \
+			echo "  All $$((w_total + 1)) VMs ready after $$i cycles — CP: $$cp_ip, Workers: $$w_ips"; \
+			exit 0; \
+		fi; \
+		echo "  waiting ($$i/60)... CP=$${cp_ip:-none} workers=$$w_count/$$w_total"; \
+		sleep 5; \
+	done; \
+	echo "  ERROR: VMs did not get IPs within timeout"; \
+	exit 1
+
+.PHONY: wait-ssh
+wait-ssh: ## Wait for SSH to become available on all VMs (after DHCP leases)
+	@echo '  Waiting for SSH connectivity on all VMs...'
+	@set -euo pipefail; \
+	ssh_key=$$(grep 'ssh_public_key_path' terraform/terraform.tfvars | head -1 | sed 's/.*= *"\(.*\)"/\1/' | sed "s|~|$$HOME|"); \
+	if [ -z "$$ssh_key" ]; then ssh_key="$$HOME/.ssh/id_ed25519.pub"; fi; \
+	cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null); \
+	w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(' '.join(filter(None, json.load(sys.stdin))))" 2>/dev/null || true); \
+	all_ips="$$cp_ip $$w_ips"; \
+	for ip in $$all_ips; do \
+		echo "  waiting for SSH on $$ip..."; \
+		for i in $$(seq 1 30); do \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+				-o ConnectTimeout=2 -o BatchMode=yes root@$$ip true 2>/dev/null \
+			&& break; \
+			if [ "$$i" -eq 30 ]; then \
+				echo "  ERROR: SSH not available on $$ip after 30 attempts"; \
+				exit 1; \
+			fi; \
+			sleep 5; \
+		done; \
+		echo "  SSH ready on $$ip"; \
+	done
+
 .PHONY: cluster
 cluster: all container ## Full pipeline: base -> extensions -> container -> deploy -> bootstrap
-	@echo 'Bootstrapping cluster via Ansible...'
-	@echo '  Step 1: Deploy VMs (tofu apply)...'
-	tofu -chdir=terraform apply -auto-approve -var="base_image_path=../build/k8labs-base.qcow2"
-	@echo '  Step 2: Generate inventory from terraform state...'
-	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
-	@echo '  Step 3: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'
+	@set -euo pipefail; \
+	echo 'Bootstrapping cluster via Ansible...'; \
+	echo '  Step 1: Deploy VMs (tofu apply)...'; \
+	tofu -chdir=terraform apply -auto-approve -var="base_image_path=../build/k8labs-base.qcow2"; \
+	echo '  Step 2: Wait for VM IP addresses...'; \
+	$(MAKE) wait-ips; \
+	echo '  Step 3: Wait for SSH connectivity on all VMs...'; \
+	$(MAKE) wait-ssh; \
+	echo '  Step 4: Generate inventory from terraform state...'; \
+	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json; \
+	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
 	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
-		$(ANSIBLE_DIR)/playbooks/bootstrap.yml
-	@echo 'Full cluster build and bootstrap complete.'
+		$(ANSIBLE_DIR)/playbooks/bootstrap.yml; \
+	echo 'Full cluster build and bootstrap complete.'
 
 # --- Cleanup ---
 
