@@ -2,7 +2,7 @@ apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 containerRuntimeEndpoint: unix:///var/run/crio/crio.sock
 cgroupDriver: systemd
-failSwapOn: true
+failSwapOn: false
 authentication:
   anonymous:
     enabled: false
