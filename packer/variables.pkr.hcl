@@ -25,7 +25,7 @@ variable "vm_memory" {
 
 variable "vm_disk_size" {
   type    = number
-  default = 10240
+  default = 20480
 }
 
 # SSH communicator credentials

@@ -16,7 +16,7 @@ ssh_password = "k8sosroot"
 vm_name       = "k8labs-base"
 vm_cpu_cores  = 2
 vm_memory     = 2048
-vm_disk_size  = 10240
+vm_disk_size  = 20480
 
 # Output
 output_directory = "../build/base"

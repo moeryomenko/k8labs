@@ -65,8 +65,6 @@ resource "libvirt_domain" "control_plane" {
     type         = "hvm"
     type_arch    = "x86_64"
     type_machine = "pc"
-    type_arch    = "x86_64"
-    type_machine = "pc"
   }
 
   devices = {
