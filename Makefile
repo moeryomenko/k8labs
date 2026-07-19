@@ -1,5 +1,7 @@
 # k8labs — Kubernetes OS Image Build System
 # Targets for Packer VM baking and system/configuration extensions.
+# For maximum parallelism, use: make -j$$(nproc) cluster
+# This builds base image, extensions, and container simultaneously.
 
 SHELL := /bin/bash
 .ONESHELL:
@@ -106,8 +108,9 @@ sysext/kubernetes-cp: ## Build kubernetes-cp sysext (apiserver, cm, scheduler, k
 	@echo 'Packaging kubernetes-cp sysext...'
 	extensions/build.sh sysext sysext/kubernetes-cp kubernetes-cp
 
-sysexts: $(addprefix sysext/,$(SYSEXT_NAMES)) ## Build all sysext extensions
-	@echo 'All sysext extensions built.'
+sysexts: ## Build all sysext extensions in parallel
+	@echo 'Building all sysexts in parallel...'
+	+$(MAKE) -j$$(nproc 2>/dev/null || echo 2) $(addprefix sysext/,$(SYSEXT_NAMES))
 
 # --- Config Extensions ---
 
@@ -139,8 +142,9 @@ confext/kubernetes-cp: ## Build confext kubernetes-cp configuration overlay
 	@echo 'Building confext kubernetes-cp...'
 	extensions/build.sh confext confext/kubernetes-cp confext-kubernetes-cp
 
-confexts: $(addprefix confext/,$(CONFEXT_NAMES)) ## Build all confext extensions
-	@echo 'All confext extensions built.'
+confexts: ## Build all confext extensions in parallel
+	@echo 'Building all confexts in parallel...'
+	+$(MAKE) -j$$(nproc 2>/dev/null || echo 2) $(addprefix confext/,$(CONFEXT_NAMES))
 
 # --- Combined Extensions ---
 
@@ -151,7 +155,7 @@ extensions: sysexts confexts ## Build all extensions (sysexts + confexts)
 # --- Full Build ---
 
 .PHONY: all
-all: base extensions ## Build base image + all extensions
+all: base extensions ## Build base image + all extensions (legacy alias)
 	@echo 'Full build complete.'
 
 # --- Terraform ---
@@ -183,9 +187,12 @@ ANSIBLE_RUN := podman run --rm --network host \
 	$(ANSIBLE_IMAGE):latest
 
 .PHONY: container
-container: ## Build Ansible runner container image
+container: .container.stamp ## Build Ansible runner container image
+
+.container.stamp: container/Containerfile
 	@echo 'Building Ansible runner container image...'
 	podman build -t $(ANSIBLE_IMAGE):latest -f container/Containerfile
+	@touch .container.stamp
 
 .PHONY: inventory
 inventory: ## Test dynamic inventory output
@@ -217,7 +224,54 @@ bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 .PHONY: wait-ips
 wait-ips: ## Wait for ALL VMs to get DHCP leases after tofu apply
 	@echo '  Waiting for all VM IP addresses (DHCP leases)...'
-	@for i in $$(seq 1 60); do \
+	@set -euo pipefail; \
+	if command -v virsh &>/dev/null; then \
+		raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null); \
+		if [ -z "$$raw_names" ]; then echo "  ERROR: no node_names from tofu output" >&2; exit 1; fi; \
+		node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names"); \
+		if [ -z "$$node_names" ]; then echo "  ERROR: empty node_names" >&2; exit 1; fi; \
+		mac_list=""; \
+		for name in $$node_names; do \
+			mac=$$(virsh domiflist "$$name" 2>/dev/null | awk 'NR>2 && $$1 {print $$1; exit}'); \
+			if [ -z "$$mac" ]; then \
+				echo "  WARNING: no MAC found for $$name via virsh, falling back to tofu refresh" >&2; \
+				mac_list=""; \
+				break; \
+			fi; \
+			mac_list="$$mac_list $$mac@$$name"; \
+		done; \
+		if [ -n "$$mac_list" ]; then \
+			total=$$(echo "$$node_names" | wc -w); \
+			for i in $$(seq 1 60); do \
+				cp_ip=""; w_ips=""; found_count=0; \
+				leases_data=$$(virsh net-dhcp-leases k8s-cluster-net 2>/dev/null); \
+				for entry in $$mac_list; do \
+					target_mac=$${entry%%@*}; \
+					ip=$$(echo "$$leases_data" | awk -v mac="$$target_mac" '$$2 == mac {print $$5; exit}'); \
+					ip=$$(echo "$$ip" | sed 's|/.*||'); \
+					if [ -n "$$ip" ]; then \
+						if [ -z "$$cp_ip" ]; then \
+							cp_ip="$$ip"; \
+						else \
+							w_ips="$$w_ips $$ip"; \
+						fi; \
+						found_count=$$((found_count + 1)); \
+					fi; \
+				done; \
+				if [ "$$found_count" -ge "$$total" ]; then \
+					w_ips_trimmed=$$(echo "$$w_ips" | sed 's/^ *//'); \
+					echo "  All $$total VMs ready after $$i cycles — CP: $$cp_ip, Workers: $$w_ips_trimmed"; \
+					exit 0; \
+				fi; \
+				echo "  waiting ($$i/60)... CP=$${cp_ip:-none} workers=$$found_count/$$total"; \
+				sleep 5; \
+			done; \
+			echo "  ERROR: VMs did not get IPs within timeout" >&2; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "  Falling back to tofu refresh method..."; \
+	for i in $$(seq 1 60); do \
 		tofu -chdir=terraform refresh -var="base_image_path=../build/k8labs-base.qcow2" >/dev/null 2>&1; \
 		cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null); \
 		w_count=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(len([x for x in json.load(sys.stdin) if x]))" 2>/dev/null || echo 0); \
@@ -230,35 +284,55 @@ wait-ips: ## Wait for ALL VMs to get DHCP leases after tofu apply
 		echo "  waiting ($$i/60)... CP=$${cp_ip:-none} workers=$$w_count/$$w_total"; \
 		sleep 5; \
 	done; \
-	echo "  ERROR: VMs did not get IPs within timeout"; \
+	echo "  ERROR: VMs did not get IPs within timeout" >&2; \
 	exit 1
 
 .PHONY: wait-ssh
 wait-ssh: ## Wait for SSH to become available on all VMs (after DHCP leases)
 	@echo '  Waiting for SSH connectivity on all VMs...'
 	@set -euo pipefail; \
-	ssh_key=$$(grep 'ssh_public_key_path' terraform/terraform.tfvars | head -1 | sed 's/.*= *"\(.*\)"/\1/' | sed "s|~|$$HOME|"); \
-	if [ -z "$$ssh_key" ]; then ssh_key="$$HOME/.ssh/id_ed25519.pub"; fi; \
-	cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null); \
-	w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(' '.join(filter(None, json.load(sys.stdin))))" 2>/dev/null || true); \
-	all_ips="$$cp_ip $$w_ips"; \
-	for ip in $$all_ips; do \
-		echo "  waiting for SSH on $$ip..."; \
+	check_ssh() { \
+		local ip="$$1" name="$$2"; \
 		for i in $$(seq 1 30); do \
 			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-				-o ConnectTimeout=2 -o BatchMode=yes root@$$ip true 2>/dev/null \
-			&& break; \
-			if [ "$$i" -eq 30 ]; then \
-				echo "  ERROR: SSH not available on $$ip after 30 attempts"; \
-				exit 1; \
-			fi; \
+				-o ConnectTimeout=2 -o BatchMode=yes root@$$ip true 2>/dev/null && { \
+				echo "  SSH ready on $$name ($$ip)"; \
+				return 0; \
+			}; \
 			sleep 5; \
 		done; \
-		echo "  SSH ready on $$ip"; \
-	done
+		echo "  ERROR: SSH not available on $$name ($$ip) after 30 attempts" >&2; \
+		return 1; \
+	}; \
+	raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null); \
+	if [ -z "$$raw_names" ]; then echo "  ERROR: no node_names from tofu output" >&2; exit 1; fi; \
+	node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names"); \
+	cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null); \
+	w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; ips=json.load(sys.stdin); print(' '.join(filter(None, ips)))" 2>/dev/null || true); \
+	names_arr=(); while IFS= read -r n; do names_arr+=("$$n"); done < <(echo "$$node_names" | tr ' ' '\n'); \
+	ips_arr=("$$cp_ip"); while IFS= read -r ip; do ips_arr+=("$$ip"); done < <(echo "$$w_ips" | tr ' ' '\n'); \
+	pids=""; \
+	for idx in "$${!names_arr[@]}"; do \
+		name="$${names_arr[idx]}"; \
+		ip="$${ips_arr[idx]:-}"; \
+		if [ -z "$$ip" ]; then \
+			echo "  ERROR: no IP for $$name" >&2; \
+			exit 1; \
+		fi; \
+		(check_ssh "$$ip" "$$name") & \
+		pids="$$pids $$!"; \
+	done; \
+	has_error=0; \
+	for pid in $$pids; do \
+		wait "$$pid" || has_error=1; \
+	done; \
+	if [ "$$has_error" -ne 0 ]; then \
+		echo "  ERROR: one or more VMs failed SSH check" >&2; \
+		exit 1; \
+	fi
 
 .PHONY: cluster
-cluster: all container ## Full pipeline: base -> extensions -> container -> deploy -> bootstrap
+cluster: base extensions container ## Full pipeline: base -> extensions -> container -> deploy -> bootstrap
 	@set -euo pipefail; \
 	echo 'Bootstrapping cluster via Ansible...'; \
 	echo '  Step 1: Deploy VMs (tofu apply)...'; \

@@ -44,13 +44,14 @@ KUBERNETES_CP_URL="https://dl.k8s.io/${KUBERNETES_CP_VERSION}/kubernetes-server-
 # ---------------------------------------------------------------------------
 usage() {
     cat <<'USAGE_EOF'
-Usage: download-sysexts.sh [--dry-run] [sysext-name ...]
+Usage: download-sysexts.sh [--dry-run] [--sequential] [sysext-name ...]
 
 Download sysext binary artifacts from upstream releases.
 
 Arguments:
-  --dry-run     Print what would be downloaded without downloading
-  sysext-name   Download only the specified sysext(s); default: all
+  --dry-run       Print what would be downloaded without downloading
+  --sequential    Download sysexts one at a time (default: parallel)
+  sysext-name     Download only the specified sysext(s); default: all
 
 Supported sysexts: cri-o, crun, kubelet, cni, etcd, kubernetes-cp
 USAGE_EOF
@@ -81,20 +82,30 @@ check_cached() {
 }
 
 dry_run=0
+sequential=0
 
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
-case "${1:-}" in
-    --help|-h)
-        usage
-        exit 0
-        ;;
-    --dry-run)
-        dry_run=1
-        shift
-        ;;
-esac
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --dry-run)
+            dry_run=1
+            shift
+            ;;
+        --sequential)
+            sequential=1
+            shift
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 requested="$*"  # empty = all
 
@@ -314,19 +325,108 @@ main() {
         downloads="$requested"
     fi
 
-    for name in $downloads; do
-        case "$name" in
-            cri-o)    info "Downloading cri-o...";    download_crio ;;
-            crun)     info "Downloading crun...";     download_crun ;;
-            kubelet)  info "Downloading kubelet...";  download_kubelet ;;
-            cni)           info "Downloading cni...";           download_cni ;;
-            etcd)          info "Downloading etcd...";          download_etcd ;;
-            kubernetes-cp) info "Downloading kubernetes-cp..."; download_kubernetes_cp ;;
-            *)
-                echo "Warning: unknown sysext '${name}' — skipping" >&2
-                ;;
-        esac
-    done
+    if [ "$sequential" -eq 1 ]; then
+        # Sequential mode: one at a time
+        for name in $downloads; do
+            case "$name" in
+                cri-o)    info "Downloading cri-o...";    download_crio ;;
+                crun)     info "Downloading crun...";     download_crun ;;
+                kubelet)  info "Downloading kubelet...";  download_kubelet ;;
+                cni)      info "Downloading cni...";      download_cni ;;
+                etcd)     info "Downloading etcd...";     download_etcd ;;
+                kubernetes-cp) info "Downloading kubernetes-cp..."; download_kubernetes_cp ;;
+                *)
+                    echo "Warning: unknown sysext '${name}' — skipping" >&2
+                    ;;
+            esac
+        done
+    else
+        # Parallel mode: launch downloads as background processes
+        pids=""
+        failures=0
+        for name in $downloads; do
+            # Check cache before spawning a process
+            case "$name" in
+                cri-o)
+                    if check_cached "cri-o ${CRIO_VERSION}" \
+                        "${SYSEXT_DIR}/cri-o/usr/bin/crio" \
+                        "${SYSEXT_DIR}/cri-o/usr/bin/crictl" \
+                        "${SYSEXT_DIR}/cri-o/usr/bin/pinns"
+                    then
+                        continue
+                    fi
+                    ;;
+                crun)
+                    if check_cached "crun ${CRUN_VERSION}" \
+                        "${SYSEXT_DIR}/crun/usr/bin/crun"
+                    then
+                        continue
+                    fi
+                    ;;
+                kubelet)
+                    if check_cached "kubelet ${KUBELET_VERSION}" \
+                        "${SYSEXT_DIR}/kubelet/usr/bin/kubelet"
+                    then
+                        continue
+                    fi
+                    ;;
+                cni)
+                    if check_cached "cni-plugins ${CNI_VERSION}" \
+                        "${SYSEXT_DIR}/cni/usr/lib/cni/bridge" \
+                        "${SYSEXT_DIR}/cni/usr/lib/cni/host-local"
+                    then
+                        continue
+                    fi
+                    ;;
+                etcd)
+                    if check_cached "etcd ${ETCD_VERSION}" \
+                        "${SYSEXT_DIR}/etcd/usr/bin/etcd" \
+                        "${SYSEXT_DIR}/etcd/usr/bin/etcdctl"
+                    then
+                        continue
+                    fi
+                    ;;
+                kubernetes-cp)
+                    if check_cached "kubernetes-cp ${KUBERNETES_CP_VERSION}" \
+                        "${SYSEXT_DIR}/kubernetes-cp/usr/bin/kube-apiserver" \
+                        "${SYSEXT_DIR}/kubernetes-cp/usr/bin/kube-controller-manager" \
+                        "${SYSEXT_DIR}/kubernetes-cp/usr/bin/kube-scheduler" \
+                        "${SYSEXT_DIR}/kubernetes-cp/usr/bin/kubectl"
+                    then
+                        continue
+                    fi
+                    ;;
+                *)
+                    echo "Warning: unknown sysext '${name}' — skipping" >&2
+                    continue
+                    ;;
+            esac
+
+            # Spawn download in a background subshell with per-sysext lock
+            (
+                set -e
+                trap 'rm -rf "${SYSEXT_DIR}/${name}.lock"' EXIT
+                mkdir "${SYSEXT_DIR}/${name}.lock" 2>/dev/null || return 0
+                info "Downloading ${name}..."
+                case "$name" in
+                    cri-o)    download_crio ;;
+                    crun)     download_crun ;;
+                    kubelet)  download_kubelet ;;
+                    cni)      download_cni ;;
+                    etcd)     download_etcd ;;
+                    kubernetes-cp) download_kubernetes_cp ;;
+                esac
+            ) &
+            pids="$pids $!"
+        done
+
+        # Collect exit codes from all background jobs
+        for pid in $pids; do
+            [ -z "$pid" ] && continue
+            wait "$pid" || failures=$((failures + 1))
+        done
+        [ "$failures" -eq 0 ] || die "$failures download(s) failed"
+    fi
 
     info "Done."
 }

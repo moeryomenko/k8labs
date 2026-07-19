@@ -49,3 +49,5 @@ override.tf.json
 .terraformrc
 terraform.rc
 ansible/inventory/inventory.json
+
+.container.stamp
