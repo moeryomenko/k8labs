@@ -24,9 +24,7 @@
   ansible.builtin.command:
     cmd: >
       etcdctl
-      --cacert=/etc/kubernetes/pki/ca.pem
-      --cert=/etc/kubernetes/pki/etcd.pem
-      --key=/etc/kubernetes/pki/etcd-key.pem
+      --endpoints=http://127.0.0.1:2379
       endpoint health
   register: etcd_health
   retries: 12

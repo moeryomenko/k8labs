@@ -1,39 +1,40 @@
 ---
 # cilium — Install Cilium CNI with L2 announcements
-# Runs on the host (localhost), uses the admin kubeconfig from the CP node
-# to install Cilium via the cilium CLI (or a containerized fallback).
+# Uses raw + delegate_to to avoid Python dependency on the controller.
 
 - name: Copy admin kubeconfig from control-plane
   ansible.builtin.fetch:
     src: /etc/kubernetes/admin.kubeconfig
     dest: "{{ project_dir }}/kubeconfig"
     flat: true
-  when: ansible_host == cp_ip
+  when: inventory_hostname == groups['control_plane'][0]
 
 - name: Check if Cilium is already installed
-  ansible.builtin.command:
-    cmd: cilium status --kubeconfig {{ project_dir }}/kubeconfig
-  connection: local
+  ansible.builtin.raw: >
+    cilium status --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
   register: cilium_status
   changed_when: false
   failed_when: false
 
-- name: Install Cilium via cilium CLI
-  ansible.builtin.command:
-    cmd: >
-      cilium install
-      --kubeconfig {{ project_dir }}/kubeconfig
-      --version {{ cilium_version }}
-      --set l2announcements.enabled=true
-      --set externalIPs.enabled=true
-      --set kubeProxyReplacement=true
-      --set ipam.mode=kubernetes
-      --set routingMode=native
-      --set ipv4NativeRoutingCIDR={{ pod_cidr }}
-      --set autoDirectNodeRoutes=true
-      --set endpointRoutes.enabled=true
-      --set operator.replicas=1
-  connection: local
+- name: Install Cilium via cilium CLI (with --wait for CRDs + pods)
+  ansible.builtin.raw: >
+    cilium install
+    --kubeconfig {{ project_dir }}/kubeconfig
+    --version {{ cilium_version }}
+    --set l2announcements.enabled=true
+    --set externalIPs.enabled=true
+    --set kubeProxyReplacement=true
+    --set ipam.mode=kubernetes
+    --set routingMode=native
+    --set ipv4NativeRoutingCIDR={{ pod_cidr }}
+    --set autoDirectNodeRoutes=true
+    --set endpointRoutes.enabled=true
+    --set operator.replicas=1
+    --wait
+  delegate_to: localhost
+  run_once: true
   when: cilium_status.rc != 0
   register: cilium_install
   retries: 3
@@ -41,26 +42,40 @@
   until: cilium_install is succeeded
   failed_when: cilium_install is failed
 
-- name: Wait for Cilium to become healthy
-  ansible.builtin.command:
-    cmd: cilium status --wait --kubeconfig {{ project_dir }}/kubeconfig
-  connection: local
-  register: cilium_health
-  retries: 10
-  delay: 30
-  until: cilium_health is succeeded
+- name: Wait for Cilium CRDs to be registered before applying pool/policy
+  ansible.builtin.raw: >
+    kubectl get crd ciliumloadbalancerippools.cilium.io --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: crd_check
+  retries: 36
+  delay: 10
+  until: crd_check.rc == 0
   changed_when: false
 
-- name: Apply CiliumLoadBalancerIPPool
-  ansible.builtin.command:
-    cmd: kubectl apply -f {{ project_dir }}/cilium/lb-pool.yaml --kubeconfig {{ project_dir }}/kubeconfig
-  connection: local
+- name: Apply CiliumLoadBalancerIPPool (early, before health wait)
+  ansible.builtin.raw: >
+    kubectl apply -f {{ project_dir }}/cilium/lb-pool.yaml --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
   register: lb_pool
   changed_when: '"created" in lb_pool.stdout or "configured" in lb_pool.stdout'
 
-- name: Apply CiliumL2AnnouncementPolicy
-  ansible.builtin.command:
-    cmd: kubectl apply -f {{ project_dir }}/cilium/l2-policy.yaml --kubeconfig {{ project_dir }}/kubeconfig
-  connection: local
+- name: Apply CiliumL2AnnouncementPolicy (early, before health wait)
+  ansible.builtin.raw: >
+    kubectl apply -f {{ project_dir }}/cilium/l2-policy.yaml --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
   register: l2_policy
   changed_when: '"created" in l2_policy.stdout or "configured" in l2_policy.stdout'
+
+- name: Wait for Cilium to become healthy
+  ansible.builtin.raw: >
+    cilium status --wait --wait-duration=5m --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: cilium_health
+  retries: 3
+  delay: 10
+  until: cilium_health is succeeded
+  changed_when: false

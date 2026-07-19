@@ -18,37 +18,33 @@
 
 - name: Copy CA certificate
   ansible.builtin.copy:
-    src: "{{ hostvars['localhost'].certs_dir }}/ca.pem"
+    src: "{{ certs_dir }}/ca.pem"
     dest: /var/lib/kubelet/pki/ca.pem
     mode: "0644"
-  delegate_to: localhost
 
 - name: Copy kubelet certificate
   ansible.builtin.copy:
-    src: "{{ hostvars['localhost'].certs_dir }}/kubelets/{{ node_name }}.pem"
-    dest: /var/lib/kubelet/pki/{{ node_name }}.pem
+    src: "{{ certs_dir }}/kubelets/{{ inventory_hostname }}.pem"
+    dest: /var/lib/kubelet/pki/{{ inventory_hostname }}.pem
     mode: "0644"
-  delegate_to: localhost
 
 - name: Copy kubelet key
   ansible.builtin.copy:
-    src: "{{ hostvars['localhost'].certs_dir }}/kubelets/{{ node_name }}-key.pem"
-    dest: /var/lib/kubelet/pki/{{ node_name }}-key.pem
+    src: "{{ certs_dir }}/kubelets/{{ inventory_hostname }}-key.pem"
+    dest: /var/lib/kubelet/pki/{{ inventory_hostname }}-key.pem
     mode: "0600"
-  delegate_to: localhost
 
 - name: Copy kubelet kubeconfig
   ansible.builtin.copy:
-    src: "{{ hostvars['localhost'].certs_dir }}/kubelets/{{ node_name }}.kubeconfig"
+    src: "{{ certs_dir }}/kubelets/{{ inventory_hostname }}.kubeconfig"
     dest: /var/lib/kubelet/kubeconfig
     mode: "0600"
-  delegate_to: localhost
 
 - name: Resolve {{NODE_IP}} placeholder in kubelet config
   ansible.builtin.replace:
     path: /etc/kubernetes/kubelet/config.yaml
     regexp: "{{ '{{NODE_IP}}' }}"
-    replace: "{{ node_ip }}"
+    replace: "{{ ansible_host }}"
   failed_when: false
 
 - name: Start kubelet
