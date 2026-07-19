@@ -23,6 +23,12 @@ RUN pip install --no-cache-dir \
         community.general \
   && rm -rf /root/.cache
 
+# Install Cilium CLI for CNI installation
+ARG CILIUM_CLI_VERSION=v0.19.6
+RUN curl -sL "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin/ cilium \
+  && cilium version --client
+
 WORKDIR /workspace
 # No fixed entrypoint — caller specifies ansible, ansible-playbook, or ansible-galaxy
 ENTRYPOINT []
