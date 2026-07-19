@@ -220,6 +220,7 @@ certs: ## Generate TLS certificates via Ansible (community.crypto)
 bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	@echo 'Bootstrapping Kubernetes cluster via Ansible...'
 	@echo '  Prerequisites: make deploy must have been run, SSH keys injected'
+	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || true; \
 	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
 		ansible/playbooks/bootstrap.yml
@@ -368,7 +369,8 @@ cluster: base extensions container ## Full pipeline: base -> extensions -> conta
 	$(MAKE) wait-ips; \
 	echo '  Step 3: Wait for SSH connectivity on all VMs...'; \
 	$(MAKE) wait-ssh; \
-	echo '  Step 4: Generate inventory from terraform state...'; \
+	echo '  Step 4: Refresh tofu state (DHCP lease IPs) and generate inventory...'; \
+	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || true; \
 	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json; \
 	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
 	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \

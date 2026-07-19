@@ -34,32 +34,30 @@ get_node_names() {
 }
 
 # ---------------------------------------------------------------------------
-# Get IPs from libvirt DHCP leases (virsh)
-# Returns: IP_ADDRESS VM_NAME (space-separated pairs)
+# Get IPs from libvirt DHCP leases (virsh) via MAC address matching
+# Uses domiflist to get MAC per VM, then net-dhcp-leases to find IP by MAC.
+# Returns: IP_ADDRESS VM_NAME (space-separated pairs, one per line)
 # ---------------------------------------------------------------------------
 get_lease_ips() {
+  local net="$1"
+  shift
+  local vnames=("$@")
   command -v virsh &>/dev/null || return
-
-  local net
-  net=$(virsh net-list --name 2>/dev/null | grep -v "^$" | head -1 || true)
+  [ ${#vnames[@]} -eq 0 ] && return
   [ -z "$net" ] && return
 
-  # Format: IP HOSTNAME
-  virsh net-dhcp-leases "$net" 2>/dev/null | awk '
-    NR>2 && /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {
-      ip=""; hostname=""
-      for(i=1;i<=NF;i++) {
-        if($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $i !~ /^0\./) {
-          ip=$i
-        }
-        # Look for hostname in the lease line
-        if($i ~ /^k8s-/ || $i ~ /^k8labs/) {
-          hostname=$i
-        }
-      }
-      if(ip) print ip, hostname
-    }
-  '
+  local lease_data
+  lease_data=$(virsh net-dhcp-leases "$net" 2>/dev/null || true)
+  [ -z "$lease_data" ] && return
+
+  local vname mac ip
+  for vname in "${vnames[@]}"; do
+    mac=$(virsh domiflist "$vname" 2>/dev/null | awk 'NR>2 && $5 {print $5; exit}' || true)
+    [ -z "$mac" ] && continue
+    ip=$(echo "$lease_data" | awk -v m="$mac" 'BEGIN{IGNORECASE=1} $3 == m {print $5; exit}' 2>/dev/null || true)
+    ip="${ip%%/*}"  # strip CIDR suffix
+    [ -n "$ip" ] && echo "$ip $vname"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -127,23 +125,15 @@ output_list() {
     node_ips["$w_name"]="${worker_ip_addrs[$i]}"
   done
 
-  # If tofu has no IPs, try virsh leases
+  # If tofu has no IPs, try virsh leases (MAC-based matching)
   if [ "$tofu_has_ip" -eq 0 ]; then
-    while IFS=' ' read -r ip hostname; do
-      [ -z "$ip" ] && continue
-      # Try to match by hostname pattern
-      for node in "${node_names[@]}" "$cp_name" "${worker_names[@]}"; do
-        if echo "$hostname" | grep -qi "$node" 2>/dev/null; then
-          node_ips["$node"]="$ip"
-        fi
-      done
-      # If no match by hostname, assign by position
-      if [ ${#node_ips[@]} -eq 0 ] && [ ${#node_names[@]} -gt 0 ]; then
-        node_ips["${node_names[0]}"]="$ip"
-      elif [ ${#node_ips[@]} -eq 1 ] && [ ${#worker_names[@]} -gt 0 ]; then
-        node_ips["${worker_names[0]}"]="$ip"
-      fi
-    done < <(get_lease_ips || true)
+    local net
+    net=$(virsh net-list --name 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+    [ -z "$net" ] && net="k8s-cluster-net"
+    while IFS=' ' read -r ip vname; do
+      [ -z "$ip" ] || [ -z "$vname" ] && continue
+      node_ips["$vname"]="$ip"
+    done < <(get_lease_ips "$net" "${node_names[@]}" || true)
   fi
 
   # Build JSON output using jq if available (correct by construction)
