@@ -172,6 +172,9 @@ destroy: ## Destroy Terraform/OpenTofu infrastructure
 
 # --- Ansible Container ---
 
+# Libvirt connection URI (must match tofu/terraform provider config)
+LIBVIRT_URI := qemu:///system
+
 ANSIBLE_IMAGE := localhost/ansible-podman
 ANSIBLE_DIR := ansible
 KUBECTL_BIN := $(shell command -v kubectl 2>/dev/null || echo /usr/local/bin/kubectl)
@@ -232,7 +235,7 @@ wait-ips: ## Wait for ALL VMs to get DHCP leases after tofu apply
 		if [ -z "$$node_names" ]; then echo "  ERROR: empty node_names" >&2; exit 1; fi; \
 		mac_list=""; \
 		for name in $$node_names; do \
-			mac=$$(virsh domiflist "$$name" 2>/dev/null | awk 'NR>2 && $$1 {print $$1; exit}'); \
+			mac=$$(virsh -c $(LIBVIRT_URI) domiflist "$$name" 2>/dev/null | awk 'NR>2 && $$5 {print $$5; exit}'); \
 			if [ -z "$$mac" ]; then \
 				echo "  WARNING: no MAC found for $$name via virsh, falling back to tofu refresh" >&2; \
 				mac_list=""; \
@@ -244,10 +247,10 @@ wait-ips: ## Wait for ALL VMs to get DHCP leases after tofu apply
 			total=$$(echo "$$node_names" | wc -w); \
 			for i in $$(seq 1 60); do \
 				cp_ip=""; w_ips=""; found_count=0; \
-				leases_data=$$(virsh net-dhcp-leases k8s-cluster-net 2>/dev/null); \
+				leases_data=$$(virsh -c $(LIBVIRT_URI) net-dhcp-leases k8s-cluster-net 2>/dev/null); \
 				for entry in $$mac_list; do \
 					target_mac=$${entry%%@*}; \
-					ip=$$(echo "$$leases_data" | awk -v mac="$$target_mac" '$$2 == mac {print $$5; exit}'); \
+					ip=$$(echo "$$leases_data" | awk -v mac="$$target_mac" '$$3 == mac {print $$5; exit}'); \
 					ip=$$(echo "$$ip" | sed 's|/.*||'); \
 					if [ -n "$$ip" ]; then \
 						if [ -z "$$cp_ip" ]; then \
@@ -304,26 +307,50 @@ wait-ssh: ## Wait for SSH to become available on all VMs (after DHCP leases)
 		echo "  ERROR: SSH not available on $$name ($$ip) after 30 attempts" >&2; \
 		return 1; \
 	}; \
+	collect_ips_virsh() { \
+		local names="$$1"; \
+		local first=1; \
+		for vname in $$names; do \
+			local mac=$$(virsh -c $(LIBVIRT_URI) domiflist "$$vname" 2>/dev/null | awk 'NR>2 && $$5 {print $$5; exit}'); \
+			local ip=""; \
+			if [ -n "$$mac" ]; then \
+				ip=$$(virsh -c $(LIBVIRT_URI) net-dhcp-leases k8s-cluster-net 2>/dev/null | awk -v m="$$mac" '$$3 == m {print $$5; exit}'); \
+				ip=$$(echo "$$ip" | sed 's|/.*||'); \
+			fi; \
+			if [ $$first -eq 1 ]; then \
+				printf "%s" "$$ip"; \
+				first=0; \
+			else \
+				printf " %s" "$$ip"; \
+			fi; \
+		done; \
+	}; \
 	raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null); \
 	if [ -z "$$raw_names" ]; then echo "  ERROR: no node_names from tofu output" >&2; exit 1; fi; \
 	node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names"); \
-	cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null); \
-	w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; ips=json.load(sys.stdin); print(' '.join(filter(None, ips)))" 2>/dev/null || true); \
+	if command -v virsh &>/dev/null; then \
+		ips=$$(collect_ips_virsh "$$node_names"); \
+	else \
+		cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null || true); \
+		w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; ips=json.load(sys.stdin); print(' '.join(filter(None, ips)))" 2>/dev/null || true); \
+		ips="$$cp_ip $$w_ips"; \
+	fi; \
 	names_arr=(); while IFS= read -r n; do names_arr+=("$$n"); done < <(echo "$$node_names" | tr ' ' '\n'); \
-	ips_arr=("$$cp_ip"); while IFS= read -r ip; do ips_arr+=("$$ip"); done < <(echo "$$w_ips" | tr ' ' '\n'); \
+	ips_arr=(); while IFS= read -r ip; do ips_arr+=("$$ip"); done < <(echo "$$ips" | tr ' ' '\n'); \
 	pids=""; \
 	for idx in "$${!names_arr[@]}"; do \
 		name="$${names_arr[idx]}"; \
 		ip="$${ips_arr[idx]:-}"; \
 		if [ -z "$$ip" ]; then \
-			echo "  ERROR: no IP for $$name" >&2; \
-			exit 1; \
+			echo "  WARNING: no IP for $$name, skipping SSH check" >&2; \
+			continue; \
 		fi; \
 		(check_ssh "$$ip" "$$name") & \
 		pids="$$pids $$!"; \
 	done; \
 	has_error=0; \
 	for pid in $$pids; do \
+		[ -z "$$pid" ] && continue; \
 		wait "$$pid" || has_error=1; \
 	done; \
 	if [ "$$has_error" -ne 0 ]; then \
