@@ -3,7 +3,9 @@ Description=kubelet: The Kubernetes Node Agent
 Documentation=https://kubernetes.io/docs/home/
 
 [Service]
-ExecStart=/usr/bin/kubelet
+ExecStart=/usr/bin/kubelet \
+  --config=/etc/kubernetes/kubelet/config.yaml \
+  --kubeconfig=/var/lib/kubelet/kubeconfig
 Restart=always
 StartLimitInterval=0
 RestartSec=10
