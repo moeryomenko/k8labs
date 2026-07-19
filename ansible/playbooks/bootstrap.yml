@@ -38,7 +38,7 @@
     - role: certs
       run_once: true
 
-- name: Stage 3 — Distribute certs and start control-plane
+- name: Stage 3 — Distribute certs to control-plane
   hosts: control_plane
   gather_facts: false
   vars:
@@ -55,15 +55,89 @@
         dest: /etc/kubernetes/admin.kubeconfig
         mode: "0600"
 
-    - name: Include kubernetes-cp role
+    - name: Include kubernetes-cp role (distribution only — services started after etcd)
       ansible.builtin.include_role:
         name: kubernetes-cp
+        tasks_from: distribute-certs
 
 - name: Stage 4 — Start etcd on control-plane
   hosts: control_plane
   gather_facts: false
+  vars:
+    cp_ip: "{{ ansible_host }}"
   roles:
     - role: etcd
+
+- name: Stage 5 — Start control-plane services (apiserver, controller-manager, scheduler)
+  hosts: control_plane
+  gather_facts: false
+  vars:
+    certs_dir: "{{ playbook_dir }}/../../certs"
+    cp_ip: "{{ ansible_host }}"
+  tasks:
+    - name: Resolve {{CP_IP}} placeholder in kube-apiserver systemd unit
+      ansible.builtin.replace:
+        path: /usr/lib/systemd/system/kube-apiserver.service
+        regexp: "{{ '{{CP_IP}}' }}"
+        replace: "{{ cp_ip }}"
+      failed_when: false
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Start kube-apiserver
+      ansible.builtin.systemd:
+        name: kube-apiserver
+        state: started
+        enabled: true
+      register: apiserver_start
+
+    - name: Wait for kube-apiserver process to become active (up to 30s)
+      ansible.builtin.command:
+        cmd: systemctl is-active kube-apiserver
+      register: apiserver_active
+      retries: 6
+      delay: 5
+      until: apiserver_active.stdout == "active"
+      failed_when: false
+      changed_when: false
+
+    - name: Show kube-apiserver logs on failure
+      ansible.builtin.command:
+        cmd: journalctl -u kube-apiserver --no-pager -n 40
+      register: apiserver_logs
+      changed_when: false
+      when: apiserver_active.stdout != "active"
+
+    - name: Fail if kube-apiserver did not become active
+      ansible.builtin.fail:
+        msg: |
+          kube-apiserver status: {{ apiserver_active.stdout }}
+          --- Logs (last 40 lines) ---
+          {{ apiserver_logs.stdout | default('(no logs)') }}
+      when: apiserver_active.stdout != "active"
+
+    - name: Wait for kube-apiserver to be reachable
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig=/etc/kubernetes/admin.kubeconfig get nodes --request-timeout=2s
+      register: api_health
+      retries: 24
+      delay: 5
+      until: api_health is succeeded
+      changed_when: false
+
+    - name: Start kube-controller-manager
+      ansible.builtin.systemd:
+        name: kube-controller-manager
+        state: started
+        enabled: true
+
+    - name: Start kube-scheduler
+      ansible.builtin.systemd:
+        name: kube-scheduler
+        state: started
+        enabled: true
 
 - name: Stage 5 — Apply kubelet RBAC rules
   hosts: control_plane
@@ -118,6 +192,26 @@
         executable: /bin/bash
       when: rbac_check.rc != 0
 
+    - name: Bind system:masters to cluster-admin for full admin access
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.kubeconfig apply -f - <<'ADMIN_EOF'
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: system:admin
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: system:masters
+        ADMIN_EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
 - name: Stage 6 — Start kubelet on all cluster nodes
   hosts: cluster
   gather_facts: false
@@ -137,6 +231,17 @@
   connection: local
   gather_facts: false
   tasks:
+    - name: Discover libvirt bridge for cluster network
+      ansible.builtin.command:
+        cmd: virsh -c qemu:///system net-info k8s-cluster-net
+      register: net_info
+      changed_when: false
+      failed_when: false
+
+    - name: Extract bridge name from net-info
+      ansible.builtin.set_fact:
+        lb_bridge: "{{ net_info.stdout | regex_search('Bridge:\\s+(\\S+)', '\\1') | first | default('virbr0') }}"
+
     - name: Check if route already exists
       ansible.builtin.command:
         cmd: ip route show 10.0.10.0/24
@@ -144,11 +249,11 @@
       changed_when: false
       failed_when: false
 
-    - name: Add route for LB pool CIDR via virbr0
+    - name: Add route for LB pool CIDR via cluster bridge
       ansible.builtin.command:
-        cmd: ip route add 10.0.10.0/24 dev virbr0
+        cmd: ip route add 10.0.10.0/24 dev {{ lb_bridge }}
       become: true
-      when: "'virbr0' not in (route_check.stdout | default(''))"
+      when: "lb_bridge not in (route_check.stdout | default(''))"
 
 - name: Stage 9 — Cluster health check
   hosts: localhost

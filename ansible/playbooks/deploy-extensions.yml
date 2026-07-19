@@ -5,26 +5,95 @@
   vars:
     project_dir: "{{ playbook_dir }}/../.."
   tasks:
-    - name: Deploy sysext binaries and confext configs via tar-over-SSH
+    # ---------------------------------------------------------------------------
+    # Stage 0 — Node initialization (disk resize, dependencies, configuration)
+    # ---------------------------------------------------------------------------
+    - name: Grow root partition to fill available disk space
+      ansible.builtin.raw: |
+        set -e
+        # Fix GPT if needed
+        sgdisk -e /dev/vda 2>/dev/null || true
+        # Grow partition 3 to fill the disk
+        parted -s /dev/vda resizepart 3 100% 2>/dev/null || (
+          sgdisk -d 3 /dev/vda 2>/dev/null
+          sgdisk -N 3 /dev/vda 2>/dev/null
+          partprobe /dev/vda
+        ) 2>/dev/null || true
+        # Grow LVM PV
+        pvresize /dev/vda3 || true
+        # Grow LV to use all free space
+        ROOT_LV=$(lvs --noheadings -o lv_path | head -1 | tr -d ' ')
+        if [ -n "$ROOT_LV" ]; then
+          lvextend -l +100%FREE "$ROOT_LV" || true
+          resize2fs "$ROOT_LV" || true
+        fi
+      changed_when: true
+      failed_when: false
+
+    - name: Install container runtime dependencies (conmon, tar)
+      ansible.builtin.raw: |
+        set -e
+        dnf install -y conmon tar 2>&1 | tail -3
+      changed_when: true
+
+    - name: Create containers policy for image pulling
+      ansible.builtin.raw: |
+        mkdir -p /etc/containers
+        if [ ! -f /etc/containers/policy.json ]; then
+          cat > /etc/containers/policy.json <<'POLICY'
+        {
+          "default": [
+            {
+              "type": "insecureAcceptAnything"
+            }
+          ]
+        }
+        POLICY
+        fi
+      changed_when: false
+
+    - name: Set correct hostname from inventory
+      ansible.builtin.shell: |
+        hostnamectl set-hostname "{{ inventory_hostname }}" 2>/dev/null || true
+      changed_when: false
+
+    - name: Create /etc/kubernetes directories upfront
+      ansible.builtin.raw: |
+        mkdir -p /etc/kubernetes/pki /etc/kubernetes/manifests /var/lib/kubelet/pki
+      changed_when: false
+    - name: Purge any existing sysext/confext files to avoid stale binaries
+      ansible.builtin.raw: |
+        set -e
+        for d in crio crun kubelet etcd etcdctl kube-apiserver kube-controller-manager kube-scheduler kubectl; do
+          rm -f /usr/bin/$d
+        done
+        for f in crio kubelet etcd kube-apiserver kube-controller-manager kube-scheduler; do
+          rm -f /usr/lib/systemd/system/$f.service
+        done
+      changed_when: true
+
+    - name: Deploy sysexts and confexts via tar-over-SSH
       ansible.builtin.raw: |
         set -e
         HOST="{{ ansible_host }}"
         ROOT="{{ project_dir }}"
         
-        # Sysexts
+        # Sysexts: tar form local sysext/*/usr/ -> extract at /
         for src in "$ROOT"/sysext/*/usr; do
           [ -d "$src" ] || continue
           name=$(basename "$(dirname "$src")")
-          echo "Deploying sysext: $name"
-          tar cf - -C "$src/.." usr/ 2>/dev/null | ssh -o StrictHostKeyChecking=no root@$HOST 'cd / && tar xpf - 2>/dev/null' || true
+          echo "Sysext: $name"
+          tar cf - -C "$(dirname "$src")" usr/ | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'cd / && tar xpf -'
+          echo "  Done: $name"
         done
         
-        # Confexts  
+        # Confexts: tar form local confext/*/etc/ -> extract at /
         for src in "$ROOT"/confext/*/etc; do
           [ -d "$src" ] || continue
           name=$(basename "$(dirname "$src")")
-          echo "Deploying confext: $name"
-          tar cf - -C "$src/.." etc/ 2>/dev/null | ssh -o StrictHostKeyChecking=no root@$HOST 'cd / && tar xpf - 2>/dev/null' || true
+          echo "Confext: $name"
+          tar cf - -C "$(dirname "$src")" etc/ | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'cd / && tar xpf -'
+          echo "  Done: $name"
         done
         
         echo "Deployment complete"
@@ -35,10 +104,16 @@
       ansible.builtin.raw: systemctl daemon-reload
       changed_when: false
 
-    - name: Restart CRI-O to pick up new config
-      ansible.builtin.raw: systemctl restart crio 2>/dev/null || true
-      changed_when: false
+    - name: Disable swap check in kubelet config
+      ansible.builtin.replace:
+        path: /etc/kubernetes/kubelet/config.yaml
+        regexp: 'failSwapOn: true'
+        replace: 'failSwapOn: false'
       failed_when: false
+
+    - name: Start CRI-O container runtime
+      ansible.builtin.raw: systemctl start crio 2>/dev/null || true
+      changed_when: false
 
     - name: Verify binaries
       ansible.builtin.raw: |
