@@ -65,6 +65,21 @@ info() {
     echo "==> $*"
 }
 
+# ---------------------------------------------------------------------------
+# Cache check: skip download if all expected paths exist and are non-empty
+# ---------------------------------------------------------------------------
+check_cached() {
+    desc="$1"
+    shift
+    for f in "$@"; do
+        if [ ! -f "$f" ] || [ ! -s "$f" ]; then
+            return 1  # missing or empty — need to download
+        fi
+    done
+    echo "  ${desc}: already available, skipping download"
+    return 0  # all exist — cache hit
+}
+
 dry_run=0
 
 # ---------------------------------------------------------------------------
@@ -140,10 +155,14 @@ download_archive() {
 # ---------------------------------------------------------------------------
 download_kubelet() {
     target="${SYSEXT_DIR}/kubelet/usr/bin/kubelet"
+    check_cached "kubelet ${KUBELET_VERSION}" "$target" && return 0
     download_file "$KUBELET_URL" "$target" "kubelet ${KUBELET_VERSION}"
 }
 
 download_crio() {
+    target_dir="${SYSEXT_DIR}/cri-o/usr/bin"
+    check_cached "cri-o ${CRIO_VERSION}" "${target_dir}/crio" "${target_dir}/crictl" "${target_dir}/pinns" && return 0
+
     tmpdir="${SYSEXT_DIR}/cri-o/.download.tmp"
     archive="${tmpdir}/crio.tar.gz"
     mkdir -p "$tmpdir"
@@ -182,10 +201,15 @@ download_crio() {
 
 download_crun() {
     target="${SYSEXT_DIR}/crun/usr/bin/crun"
+    check_cached "crun ${CRUN_VERSION}" "$target" && return 0
     download_file "$CRUN_URL" "$target" "crun ${CRUN_VERSION}"
 }
 
 download_cni() {
+    target_dir="${SYSEXT_DIR}/cni/usr/lib/cni"
+    # Check a representative plugin to gauge cache status
+    check_cached "cni-plugins ${CNI_VERSION}" "${target_dir}/bridge" "${target_dir}/host-local" && return 0
+
     tmpdir="${SYSEXT_DIR}/cni/.download.tmp"
     archive="${tmpdir}/cni-plugins.tgz"
     mkdir -p "$tmpdir"
@@ -206,6 +230,9 @@ download_cni() {
 }
 
 download_etcd() {
+    target_dir="${SYSEXT_DIR}/etcd/usr/bin"
+    check_cached "etcd ${ETCD_VERSION}" "${target_dir}/etcd" "${target_dir}/etcdctl" && return 0
+
     tmpdir="${SYSEXT_DIR}/etcd/.download.tmp"
     archive="${tmpdir}/etcd.tar.gz"
     mkdir -p "$tmpdir"
@@ -240,6 +267,9 @@ download_etcd() {
 }
 
 download_kubernetes_cp() {
+    target_dir="${SYSEXT_DIR}/kubernetes-cp/usr/bin"
+    check_cached "kubernetes-cp ${KUBERNETES_CP_VERSION}" "${target_dir}/kube-apiserver" "${target_dir}/kube-controller-manager" "${target_dir}/kube-scheduler" "${target_dir}/kubectl" && return 0
+
     tmpdir="${SYSEXT_DIR}/kubernetes-cp/.download.tmp"
     archive="${tmpdir}/kubernetes-server.tar.gz"
     mkdir -p "$tmpdir"

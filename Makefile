@@ -106,7 +106,7 @@ sysext/kubernetes-cp: ## Build kubernetes-cp sysext (apiserver, cm, scheduler, k
 	@echo 'Packaging kubernetes-cp sysext...'
 	extensions/build.sh sysext sysext/kubernetes-cp kubernetes-cp
 
-sysexts: download-sysexts $(addprefix sysext/,$(SYSEXT_NAMES)) ## Build all sysext extensions
+sysexts: $(addprefix sysext/,$(SYSEXT_NAMES)) ## Build all sysext extensions
 	@echo 'All sysext extensions built.'
 
 # --- Config Extensions ---
