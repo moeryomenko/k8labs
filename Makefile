@@ -506,6 +506,17 @@ smoke-test:
 		echo "  FAIL: no NetworkUnavailable node condition found"; \
 		fail=1; \
 	fi; \
+	echo "--- check 3b: kubectl exec into Cilium pod ---"; \
+	CILIUM_POD=$$(kubectl --kubeconfig $(KUBECONFIG) -n kube-system get pods -l k8s-app=cilium -o jsonpath='{.items[0].metadata.name}' 2>/dev/null); \
+	if [ -n "$$CILIUM_POD" ]; then \
+		if kubectl --kubeconfig $(KUBECONFIG) -n kube-system exec "$$CILIUM_POD" -c cilium-agent -- cilium status --brief 2>/dev/null; then \
+			echo "  PASS: Cilium exec works"; \
+		else \
+			echo "  WARN: Cilium exec failed (RBAC may need system:kube-apiserver-proxy binding)"; \
+		fi; \
+	else \
+		echo "  SKIP: no Cilium pod found"; \
+	fi; \
 	echo "--- check 4: schedule test pod ---"; \
 	if kubectl --kubeconfig $(KUBECONFIG) run "$$POD_NAME" --image=nginx --restart=Never --port=80 2>/dev/null; then \
 		for i in $$(seq 1 15); do \

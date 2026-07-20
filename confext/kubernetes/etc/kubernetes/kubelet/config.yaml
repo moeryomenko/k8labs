@@ -8,6 +8,8 @@ authentication:
     enabled: false
   webhook:
     enabled: true
+  x509:
+    clientCAFile: /var/lib/kubelet/pki/ca.pem
 authorization:
   mode: Webhook
 healthzBindAddress: 0.0.0.0
