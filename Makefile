@@ -122,10 +122,6 @@ confext/worker: ## Build confext worker configuration overlay
 	@echo 'Building confext worker...'
 	extensions/build.sh confext confext/worker confext-worker
 
-confext/control-plane: ## Build confext control-plane configuration overlay
-	@echo 'Building confext control-plane...'
-	extensions/build.sh confext confext/control-plane confext-control-plane
-
 confext/cri-o: ## Build confext cri-o configuration overlay
 	@echo 'Building confext cri-o...'
 	extensions/build.sh confext confext/cri-o confext-cri-o
@@ -170,6 +166,26 @@ destroy: ## Destroy Terraform/OpenTofu infrastructure
 	@echo 'Destroying Terraform/OpenTofu infrastructure...'
 	tofu -chdir=terraform destroy -auto-approve
 
+.PHONY: destroy-full
+destroy-full: destroy ## Destroy all artifacts (VMs + certs + inventory + kubeconfig)
+	@echo '==> Preparing to clean up generated artifacts...'
+	@if [ "${YES}" != "1" ]; then \
+		read -t 30 -r -p "Remove all generated certificates and kubeconfigs? [y/N] " confirm; \
+		case "$$confirm" in \
+			[yY]|[yY][eE][sS]) ;; \
+			*) echo "  Aborted."; exit 1 ;; \
+		esac; \
+	fi
+	@echo '==> Removing generated certificates...'
+	@find certs/ -type f ! -name '.gitkeep' -delete
+	@find certs/ -type d -empty -delete
+	@touch certs/.gitkeep
+	@echo '==> Removing ansible/inventory/inventory.json...'
+	@rm -f ansible/inventory/inventory.json
+	@echo '==> Removing root kubeconfig...'
+	@rm -f kubeconfig
+	@echo '==> Cleanup complete.'
+
 # --- Ansible Container ---
 
 # Libvirt connection URI (must match tofu/terraform provider config)
@@ -177,13 +193,11 @@ LIBVIRT_URI := qemu:///system
 
 ANSIBLE_IMAGE := localhost/ansible-podman
 ANSIBLE_DIR := ansible
-KUBECTL_BIN := $(shell command -v kubectl 2>/dev/null || echo /usr/local/bin/kubectl)
 ANSIBLE_RUN := podman run --rm --network host \
 	-v $(PWD):/workspace:z \
 	-v $(HOME)/.ssh:/root/.ssh:ro,z \
 	-v $(SSH_AUTH_SOCK):/ssh-agent:z \
 	-e SSH_AUTH_SOCK=/ssh-agent \
-	-v $(KUBECTL_BIN):/usr/local/bin/kubectl:ro \
 	-e ANSIBLE_ROLES_PATH=/workspace/$(ANSIBLE_DIR)/roles \
 	-e ANSIBLE_INVENTORY=/workspace/$(ANSIBLE_DIR)/inventory/inventory.json \
 	-w /workspace \
@@ -220,7 +234,7 @@ certs: ## Generate TLS certificates via Ansible (community.crypto)
 bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	@echo 'Bootstrapping Kubernetes cluster via Ansible...'
 	@echo '  Prerequisites: make deploy must have been run, SSH keys injected'
-	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || true; \
+	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || { echo "  ERROR: tofu refresh failed" >&2; exit 1; }; \
 	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
 		ansible/playbooks/bootstrap.yml
@@ -359,8 +373,30 @@ wait-ssh: ## Wait for SSH to become available on all VMs (after DHCP leases)
 		exit 1; \
 	fi
 
+.PHONY: prereq
+prereq: ## Validate required build tools are installed (tofu/terraform, virsh, podman, openssl)
+	@set -euo pipefail; \
+	fail=0; \
+	if ! command -v tofu &>/dev/null && ! command -v terraform &>/dev/null; then \
+		echo "ERROR: required tool 'tofu' or 'terraform' not found. Install with: mise install opentofu" >&2; \
+		fail=1; \
+	fi; \
+	if ! command -v virsh &>/dev/null; then \
+		echo "ERROR: required tool 'virsh' not found. Install with: apt install libvirt-clients" >&2; \
+		fail=1; \
+	fi; \
+	if ! command -v podman &>/dev/null; then \
+		echo "ERROR: required tool 'podman' not found. Install with: apt install podman" >&2; \
+		fail=1; \
+	fi; \
+	if ! command -v openssl &>/dev/null; then \
+		echo "ERROR: required tool 'openssl' not found. Install with: apt install openssl" >&2; \
+		fail=1; \
+	fi; \
+	exit $$fail
+
 .PHONY: cluster
-cluster: base extensions container ## Full pipeline: base -> extensions -> container -> deploy -> bootstrap
+cluster: prereq base extensions container ## Full pipeline: base -> extensions -> container -> deploy -> bootstrap
 	@set -euo pipefail; \
 	echo 'Bootstrapping cluster via Ansible...'; \
 	echo '  Step 1: Deploy VMs (tofu apply)...'; \
@@ -370,12 +406,128 @@ cluster: base extensions container ## Full pipeline: base -> extensions -> conta
 	echo '  Step 3: Wait for SSH connectivity on all VMs...'; \
 	$(MAKE) wait-ssh; \
 	echo '  Step 4: Refresh tofu state (DHCP lease IPs) and generate inventory...'; \
-	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || true; \
+	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || { echo "  ERROR: tofu refresh failed" >&2; exit 1; }; \
 	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json; \
 	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
 	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
 		$(ANSIBLE_DIR)/playbooks/bootstrap.yml; \
+	echo '  Step 6: Fetch DHCP-resistant kubeconfig...'; \
+	$(MAKE) kubeconfig; \
 	echo 'Full cluster build and bootstrap complete.'
+
+# --- kubeconfig ---
+
+.PHONY: kubeconfig update-kubeconfig
+kubeconfig: ## Fetch DHCP-resistant kubeconfig from control-plane node
+	@set -euo pipefail; \
+	cp_ip=""; \
+	if command -v virsh &>/dev/null; then \
+		cp_name=$$(tofu -chdir=terraform output -json node_names 2>/dev/null | python3 -c "import sys,json;n=json.load(sys.stdin);print(n[0])" 2>/dev/null || true); \
+		if [ -n "$$cp_name" ] && [ "$$cp_name" != "null" ]; then \
+			mac=$$(virsh -c $(LIBVIRT_URI) domiflist "$$cp_name" 2>/dev/null | awk 'NR>2 && $$5 {print $$5; exit}'); \
+			if [ -n "$$mac" ]; then \
+				cp_ip=$$(virsh -c $(LIBVIRT_URI) net-dhcp-leases k8s-cluster-net 2>/dev/null | awk -v m="$$mac" '$$3 == m {print $$5; exit}'); \
+				cp_ip=$$(echo "$$cp_ip" | sed 's|/.*||'); \
+			fi; \
+		fi; \
+	fi; \
+	if [ -z "$$cp_ip" ] || [ "$$cp_ip" = "null" ]; then \
+		cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>&1 | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1 || true); \
+	fi; \
+	if [ -z "$$cp_ip" ] || [ "$$cp_ip" = "null" ]; then \
+		echo "ERROR: Cannot determine control-plane IP. Ensure VMs are deployed (make deploy)." >&2; \
+		exit 1; \
+	fi; \
+	echo "  Fetching kubeconfig from CP ($${cp_ip})..."; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+		-o ConnectTimeout=5 -o BatchMode=yes \
+		root@$${cp_ip} "cat /etc/kubernetes/admin.kubeconfig" > .kubeconfig.tmp; \
+	{ echo "# WARNING: This kubeconfig contains the control-plane IP directly and will break"; \
+	  echo "# if DHCP renews and the control-plane node gets a new IP address."; \
+	  echo "# To refresh, run: make update-kubeconfig"; \
+	  cat .kubeconfig.tmp; } > kubeconfig; \
+	rm -f .kubeconfig.tmp; \
+	chmod 600 kubeconfig; \
+	echo "  kubeconfig saved to ./kubeconfig (mode 600)"
+
+update-kubeconfig: kubeconfig ## Alias for kubeconfig — explicitly signals refresh
+
+# --- Smoke Test ---
+
+# smoke-test validates cluster health after 'make cluster'.
+# Checks: nodes Ready, kube-system pods Running, Cilium health, test pod scheduling.
+KUBECONFIG := kubeconfig
+
+.PHONY: smoke-test
+smoke-test:
+	@set -euo pipefail; \
+	POD_NAME="smoke-test-$$(date +%s)"; \
+	trap 'kubectl --kubeconfig $(KUBECONFIG) delete pod "$$POD_NAME" --ignore-not-found --now 2>/dev/null || true' EXIT; \
+	fail=0; \
+	echo "=== smoke-test: validating cluster health ==="; \
+	echo "--- check 1: nodes Ready ---"; \
+	NODES=$$(kubectl --kubeconfig $(KUBECONFIG) get nodes --no-headers 2>/dev/null); \
+	if [ -z "$$NODES" ]; then \
+		echo "  FAIL: no nodes found"; \
+		fail=1; \
+	else \
+		NOT_READY=$$(echo "$$NODES" | awk '{if($$2!="Ready"){print $$1}}'); \
+		if [ -n "$$NOT_READY" ]; then \
+			echo "  FAIL: nodes not Ready: $$NOT_READY"; \
+			kubectl --kubeconfig $(KUBECONFIG) get nodes; \
+			fail=1; \
+		else \
+			echo "  PASS: all nodes Ready"; \
+		fi; \
+	fi; \
+	echo "--- check 2: kube-system pods Running ---"; \
+	NOT_RUNNING=$$(kubectl --kubeconfig $(KUBECONFIG) get pods -n kube-system --no-headers 2>/dev/null | awk '{if($$3!="Running"&&$$3!="Completed"){print $$1":"$$3}}'); \
+	if [ -n "$$NOT_RUNNING" ]; then \
+		echo "  FAIL: some kube-system pods not Running: $$NOT_RUNNING"; \
+		kubectl --kubeconfig $(KUBECONFIG) get pods -n kube-system; \
+		fail=1; \
+	else \
+		echo "  PASS: kube-system pods Running"; \
+	fi; \
+	echo "--- check 3: Cilium health ---"; \
+	CILIUM_POD=$$(kubectl --kubeconfig $(KUBECONFIG) -n kube-system get pods -l k8s-app=cilium --no-headers 2>/dev/null | head -1 | awk '{print $$1}'); \
+	if [ -n "$$CILIUM_POD" ]; then \
+		if kubectl --kubeconfig $(KUBECONFIG) -n kube-system exec "$$CILIUM_POD" -- cilium status --brief 2>/dev/null; then \
+			echo "  PASS: Cilium healthy"; \
+		else \
+			echo "  FAIL: Cilium health check failed"; \
+			fail=1; \
+		fi; \
+	else \
+		echo "  SKIP: no Cilium pod found (CNI may differ)"; \
+	fi; \
+	echo "--- check 4: schedule test pod ---"; \
+	if kubectl --kubeconfig $(KUBECONFIG) run "$$POD_NAME" --image=nginx --restart=Never --port=80 2>/dev/null; then \
+		for i in $$(seq 1 15); do \
+			status=$$(kubectl --kubeconfig $(KUBECONFIG) get pod "$$POD_NAME" -o jsonpath='{.status.phase}' 2>/dev/null); \
+			if [ "$$status" = "Running" ]; then \
+				echo "  PASS: test pod reached Running"; \
+				break; \
+			fi; \
+			sleep 2; \
+		done; \
+		if [ "$$status" != "Running" ]; then \
+			echo "  FAIL: test pod did not reach Running"; \
+			kubectl --kubeconfig $(KUBECONFIG) get pod "$$POD_NAME"; \
+			fail=1; \
+		fi; \
+	else \
+		echo "  FAIL: could not create test pod"; \
+		fail=1; \
+	fi; \
+	kubectl --kubeconfig $(KUBECONFIG) delete pod "$$POD_NAME" --now --ignore-not-found 2>/dev/null || true; \
+	echo "=== smoke-test complete ==="; \
+	if [ "$$fail" -eq 0 ]; then \
+		echo "PASS: all checks passed"; \
+	else \
+		echo "FAIL: one or more checks failed"; \
+	fi; \
+	exit $$fail
 
 # --- Cleanup ---
 
