@@ -1,7 +1,8 @@
 [tools]
-opentofu = "latest"
-packer = "latest"
-kubectl = "latest"
+# Tool versions are pinned for reproducibility. Update together when upgrading the cluster.
+opentofu = "1.8.0"
+packer = "1.11.2"
+kubectl = "1.32.0"
 
 [shell_alias]
 ansible = "podman run --rm --network host -v $(pwd):/workspace:z -v $HOME/.ssh:/root/.ssh:ro,z -v $SSH_AUTH_SOCK:/ssh-agent:z -e SSH_AUTH_SOCK=/ssh-agent -w /workspace localhost/ansible-podman:latest ansible -u root"
