@@ -32,16 +32,32 @@ resource "libvirt_volume" "worker_root" {
 }
 
 # ---------------------------------------------------------------------------
-# Cloud-init ISO shared by all VMs
+# Cloud-init ISOs — per-VM meta-data for unique instance identity
 # ---------------------------------------------------------------------------
 
-resource "libvirt_cloudinit_disk" "commoninit" {
-  name      = "commoninit.iso"
+resource "libvirt_cloudinit_disk" "cp_init" {
+  name      = "${var.control_plane.name}-commoninit.iso"
   user_data = templatefile("${path.module}/cloud-init/cloud_init.cfg", {
     ssh_public_key = file(var.ssh_public_key_path)
   })
   network_config = file("${path.module}/cloud-init/network_config.cfg")
-  meta_data      = file("${path.module}/cloud-init/meta-data")
+  meta_data      = templatefile("${path.module}/cloud-init/meta-data.tmpl", {
+    instance_id = var.control_plane.name
+    hostname    = var.control_plane.name
+  })
+}
+
+resource "libvirt_cloudinit_disk" "worker_init" {
+  count = length(var.workers)
+  name  = "${var.workers[count.index].name}-commoninit.iso"
+  user_data = templatefile("${path.module}/cloud-init/cloud_init.cfg", {
+    ssh_public_key = file(var.ssh_public_key_path)
+  })
+  network_config = file("${path.module}/cloud-init/network_config.cfg")
+  meta_data      = templatefile("${path.module}/cloud-init/meta-data.tmpl", {
+    instance_id = var.workers[count.index].name
+    hostname    = var.workers[count.index].name
+  })
 }
 
 # ---------------------------------------------------------------------------
@@ -88,7 +104,7 @@ resource "libvirt_domain" "control_plane" {
       {
         source = {
           file = {
-            file = libvirt_cloudinit_disk.commoninit.path
+            file = libvirt_cloudinit_disk.cp_init.path
           }
         }
         device = "cdrom"
@@ -170,7 +186,7 @@ resource "libvirt_domain" "worker" {
       {
         source = {
           file = {
-            file = libvirt_cloudinit_disk.commoninit.path
+            file = libvirt_cloudinit_disk.worker_init[count.index].path
           }
         }
         device = "cdrom"

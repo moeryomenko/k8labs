@@ -1,5 +1,5 @@
 libvirt_uri       = "qemu:///system"
-base_image_path   = "../build/base/k8labs-base"
+base_image_path   = "../build/k8labs-base.qcow2"
 pool_path         = "/var/lib/libvirt/k8s-pool"
 
 control_plane = {
