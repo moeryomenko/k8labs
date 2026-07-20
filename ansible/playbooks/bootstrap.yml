@@ -240,7 +240,7 @@
 
     - name: Extract bridge name from net-info
       ansible.builtin.set_fact:
-        lb_bridge: "{{ net_info.stdout | regex_search('Bridge:\\s+(\\S+)', '\\1') | first | default('virbr0') }}"
+        lb_bridge: "{{ (net_info.stdout_lines | select('match', '^Bridge:') | first | default('Bridge: virbr0')) | regex_replace('^Bridge:\\s+', '') }}"
 
     - name: Check if route already exists
       ansible.builtin.command:
