@@ -136,116 +136,89 @@ output_list() {
     done < <(get_lease_ips "$net" "${node_names[@]}" || true)
   fi
 
-  # Build JSON output using jq if available (correct by construction)
   local cp_ip="${node_ips[$cp_name]:-}"
 
-  # Build hostvars JSON object
-  local hostvars_json="{"
-  local host_entries=()
-
-  if [ -n "$cp_ip" ]; then
-    host_entries+=("\"${cp_name}\":{\"ansible_host\":\"${cp_ip}\",\"ansible_user\":\"root\",\"node_role\":\"control-plane\",\"node_ip\":\"${cp_ip}\",\"node_name\":\"${cp_name}\",\"cp_ip\":\"${cp_ip}\"}")
-  fi
-
-  local i w_name
-  for i in "${!worker_names[@]}"; do
-    w_name="${worker_names[$i]}"
-    local w_ip="${node_ips[$w_name]:-}"
-    if [ -n "$w_ip" ]; then
-      host_entries+=("\"${w_name}\":{\"ansible_host\":\"${w_ip}\",\"ansible_user\":\"root\",\"node_role\":\"worker\",\"node_ip\":\"${w_ip}\",\"node_name\":\"${w_name}\"}")
+  # Generate TSV lines: name\tip\trole
+  # This data is fed to jq or python3 for safe JSON construction
+  local node_data
+  node_data=$( {
+    if [ -n "$cp_ip" ]; then
+      printf '%s\t%s\tcontrol_plane\n' "$cp_name" "$cp_ip"
     fi
-  done
+    local i w_name w_ip
+    for i in "${!worker_names[@]}"; do
+      w_name="${worker_names[$i]}"
+      w_ip="${node_ips[$w_name]:-}"
+      [ -n "$w_ip" ] && printf '%s\t%s\tworker\n' "$w_name" "$w_ip"
+    done
+  } 2>/dev/null || true)
 
-  local IFS=,
-  hostvars_json+="${host_entries[*]}"
-  hostvars_json+="}"
-
-  # Build group host lists
-  local cp_host_entry worker_hosts_str all_hosts_str
-
-  if [ -n "$cp_ip" ]; then
-    cp_host_entry="\"${cp_name}\""
+  if command -v jq &>/dev/null; then
+    # Build JSON using jq with --raw-input slurp for safe construction
+    # jq handles all necessary escaping of hostnames and IPs
+    echo "$node_data" | jq -Rs '
+      split("\n") | map(select(length > 0) | split("\t") | select(length >= 3) | {name: .[0], ip: .[1], role: .[2]}) as $nodes |
+      {
+        control_plane: {
+          hosts: ([$nodes[] | select(.role == "control_plane") | {(.name): {ansible_host: .ip}}] | add // {}),
+          vars: {node_role: "control_plane"}
+        },
+        worker: {
+          hosts: ([$nodes[] | select(.role == "worker") | {(.name): {ansible_host: .ip}}] | add // {}),
+          vars: {node_role: "worker"}
+        },
+        cluster: {
+          hosts: ([$nodes[] | {(.name): {ansible_host: .ip}}] | add // {}),
+          vars: {
+            pod_cidr: "10.244.0.0/16",
+            service_cidr: "10.96.0.0/12",
+            lb_pool_cidr: "10.0.10.0/24"
+          }
+        }
+      }
+    '
   else
-    cp_host_entry=""
-  fi
+    # Fallback: build JSON using python3 (always available on target systems)
+    python3 -c '
+import json
+import sys
 
-  local worker_entries=()
-  for w_name in "${worker_names[@]}"; do
-    [ -n "$w_name" ] && worker_entries+=("\"${w_name}\"")
-  done
-  IFS=,
-  worker_hosts_str="[${worker_entries[*]}]"
+nodes = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split("\t")
+    if len(parts) >= 3:
+        nodes.append({"name": parts[0], "ip": parts[1], "role": parts[2]})
 
-  local all_entries=()
-  [ -n "$cp_name" ] && all_entries+=("\"${cp_name}\"")
-  for w_name in "${worker_names[@]}"; do
-    [ -n "$w_name" ] && all_entries+=("\"${w_name}\"")
-  done
-  IFS=,
-  all_hosts_str="[${all_entries[*]}]"
-  unset IFS
+cp_hosts = {}
+worker_hosts = {}
+all_hosts = {}
 
-  # Build host dict entries for groups (include ansible_host directly)
-  local cp_host_dict worker_hosts_dict all_hosts_dict
-  cp_host_dict="{}"
-  if [ -n "$cp_ip" ]; then
-    cp_host_dict="{\"${cp_name}\":{\"ansible_host\":\"${cp_ip}\"}}"
-  fi
+for n in nodes:
+    host_entry = {"ansible_host": n["ip"]}
+    all_hosts[n["name"]] = host_entry
+    if n["role"] == "control_plane":
+        cp_hosts[n["name"]] = host_entry
+    elif n["role"] == "worker":
+        worker_hosts[n["name"]] = host_entry
 
-  worker_hosts_dict="{"
-  local w_entries=()
-  for w_name in "${worker_names[@]}"; do
-    local w_ip="${node_ips[$w_name]:-}"
-    if [ -n "$w_name" ] && [ -n "$w_ip" ]; then
-      w_entries+=("\"${w_name}\":{\"ansible_host\":\"${w_ip}\"}")
-    fi
-  done
-  IFS=,
-  worker_hosts_dict+="${w_entries[*]}"
-  worker_hosts_dict+="}"
-
-  all_hosts_dict="{"
-  local a_entries=()
-  if [ -n "$cp_name" ]; then
-    local cp_ip_for="${node_ips[$cp_name]:-}"
-    a_entries+=("\"${cp_name}\":{\"ansible_host\":\"${cp_ip_for}\"}")
-  fi
-  for w_name in "${worker_names[@]}"; do
-    local w_ip="${node_ips[$w_name]:-}"
-    if [ -n "$w_name" ] && [ -n "$w_ip" ]; then
-      a_entries+=("\"${w_name}\":{\"ansible_host\":\"${w_ip}\"}")
-    fi
-  done
-  IFS=,
-  all_hosts_dict+="${a_entries[*]}"
-  all_hosts_dict+="}"
-  unset IFS
-
-  # Assemble final JSON
-  cat <<INV_EOF
-{
-  "control_plane": {
-    "hosts": ${cp_host_dict},
-    "vars": {
-      "node_role": "control_plane"
+result = {
+    "control_plane": {"hosts": cp_hosts, "vars": {"node_role": "control_plane"}},
+    "worker": {"hosts": worker_hosts, "vars": {"node_role": "worker"}},
+    "cluster": {
+        "hosts": all_hosts,
+        "vars": {
+            "pod_cidr": "10.244.0.0/16",
+            "service_cidr": "10.96.0.0/12",
+            "lb_pool_cidr": "10.0.10.0/24"
+        }
     }
-  },
-  "worker": {
-    "hosts": ${worker_hosts_dict},
-    "vars": {
-      "node_role": "worker"
-    }
-  },
-  "cluster": {
-    "hosts": ${all_hosts_dict},
-    "vars": {
-      "pod_cidr": "10.244.0.0/16",
-      "service_cidr": "10.96.0.0/12",
-      "lb_pool_cidr": "10.0.10.0/24"
-    }
-  }
 }
-INV_EOF
+print(json.dumps(result, indent=2))
+' <<< "$node_data"
+  fi
 }
 
 # ---------------------------------------------------------------------------
