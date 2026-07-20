@@ -114,7 +114,7 @@ sysexts: ## Build all sysext extensions in parallel
 
 # --- Config Extensions ---
 
-CONFEXT_NAMES := worker control-plane cri-o kubernetes etcd kubernetes-cp
+CONFEXT_NAMES := worker cri-o kubernetes etcd kubernetes-cp
 
 .PHONY: $(addprefix confext/,$(CONFEXT_NAMES)) confexts
 
