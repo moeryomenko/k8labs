@@ -1,6 +1,8 @@
 ---
+# Ansible collection version pins — pinned for reproducibility.
+# Update periodically after testing: bump both versions together.
 collections:
   - name: community.crypto
-    version: ">=2.0.0"
+    version: "2.22.0"
   - name: community.general
-    version: ">=8.0.0"
+    version: "9.5.0"
