@@ -489,17 +489,22 @@ smoke-test:
 	else \
 		echo "  PASS: kube-system pods Running"; \
 	fi; \
-	echo "--- check 3: Cilium health ---"; \
-	CILIUM_POD=$$(kubectl --kubeconfig $(KUBECONFIG) -n kube-system get pods -l k8s-app=cilium --no-headers 2>/dev/null | head -1 | awk '{print $$1}'); \
-	if [ -n "$$CILIUM_POD" ]; then \
-		if kubectl --kubeconfig $(KUBECONFIG) -n kube-system exec "$$CILIUM_POD" -- cilium status --brief 2>/dev/null; then \
-			echo "  PASS: Cilium healthy"; \
+	echo "--- check 3: Cilium health (NetworkUnavailable=False) ---"; \
+	NET_AVAIL=$$(kubectl --kubeconfig $(KUBECONFIG) get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="NetworkUnavailable")].status}' 2>/dev/null); \
+	if [ -n "$$NET_AVAIL" ]; then \
+		all_false=1; \
+		for s in $$NET_AVAIL; do \
+			if [ "$$s" != "False" ]; then all_false=0; break; fi; \
+		done; \
+		if [ "$$all_false" -eq 1 ]; then \
+			echo "  PASS: Cilium healthy on all nodes (NetworkUnavailable=False)"; \
 		else \
-			echo "  FAIL: Cilium health check failed"; \
+			echo "  FAIL: some nodes have network unavailable"; \
 			fail=1; \
 		fi; \
 	else \
-		echo "  SKIP: no Cilium pod found (CNI may differ)"; \
+		echo "  FAIL: no NetworkUnavailable node condition found"; \
+		fail=1; \
 	fi; \
 	echo "--- check 4: schedule test pod ---"; \
 	if kubectl --kubeconfig $(KUBECONFIG) run "$$POD_NAME" --image=nginx --restart=Never --port=80 2>/dev/null; then \
