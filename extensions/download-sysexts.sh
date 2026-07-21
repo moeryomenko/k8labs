@@ -22,6 +22,7 @@ SYSEXT_DIR="$(cd "${SCRIPT_DIR}/../sysext" && pwd)"
 # Config: upstream versions and URLs
 # Keep these in sync with extension-release.d/ metadata.
 # ---------------------------------------------------------------------------
+KERNEL_VERSION="7.1"
 KUBELET_VERSION="v1.32.13"
 CRIO_VERSION="v1.35.5"
 CRUN_VERSION="1.28"

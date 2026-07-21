@@ -37,7 +37,7 @@ xorriso -osirrox on -indev "$SOURCE_ISO" \
     -extract /boot/grub2/grub.cfg "$WORKDIR/grub.cfg" \
     2>/dev/null || die "Failed to extract grub.cfg from ISO"
 
-# Modify the kernel command line in the default "Install Fedora 41" entry
+# Modify the kernel command line in the default "Install Fedora 44" entry
 # and the "Test this media" entry to add serial console support.
 # Remove 'quiet' so we can see boot progress on serial.
 # NOTE: Do NOT add inst.sshd=1 — that would let Packer connect to the
@@ -53,7 +53,7 @@ xorriso -indev "$SOURCE_ISO" \
     -outdev "$OUTPUT_ISO" \
     -boot_image any replay \
     -map "$WORKDIR/grub.cfg" /boot/grub2/grub.cfg \
-    -volid "Fedora-E-dvd-x86_64-41" \
+    -volid "Fedora-E-dvd-x86_64-44" \
     2>/dev/null || die "Failed to build modified ISO"
 
 echo "==> Modified ISO created: $(ls -lh "$OUTPUT_ISO" | awk '{print $5}')"

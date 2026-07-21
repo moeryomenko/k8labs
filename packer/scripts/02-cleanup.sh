@@ -2,7 +2,7 @@
 set -eux
 
 # Clean package manager cache
-dnf clean all --releasever=41 || true
+dnf clean all --releasever=44 || true
 rm -rf /var/cache/dnf/*
 
 # Zero free space for better qcow2 compression

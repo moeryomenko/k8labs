@@ -1,5 +1,5 @@
 # Packer QEMU/KVM base image definition for k8labs.
-# This source block builds a minimal Fedora 41 VM image that serves
+# This source block builds a minimal Fedora 44 VM image that serves
 # as the immutable base for Kubernetes node sysext/confext layering.
 
 source "qemu" "kvm" {
@@ -39,6 +39,9 @@ build {
   sources = ["source.qemu.kvm"]
 
   provisioner "shell" {
+    environment_vars = [
+      "KERNEL_VERSION=${var.kernel_version}",
+    ]
     scripts = [
       "scripts/01-configure-system.sh",
       "scripts/02-cleanup.sh",

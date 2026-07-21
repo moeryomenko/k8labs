@@ -1,4 +1,11 @@
-# Required: Fedora 41 netinstall ISO URL and checksum
+# Base OS: Fedora 44 (kernel 7.1)
+# Required: Fedora 44 netinstall ISO URL and checksum
+
+variable "kernel_version" {
+  description = "Kernel version to pin during image baking"
+  type        = string
+  default     = "7.1"
+}
 variable "iso_url" {
   type = string
 }
@@ -44,7 +51,7 @@ variable "output_directory" {
   default = "../build/base"
 }
 
-# Fedora installer boot command — minimal, just select "Install Fedora 41"
+# Fedora installer boot command — minimal, just select "Install Fedora 44"
 # Kickstart is auto-detected by anaconda from the OEMDRV CD volume.
 # Kernel params (console=ttyS0, inst.sshd=1) are baked into the modified grub.cfg.
 variable "boot_command" {

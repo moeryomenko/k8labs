@@ -19,7 +19,8 @@ help: ## Prints this help message
 
 # --- Base Image ---
 
-FEDORA_ISO_URL := https://download.fedoraproject.org/pub/fedora/linux/releases/41/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-41-1.4.iso
+FEDORA_ISO_URL := https://download.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-44-1.7.iso
+FEDORA_ISO_CHECKSUM := bd285201494dd0ba09b54d05ac707de1401668b8512a573edb5922dcf9d7067e
 FEDORA_ISO_CACHE := $(shell ls -t $(HOME)/.cache/packer/*.iso 2>/dev/null | head -1)
 MODIFIED_ISO := build/fedora-boot.iso
 
@@ -34,8 +35,8 @@ prepare-iso: ## Download Fedora ISO and prepare modified version with serial con
 		packer/scripts/prepare-iso.sh "$(FEDORA_ISO_CACHE)" "$(MODIFIED_ISO)"; \
 	else \
 		echo '    Downloading Fedora ISO...'; \
-		curl -Lo /tmp/fedora-41-netinst.iso "$(FEDORA_ISO_URL)"; \
-		packer/scripts/prepare-iso.sh /tmp/fedora-41-netinst.iso "$(MODIFIED_ISO)"; \
+		curl -Lo /tmp/fedora-44-netinst.iso "$(FEDORA_ISO_URL)"; \
+		packer/scripts/prepare-iso.sh /tmp/fedora-44-netinst.iso "$(MODIFIED_ISO)"; \
 	fi
 
 .PHONY: base
