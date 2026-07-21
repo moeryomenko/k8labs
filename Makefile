@@ -186,6 +186,60 @@ destroy-full: destroy ## Destroy all artifacts (VMs + certs + inventory + kubeco
 	@rm -f kubeconfig
 	@echo '==> Cleanup complete.'
 
+.PHONY: stop
+stop: ## Gracefully stop all Kubernetes cluster VMs
+	@set -euo pipefail; \
+	if ! command -v virsh &>/dev/null; then \
+		echo "  ERROR: required tool 'virsh' not found" >&2; \
+		exit 1; \
+	fi; \
+	raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null) || { \
+		echo "  ERROR: failed to get VM list from Terraform state" >&2; \
+		exit 1; \
+	}; \
+	node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names" 2>/dev/null || true); \
+	if [ -z "$$node_names" ]; then \
+		echo "  No VMs to stop"; \
+		exit 0; \
+	fi; \
+	echo "  Stopping cluster VMs..."; \
+	has_error=0; \
+	for vm in $$node_names; do \
+		state=$$(virsh -c $(LIBVIRT_URI) dominfo "$$vm" 2>/dev/null | awk -F': ' '/State:/{print $$2}' | xargs || true); \
+		if [ "$$state" = "shut off" ] || [ "$$state" = "shut-off" ]; then \
+			echo "  $$vm already shut off -- skipping"; \
+			continue; \
+		fi; \
+		echo "  $$vm: sending ACPI shutdown..."; \
+		virsh -c $(LIBVIRT_URI) shutdown "$$vm" >/dev/null 2>&1 || true; \
+		shut_off=0; \
+		# Wait up to 60 seconds for graceful shutdown
+		for i in $$(seq 1 12); do \
+			sleep 5; \
+			new_state=$$(virsh -c $(LIBVIRT_URI) dominfo "$$vm" 2>/dev/null | awk -F': ' '/State:/{print $$2}' | xargs || true); \
+			if [ "$$new_state" = "shut off" ] || [ "$$new_state" = "shut-off" ]; then \
+				shut_off=1; \
+				break; \
+			fi; \
+		done; \
+		if [ "$$shut_off" -eq 1 ]; then \
+			echo "  $$vm shut off gracefully"; \
+		else \
+			echo "  $$vm: graceful shutdown timed out, forcing..."; \
+			if ! virsh -c $(LIBVIRT_URI) destroy "$$vm" >/dev/null 2>&1; then \
+				echo "  ERROR: failed to force stop $$vm" >&2; \
+				has_error=1; \
+			else \
+				echo "  $$vm forced off"; \
+			fi; \
+		fi; \
+	done; \
+	if [ "$$has_error" -ne 0 ]; then \
+		echo "  ERROR: one or more VMs failed to stop" >&2; \
+		exit 1; \
+	fi; \
+	echo "  All VMs stopped."
+
 # --- Ansible Container ---
 
 # Libvirt connection URI (must match tofu/terraform provider config)
