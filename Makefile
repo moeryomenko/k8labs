@@ -194,9 +194,11 @@ LIBVIRT_URI := qemu:///system
 ANSIBLE_IMAGE := localhost/ansible-podman
 ANSIBLE_DIR := ansible
 ANSIBLE_RUN := podman run --rm --network host \
+	--cap-add=NET_ADMIN \
 	-v $(PWD):/workspace:z \
 	-v $(HOME)/.ssh:/root/.ssh:ro,z \
 	-v $(SSH_AUTH_SOCK):/ssh-agent:z \
+	-v /var/run/libvirt:/var/run/libvirt:ro,z \
 	-e SSH_AUTH_SOCK=/ssh-agent \
 	-e ANSIBLE_ROLES_PATH=/workspace/$(ANSIBLE_DIR)/roles \
 	-e ANSIBLE_INVENTORY=/workspace/$(ANSIBLE_DIR)/inventory/inventory.json \
@@ -237,7 +239,19 @@ bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || { echo "  ERROR: tofu refresh failed" >&2; exit 1; }; \
 	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
-		ansible/playbooks/bootstrap.yml
+		ansible/playbooks/bootstrap.yml; \
+	echo '  Adding host route for LB pool...'; \
+	LB_BRIDGE=$$(virsh -c $(LIBVIRT_URI) net-info k8s-cluster-net 2>/dev/null | sed -n 's/^Bridge:[[:space:]]*//p'); \
+	if [ -n "$$LB_BRIDGE" ]; then \
+		if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "$$LB_BRIDGE"; then \
+			sudo ip route add 10.0.10.0/24 dev "$$LB_BRIDGE"; \
+			echo "  Route added via $$LB_BRIDGE"; \
+		else \
+			echo "  Route already exists via $$LB_BRIDGE"; \
+		fi; \
+	else \
+		echo "  WARNING: could not detect bridge for k8s-cluster-net, skipping route"; \
+	fi
 
 .PHONY: wait-ips
 wait-ips: ## Wait for ALL VMs to get DHCP leases after tofu apply
@@ -411,7 +425,19 @@ cluster: prereq base extensions container ## Full pipeline: base -> extensions -
 	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
 	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
 		$(ANSIBLE_DIR)/playbooks/bootstrap.yml; \
-	echo '  Step 6: Fetch DHCP-resistant kubeconfig...'; \
+	echo '  Step 6: Add host route for LB pool...'; \
+	LB_BRIDGE=$$(virsh -c $(LIBVIRT_URI) net-info k8s-cluster-net 2>/dev/null | sed -n 's/^Bridge:[[:space:]]*//p'); \
+	if [ -n "$$LB_BRIDGE" ]; then \
+		if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "$$LB_BRIDGE"; then \
+			sudo ip route add 10.0.10.0/24 dev "$$LB_BRIDGE"; \
+			echo "  Route added via $$LB_BRIDGE"; \
+		else \
+			echo "  Route already exists via $$LB_BRIDGE"; \
+		fi; \
+	else \
+		echo "  WARNING: could not detect bridge for k8s-cluster-net, skipping route"; \
+	fi; \
+	echo '  Step 7: Fetch DHCP-resistant kubeconfig...'; \
 	$(MAKE) kubeconfig; \
 	echo 'Full cluster build and bootstrap complete.'
 

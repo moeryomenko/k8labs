@@ -212,6 +212,35 @@
         executable: /bin/bash
       changed_when: false
 
+    - name: Grant kube-apiserver proxy node access (nodes/proxy for cilium exec)
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.kubeconfig apply -f - <<'PROXY_EOF'
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: system:kube-apiserver-proxy
+        rules:
+        - apiGroups: [""]
+          resources: ["nodes/proxy"]
+          verbs: ["create", "get"]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: system:kube-apiserver-proxy
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: system:kube-apiserver-proxy
+        subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: User
+          name: kubernetes
+        PROXY_EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
 - name: Stage 6 — Start kubelet on all cluster nodes
   hosts: cluster
   gather_facts: false
@@ -226,36 +255,7 @@
   roles:
     - role: cilium
 
-- name: Stage 8 — Add host route for LB pool
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tasks:
-    - name: Discover libvirt bridge for cluster network
-      ansible.builtin.command:
-        cmd: virsh -c qemu:///system net-info k8s-cluster-net
-      register: net_info
-      changed_when: false
-      failed_when: false
-
-    - name: Extract bridge name from net-info
-      ansible.builtin.set_fact:
-        lb_bridge: "{{ (net_info.stdout_lines | select('match', '^Bridge:') | first | default('Bridge: virbr0')) | regex_replace('^Bridge:\\s+', '') }}"
-
-    - name: Check if route already exists
-      ansible.builtin.command:
-        cmd: ip route show 10.0.10.0/24
-      register: route_check
-      changed_when: false
-      failed_when: false
-
-    - name: Add route for LB pool CIDR via cluster bridge
-      ansible.builtin.command:
-        cmd: ip route add 10.0.10.0/24 dev {{ lb_bridge }}
-      become: true
-      when: "lb_bridge not in (route_check.stdout | default(''))"
-
-- name: Stage 9 — Cluster health check
+- name: Stage 8 — Cluster health check
   hosts: localhost
   connection: local
   gather_facts: false
