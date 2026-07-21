@@ -186,7 +186,8 @@ destroy-full: destroy ## Destroy all artifacts (VMs + certs + inventory + kubeco
 	@rm -f kubeconfig
 	@echo '==> Cleanup complete.'
 
-.PHONY: stop
+.PHONY: start stop
+start: ## Gracefully start all Kubernetes cluster VMs
 stop: ## Gracefully stop all Kubernetes cluster VMs
 	@set -euo pipefail; \
 	if ! command -v virsh &>/dev/null; then \
@@ -239,6 +240,43 @@ stop: ## Gracefully stop all Kubernetes cluster VMs
 		exit 1; \
 	fi; \
 	echo "  All VMs stopped."
+
+start:
+	@set -euo pipefail; \
+	if ! command -v virsh &>/dev/null; then \
+		echo "  ERROR: required tool 'virsh' not found" >&2; \
+		exit 1; \
+	fi; \
+	raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null) || { \
+		echo "  ERROR: failed to get VM list from Terraform state" >&2; \
+		exit 1; \
+	}; \
+	node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names" 2>/dev/null || true); \
+	if [ -z "$$node_names" ]; then \
+		echo "  No VMs to start"; \
+		exit 0; \
+	fi; \
+	echo "  Starting cluster VMs..."; \
+	has_error=0; \
+	for vm in $$node_names; do \
+		state=$$(virsh -c $(LIBVIRT_URI) dominfo "$$vm" 2>/dev/null | awk -F': ' '/State:/{print $$2}' | xargs || true); \
+		if [ "$$state" = "running" ]; then \
+			echo "  $$vm already running -- skipping"; \
+			continue; \
+		fi; \
+		echo "  $$vm: starting..."; \
+		if ! virsh -c $(LIBVIRT_URI) start "$$vm" >/dev/null 2>&1; then \
+			echo "  ERROR: failed to start $$vm" >&2; \
+			has_error=1; \
+		else \
+			echo "  $$vm started"; \
+		fi; \
+	done; \
+	if [ "$$has_error" -ne 0 ]; then \
+		echo "  ERROR: one or more VMs failed to start" >&2; \
+		exit 1; \
+	fi; \
+	echo "  All VMs started."
 
 # --- Ansible Container ---
 
