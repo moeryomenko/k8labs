@@ -73,6 +73,10 @@ resource "libvirt_domain" "control_plane" {
   running   = true
   autostart = true
 
+  cpu = {
+    mode = "host-passthrough"
+  }
+
   features = {
     acpi = true
   }
@@ -154,6 +158,10 @@ resource "libvirt_domain" "worker" {
 
   running   = true
   autostart = true
+
+  cpu = {
+    mode = "host-passthrough"
+  }
 
   features = {
     acpi = true
