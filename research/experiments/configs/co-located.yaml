@@ -1,0 +1,21 @@
+experiment:
+  name: co-located
+  description: "Co-located latency-sensitive + batch workloads"
+replicates: 5
+pre_warm: 10
+duration: 120
+cooldown: 20
+workloads:
+  latency-sensitive:
+    type: cpu-burner
+    params:
+      endpoint: /fibonacci?n=38
+  batch:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - ls_request: "200m"; ls_limit: "500m"; batch_request: "1000m"; batch_limit: "2000m"

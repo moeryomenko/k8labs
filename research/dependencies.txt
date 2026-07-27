@@ -1,0 +1,42 @@
+# k8labs CPU Research — Required Dependencies
+# ==========================================
+# Run: xargs -a dependencies.txt sudo apt-get install -y
+# or manually install each package.
+
+# --- Core tools ---
+kubectl                          # Kubernetes CLI (or via mise)
+tofu | terraform                 # OpenTofu or Terraform (or via mise)
+virsh                            # libvirt CLI (libvirt-clients package)
+ssh                              # OpenSSH client
+jq                               # JSON query tool
+yq                               # YAML query tool (optional, for advanced parsing)
+
+# --- Python analysis stack ---
+python3                          # Python 3.x
+python3-matplotlib               # Plotting library
+python3-numpy                    # Numerical computing
+python3-pandas                   # Data analysis
+
+# --- Container tooling ---
+podman                           # Container build tool (or docker)
+
+# --- Workload containers ---
+# stress-ng: auto-pulled from docker.io/library/alpine:3.19 at runtime
+# cpu-burner: built locally via `make -C workloads/cpu-burner image`
+
+# --- Go tooling (for cpu-burner development) ---
+golang                           # Go compiler (optional, pre-built binary included)
+
+# --- Node-level tools (already installed on k8labs VMs) ---
+# crictl        — CRI-O CLI (in cri-o sysext)
+# crun          — OCI runtime (in crun sysext)
+# stress-ng     — CPU stress tool (in stress-ng container)
+
+# --- How to verify ---
+# kubectl:   command -v kubectl
+# tofu:      command -v tofu || command -v terraform
+# virsh:     command -v virsh
+# ssh:       command -v ssh
+# jq:        command -v jq
+# python3:   python3 --version
+# podman:    command -v podman

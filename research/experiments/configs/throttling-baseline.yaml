@@ -1,0 +1,17 @@
+experiment:
+  name: throttling-baseline
+  description: "Baseline — no CPU limits, measure natural CPU usage"
+replicates: 3
+pre_warm: 10
+duration: 120
+cooldown: 15
+workload:
+  type: stress-ng
+  params:
+    cores: 2
+    load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""
+    limit: ""

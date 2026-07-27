@@ -1,0 +1,7 @@
+# Research experiment data — large, auto-generated, not part of source
+experiments/data/
+*.csv
+*.json
+*.png
+*.pyc
+__pycache__/
