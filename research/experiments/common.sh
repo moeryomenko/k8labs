@@ -34,6 +34,10 @@ EXPERIMENTS_DIR="${_EXPERIMENTS_SCRIPT_DIR}"
 RESEARCH_DIR="$(cd -- "${_EXPERIMENTS_SCRIPT_DIR}/.." && pwd -P)"
 readonly EXPERIMENTS_DIR RESEARCH_DIR
 
+# Perfetto tools directory
+PERFETTO_DIR="$(cd -- "${_EXPERIMENTS_SCRIPT_DIR}/../perfetto" && pwd -P)"
+readonly PERFETTO_DIR
+
 # ---- Logging ----
 
 # ---------------------------------------------------------------------------
@@ -686,4 +690,68 @@ save_cell_metadata() {
 EOF
 
     log "Metadata saved: $metadata_file"
+}
+
+# ---- Perfetto Integration ----
+
+# ---------------------------------------------------------------------------
+# resolve_pod_node_ip — Get the IP of the node running a pod
+#
+# Wrapper around get_pod_node_ip from cgroup-common.sh.
+# Arguments:
+#   $1 — pod name
+# Returns: node IP on stdout
+# ---------------------------------------------------------------------------
+resolve_pod_node_ip() {
+    local pod_name="$1"
+    get_pod_node_ip "$pod_name"
+}
+
+# ---------------------------------------------------------------------------
+# start_perfetto_trace — Start perfetto trace on a remote node
+#
+# Invokes perfetto-start.sh to begin a trace on the node and returns
+# the trace PID and remote trace path for later use with stop_perfetto_trace.
+#
+# Arguments:
+#   $1 — node IP
+#   $2 — config name (e.g., "scheduling")
+#   $3 — duration in seconds
+# Returns: "<pid> <remote-trace-path>" on stdout
+# ---------------------------------------------------------------------------
+start_perfetto_trace() {
+    local node_ip="$1"
+    local config_name="$2"
+    local duration="$3"
+    local perfetto_start="${PERFETTO_DIR}/bin/perfetto-start.sh"
+
+    [[ -f "$perfetto_start" ]] || die "perfetto-start.sh not found at: ${perfetto_start}"
+
+    bash "$perfetto_start" "$node_ip" "$config_name" --duration "$duration"
+}
+
+# ---------------------------------------------------------------------------
+# stop_perfetto_trace — Stop and download a perfetto trace from a remote node
+#
+# Invokes perfetto-stop.sh to stop the trace process on the node and
+# download the trace file to the specified output directory.
+#
+# Arguments:
+#   $1 — node IP
+#   $2 — trace PID on the node (from start_perfetto_trace)
+#   $3 — output directory for the downloaded trace file
+#   $4 — remote trace path on the node
+# Returns: local trace file path on stdout
+# ---------------------------------------------------------------------------
+stop_perfetto_trace() {
+    local node_ip="$1"
+    local trace_pid="$2"
+    local output_dir="$3"
+    local remote_path="$4"
+    local perfetto_stop="${PERFETTO_DIR}/bin/perfetto-stop.sh"
+
+    [[ -f "$perfetto_stop" ]] || die "perfetto-stop.sh not found at: ${perfetto_stop}"
+
+    bash "$perfetto_stop" "$node_ip" "$trace_pid" \
+        --output-dir "$output_dir" --remote-path "$remote_path"
 }

@@ -11,7 +11,7 @@
 #   --dry-run     Print what would be downloaded without downloading
 #   sysext-name   Download only the specified sysext(s); default: all
 #
-# Supported sysexts: cri-o, crun, kubelet, cni, etcd, kubernetes-cp
+# Supported sysexts: cri-o, crun, kubelet, cni, etcd, kubernetes-cp, perfetto
 
 set -u
 
@@ -40,6 +40,8 @@ KUBERNETES_CP_VERSION="v1.32.13"
 ETCD_URL="https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
 KUBERNETES_CP_URL="https://dl.k8s.io/${KUBERNETES_CP_VERSION}/kubernetes-server-linux-amd64.tar.gz"
 
+PERFETTO_URL="https://get.perfetto.dev/tracebox"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -54,7 +56,7 @@ Arguments:
   --sequential    Download sysexts one at a time (default: parallel)
   sysext-name     Download only the specified sysext(s); default: all
 
-Supported sysexts: cri-o, crun, kubelet, cni, etcd, kubernetes-cp
+Supported sysexts: cri-o, crun, kubelet, cni, etcd, kubernetes-cp, perfetto
 USAGE_EOF
 }
 
@@ -278,6 +280,12 @@ download_etcd() {
     fi
 }
 
+download_perfetto() {
+    target="${SYSEXT_DIR}/perfetto/usr/bin/tracebox"
+    check_cached "tracebox" "$target" && return 0
+    download_file "$PERFETTO_URL" "$target" "tracebox"
+}
+
 download_kubernetes_cp() {
     target_dir="${SYSEXT_DIR}/kubernetes-cp/usr/bin"
     check_cached "kubernetes-cp ${KUBERNETES_CP_VERSION}" "${target_dir}/kube-apiserver" "${target_dir}/kube-controller-manager" "${target_dir}/kube-scheduler" "${target_dir}/kubectl" && return 0
@@ -320,7 +328,7 @@ download_kubernetes_cp() {
 # ---------------------------------------------------------------------------
 main() {
     # Map of sysext name -> download function
-    downloads="cri-o crun kubelet cni etcd kubernetes-cp"
+    downloads="cri-o crun kubelet cni etcd kubernetes-cp perfetto"
 
     if [ -n "$requested" ]; then
         downloads="$requested"
@@ -336,6 +344,7 @@ main() {
                 cni)      info "Downloading cni...";      download_cni ;;
                 etcd)     info "Downloading etcd...";     download_etcd ;;
                 kubernetes-cp) info "Downloading kubernetes-cp..."; download_kubernetes_cp ;;
+                perfetto)  info "Downloading perfetto...";  download_perfetto ;;
                 *)
                     echo "Warning: unknown sysext '${name}' — skipping" >&2
                     ;;
@@ -397,6 +406,13 @@ main() {
                         continue
                     fi
                     ;;
+                perfetto)
+                    if check_cached "tracebox" \
+                        "${SYSEXT_DIR}/perfetto/usr/bin/tracebox"
+                    then
+                        continue
+                    fi
+                    ;;
                 *)
                     echo "Warning: unknown sysext '${name}' — skipping" >&2
                     continue
@@ -416,6 +432,7 @@ main() {
                     cni)      download_cni ;;
                     etcd)     download_etcd ;;
                     kubernetes-cp) download_kubernetes_cp ;;
+                    perfetto)  download_perfetto ;;
                 esac
             ) &
             pids="$pids $!"

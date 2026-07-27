@@ -33,6 +33,8 @@ source "${SCRIPT_DIR}/common.sh"
 # ---- Defaults ----
 DRY_RUN=false
 OUTPUT_BASE_DIR="${EXPERIMENTS_DIR}/data"
+PERFETTO_ENABLED=false
+PERFETTO_CONFIG="scheduling"
 
 # ---- Background Process Tracking ----
 declare -a _BG_PIDS=()
@@ -82,6 +84,9 @@ Options:
   --output-dir DIR  Output directory (default: research/experiments/data)
   --dry-run         Validate configuration and show what would run without
                     actually deploying anything
+  --perfetto        Enable Perfetto tracing on workload nodes
+  --perfetto-config CONFIG
+                    Perfetto trace config name (default: scheduling)
   -h, --help        Show this help and exit
 
 Config format: See research/experiments/configs/*.yaml for examples.
@@ -240,6 +245,14 @@ main() {
                 DRY_RUN=true
                 shift
                 ;;
+            --perfetto)
+                PERFETTO_ENABLED=true
+                shift
+                ;;
+            --perfetto-config)
+                PERFETTO_CONFIG="${2:?--perfetto-config requires a value}"
+                shift 2
+                ;;
             -*)
                 printf 'ERROR: Unknown option: %s\n' "$1" >&2
                 usage 1
@@ -259,6 +272,30 @@ main() {
     # ---- Validate config file ----
     [[ -n "$config_file" ]] || { printf 'ERROR: config file required\n' >&2; usage 1; }
     [[ -f "$config_file" ]] || die "Config file not found: ${config_file}"
+
+    # ---- Perfetto initialization ----
+    if [[ "$PERFETTO_ENABLED" == true ]]; then
+        # Validate that config name is non-empty
+        if [[ -z "$PERFETTO_CONFIG" ]]; then
+            die "Perfetto config name is empty"
+        fi
+
+        # Validate that the local config file exists
+        # (mirrors perfetto_config_path logic from perfetto-common.sh)
+        if [[ "$PERFETTO_CONFIG" == */* ]]; then
+            die "Invalid perfetto config name: ${PERFETTO_CONFIG}"
+        fi
+        local config_basename="${PERFETTO_CONFIG}"
+        if [[ "$config_basename" != *.* ]]; then
+            config_basename="${config_basename}.cfg"
+        fi
+        local local_config="${SCRIPT_DIR}/../perfetto/configs/${config_basename}"
+        if [[ ! -f "$local_config" ]]; then
+            die "Perfetto config not found: ${local_config}"
+        fi
+
+        log "Perfetto tracing enabled (config: ${PERFETTO_CONFIG})"
+    fi
 
     # ---- Resolve project root before anything else ----
     resolve_project_root
@@ -338,6 +375,15 @@ main() {
         for entry in "${matrix_entries[@]}"; do
             log "  - ${entry}"
         done
+        if [[ "$PERFETTO_ENABLED" == true ]]; then
+            log ""
+            log "Perfetto tracing enabled:"
+            log "  Config: ${PERFETTO_CONFIG}"
+            log "  Node resolution: per-cell pod node IP lookup"
+            log "  Trace capture: start -> measurement -> stop -> download"
+            log "  Trace file: <cell-dir>/perfetto-trace.perfetto-trace"
+            log "  Metadata: perfetto_trace_file, perfetto_config in metadata.json"
+        fi
         log ""
         log "Prerequisites check passed — cluster reachable, tools found"
         log "Experiment would run ${#matrix_entries[@]} cells x ${replicates} replicates = $(( ${#matrix_entries[@]} * replicates )) total runs"
@@ -413,6 +459,24 @@ main() {
                 wait_for_pod_running "$ls_pod_name" || die "Latency-sensitive pod did not start"
                 wait_for_pod_running "$batch_pod_name" || die "Batch pod did not start"
 
+                # ---- Perfetto trace setup (uses first pod for node resolution) ----
+                local perfetto_node_ip=""
+                local perfetto_trace_pid=""
+                local perfetto_remote_path=""
+                local perfetto_trace_file=""
+                if [[ "$PERFETTO_ENABLED" == true ]]; then
+                    perfetto_node_ip="$(get_pod_node_ip "$ls_pod_name" 2>/dev/null || true)"
+                    if [[ -n "$perfetto_node_ip" ]] && ssh_node "$perfetto_node_ip" "test -x /usr/bin/tracebox" >/dev/null 2>&1; then
+                        log "Starting Perfetto trace on node ${perfetto_node_ip} (config: ${PERFETTO_CONFIG})"
+                        local po
+                        po="$("${SCRIPT_DIR}/../perfetto/bin/perfetto-start.sh" "$perfetto_node_ip" "$PERFETTO_CONFIG" --duration "$duration")"
+                        perfetto_trace_pid="$(printf '%s\n' "$po" | awk '{print $1}')"
+                        perfetto_remote_path="$(printf '%s\n' "$po" | awk '{$1=""; print $0}' | sed 's/^ //')"
+                    else
+                        log "WARNING: tracebox not available on node ${perfetto_node_ip:-unknown}, skipping Perfetto tracing"
+                    fi
+                fi
+
                 # Pre-warm
                 log "Pre-warm period: ${pre_warm}s"
                 run_cmd sleep "$pre_warm"
@@ -441,8 +505,37 @@ main() {
                 log "Stopping data collection..."
                 bg_stop_all
 
+                # ---- Stop perfetto trace ----
+                if [[ "$PERFETTO_ENABLED" == true && -n "${perfetto_trace_pid:-}" ]]; then
+                    log "Stopping Perfetto trace on node ${perfetto_node_ip}"
+                    local trace_dl
+                    trace_dl="$("${SCRIPT_DIR}/../perfetto/bin/perfetto-stop.sh" "$perfetto_node_ip" "$perfetto_trace_pid" \
+                        --output-dir "$cell_dir" --remote-path "$perfetto_remote_path")" || {
+                        log "WARNING: Failed to stop/download Perfetto trace"
+                        trace_dl=""
+                    }
+                    if [[ -n "$trace_dl" ]]; then
+                        perfetto_trace_file="$trace_dl"
+                        log "Perfetto trace saved: ${perfetto_trace_file}"
+                    fi
+                fi
+
                 # Save metadata
                 save_cell_metadata "$base_data_dir" "$cell_label" "$rep" "$ls_pod_name"
+
+                # ---- Add perfetto metadata to existing metadata.json ----
+                if [[ "$PERFETTO_ENABLED" == true && -n "${perfetto_trace_file:-}" ]]; then
+                    local mdf="${cell_dir}/metadata.json"
+                    python3 -c "
+import json
+with open('${mdf}', 'r') as f:
+    m = json.load(f)
+m['perfetto_trace_file'] = '$(basename "$perfetto_trace_file" 2>/dev/null || echo "")'
+m['perfetto_config'] = '${PERFETTO_CONFIG}'
+with open('${mdf}', 'w') as f:
+    json.dump(m, f, indent=2)
+" 2>/dev/null || log "WARNING: Failed to add perfetto metadata to ${mdf}"
+                fi
 
                 # For co-located, we need a combined summary entry
                 # Parse the first CSV from each to get last stats
@@ -502,6 +595,24 @@ main() {
                 local pod_name
                 pod_name="$(run_cmd deploy_pod "$manifest")"
 
+                # ---- Perfetto trace setup ----
+                local perfetto_node_ip=""
+                local perfetto_trace_pid=""
+                local perfetto_remote_path=""
+                local perfetto_trace_file=""
+                if [[ "$PERFETTO_ENABLED" == true ]]; then
+                    perfetto_node_ip="$(get_pod_node_ip "$pod_name" 2>/dev/null || true)"
+                    if [[ -n "$perfetto_node_ip" ]] && ssh_node "$perfetto_node_ip" "test -x /usr/bin/tracebox" >/dev/null 2>&1; then
+                        log "Starting Perfetto trace on node ${perfetto_node_ip} (config: ${PERFETTO_CONFIG})"
+                        local po
+                        po="$("${SCRIPT_DIR}/../perfetto/bin/perfetto-start.sh" "$perfetto_node_ip" "$PERFETTO_CONFIG" --duration "$duration")"
+                        perfetto_trace_pid="$(printf '%s\n' "$po" | awk '{print $1}')"
+                        perfetto_remote_path="$(printf '%s\n' "$po" | awk '{$1=""; print $0}' | sed 's/^ //')"
+                    else
+                        log "WARNING: tracebox not available on node ${perfetto_node_ip:-unknown}, skipping Perfetto tracing"
+                    fi
+                fi
+
                 # Pre-warm period
                 log "Pre-warm period: ${pre_warm}s"
                 run_cmd sleep "$pre_warm"
@@ -524,8 +635,37 @@ main() {
                 log "Stopping data collection..."
                 bg_stop_all
 
+                # ---- Stop perfetto trace ----
+                if [[ "$PERFETTO_ENABLED" == true && -n "${perfetto_trace_pid:-}" ]]; then
+                    log "Stopping Perfetto trace on node ${perfetto_node_ip}"
+                    local trace_dl
+                    trace_dl="$("${SCRIPT_DIR}/../perfetto/bin/perfetto-stop.sh" "$perfetto_node_ip" "$perfetto_trace_pid" \
+                        --output-dir "$cell_dir" --remote-path "$perfetto_remote_path")" || {
+                        log "WARNING: Failed to stop/download Perfetto trace"
+                        trace_dl=""
+                    }
+                    if [[ -n "$trace_dl" ]]; then
+                        perfetto_trace_file="$trace_dl"
+                        log "Perfetto trace saved: ${perfetto_trace_file}"
+                    fi
+                fi
+
                 # Save metadata
                 save_cell_metadata "$base_data_dir" "$cell_label" "$rep" "$pod_name"
+
+                # ---- Add perfetto metadata to existing metadata.json ----
+                if [[ "$PERFETTO_ENABLED" == true && -n "${perfetto_trace_file:-}" ]]; then
+                    local mdf="${cell_dir}/metadata.json"
+                    python3 -c "
+import json
+with open('${mdf}', 'r') as f:
+    m = json.load(f)
+m['perfetto_trace_file'] = '$(basename "$perfetto_trace_file" 2>/dev/null || echo "")'
+m['perfetto_config'] = '${PERFETTO_CONFIG}'
+with open('${mdf}', 'w') as f:
+    json.dump(m, f, indent=2)
+" 2>/dev/null || log "WARNING: Failed to add perfetto metadata to ${mdf}"
+                fi
 
                 # Parse last data line of cgroup CSV for summary
                 local last_stats=""

@@ -24,6 +24,10 @@ podman                           # Container build tool (or docker)
 # stress-ng: auto-pulled from docker.io/library/alpine:3.19 at runtime
 # cpu-burner: built locally via `make -C workloads/cpu-burner image`
 
+# --- Perfetto analysis (optional, for trace analysis) ---
+# Python packages: install via: uv sync --directory research/analysis
+# or: pip install -r research/analysis/requirements.txt
+
 # --- Go tooling (for cpu-burner development) ---
 golang                           # Go compiler (optional, pre-built binary included)
 

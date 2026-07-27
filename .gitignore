@@ -1,10 +1,13 @@
-# Build artifacts (base image, ISOs)
+# Build artifacts (base image, ISOs) — reproducible via Packer
 build/
 build/base/
+*.qcow2
+*.iso
 
-# Extension release artifacts — squashfs images and directory-mode copies
+# Extension release artifacts — squashfs images and directory-mode copies (reproducible)
 extensions/release/*.raw
 extensions/release/*/
+*.raw
 
 # Download temporary directories
 sysext/*/.download.tmp/
@@ -16,6 +19,7 @@ sysext/kubelet/usr/bin/kubelet
 sysext/cni/usr/lib/cni/*
 sysext/etcd/usr/bin/*
 sysext/kubernetes-cp/usr/bin/*
+sysext/perfetto/usr/bin/*
 
 # Ansible Galaxy collections — installed at build time
 ansible/collections/
@@ -31,7 +35,8 @@ kubeconfig
 *.tfstate.*
 .terraform.tfstate.lock.info
 
-# Crash log files
+# Temporal files — logs, stamps, generated output
+*.log
 crash.log
 crash.*.log
 

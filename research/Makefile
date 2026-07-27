@@ -19,6 +19,9 @@ PROJECT_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 EXPERIMENTS_DIR := $(PROJECT_ROOT)/research/experiments
 CONFIGS_DIR := $(EXPERIMENTS_DIR)/configs
 RUNNER := $(EXPERIMENTS_DIR)/run-experiment.sh
+PERFETTO_BIN_DIR := $(PROJECT_ROOT)/research/perfetto/bin
+PERFETTO_CONFIGS_DIR := $(PROJECT_ROOT)/research/perfetto/configs
+PERFETTO_ANALYSIS_DIR := $(PROJECT_ROOT)/research/analysis
 
 # Resolve KUBECONFIG path
 KUBECONFIG := $(PROJECT_ROOT)/kubeconfig
@@ -170,6 +173,13 @@ report: ## Generate analysis report from experiment data
 	python3 analysis/plot-throttling.py analysis/output/aggregates.csv --output-dir analysis/output
 	@echo '  Report generated in analysis/output/'
 	@echo '  Files: aggregates.csv, summary.json, *.png'
+	@echo ''
+	@echo '--- Perfetto analysis ---'
+	@if find "$(EXPERIMENTS_DIR)/data" -name '*.perfetto-trace' -type f 2>/dev/null | head -1 | grep -q .; then \
+		echo "  Perfetto traces found. Run 'make perfetto-analyze' and 'make perfetto-plots' for trace visualization."; \
+	else \
+		echo "  No Perfetto traces found."; \
+	fi
 
 .PHONY: report-view
 report-view: report ## Generate report and open plots (if display available)
@@ -184,6 +194,75 @@ report-view: report ## Generate report and open plots (if display available)
 	else \
 		echo "  No image viewer found. Open analysis/output/*.png manually."; \
 	fi
+
+# ---- Perfetto Tracing ----
+
+.PHONY: perfetto-sysext
+perfetto-sysext: ## Build and deploy Perfetto sysext (requires cluster)
+	@echo 'Building Perfetto sysext...'
+	$(MAKE) -C $(PROJECT_ROOT) sysext/perfetto
+	@echo ''
+	@echo 'To deploy: copy extensions/release/perfetto.raw to each node and run:'
+	@echo '  systemd-sysext merge'
+	@echo '  systemd-sysext list'
+
+.PHONY: perfetto-capture
+perfetto-capture: ## Capture a Perfetto trace from a node (interactive)
+	@echo '=== Perfetto Trace Capture ==='
+	@echo ''
+	@echo 'Available configs:'
+	@ls -1 $(PERFETTO_CONFIGS_DIR)/*.cfg 2>/dev/null | sed 's|.*/||;s|\.cfg$$||' | while read c; do echo "  $$c"; done
+	@echo ''
+	@read -p 'Node IP: ' node_ip; \
+	read -p 'Config name (default: scheduling): ' config_name; \
+	config_name=$${config_name:-scheduling}; \
+	read -p 'Duration (seconds, default: 30): ' duration; \
+	duration=$${duration:-30}; \
+	output_dir=$${PWD}/perfetto-traces; \
+	echo "  Capturing trace from $$node_ip (config: $$config_name, duration: $$duration)..."; \
+	$(PERFETTO_BIN_DIR)/perfetto-capture.sh $$node_ip $$config_name --duration $$duration --output-dir $$output_dir; \
+	echo "  Trace saved."
+
+.PHONY: perfetto-analyze
+perfetto-analyze: ## Analyze Perfetto traces in experiments/data or specified directory
+	@echo 'Analyzing Perfetto traces...'
+	@trace_dir=""; \
+	if [ -d "$(EXPERIMENTS_DIR)/data" ]; then \
+		trace_dir="$(EXPERIMENTS_DIR)/data"; \
+		echo "  Searching for traces in: $$trace_dir"; \
+	else \
+		echo "  No experiment data found. Run experiments first."; \
+		exit 0; \
+	fi; \
+	find "$$trace_dir" -name '*.perfetto-trace' -type f 2>/dev/null | head -5; \
+	echo "Found $$(find "$$trace_dir" -name '*.perfetto-trace' -type f 2>/dev/null | wc -l) trace files"; \
+	cd $(PERFETTO_ANALYSIS_DIR) && python3 perfetto-analyze.py --trace-dir "$$trace_dir" --output-dir ./perfetto-analysis; \
+	echo "Analysis complete in: $(PERFETTO_ANALYSIS_DIR)/perfetto-analysis/"
+
+.PHONY: perfetto-plots
+perfetto-plots: ## Generate CPU execution time plots from Perfetto analysis
+	@echo 'Generating Perfetto CPU execution time plots...'
+	@if [ ! -f "$(PERFETTO_ANALYSIS_DIR)/plot-perfetto-cpu.py" ]; then \
+		echo "  plot-perfetto-cpu.py not yet created"; \
+		exit 0; \
+	fi; \
+	analysis_dir=$(PERFETTO_ANALYSIS_DIR)/perfetto-analysis; \
+	if [ ! -d "$$analysis_dir" ]; then \
+		echo "  No analysis data found. Run 'make perfetto-analyze' first."; \
+		exit 0; \
+	fi; \
+	cd $(PERFETTO_ANALYSIS_DIR) && python3 plot-perfetto-cpu.py --csv-dir "$$analysis_dir" --output-dir ./perfetto-plots; \
+	echo "Plots generated in: $(PERFETTO_ANALYSIS_DIR)/perfetto-plots/"
+
+.PHONY: perfetto-clean
+perfetto-clean: ## Remove all Perfetto trace data from experiment data
+	@echo 'Removing Perfetto trace data from experiments...'
+	@find "$(EXPERIMENTS_DIR)/data" -name '*.perfetto-trace' -delete 2>/dev/null || true
+	@rm -rf "$(PERFETTO_ANALYSIS_DIR)/perfetto-analysis" "$(PERFETTO_ANALYSIS_DIR)/perfetto-plots"
+	@echo '  Clean complete.'
+
+.PHONY: perfetto
+perfetto: help ## Alias for perfetto help
 
 # ---- Clean ----
 

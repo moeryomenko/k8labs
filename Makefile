@@ -66,7 +66,7 @@ base-rebuild: prepare-iso ## Force rebuild of the base OS image via Packer
 
 # --- System Extensions ---
 
-SYSEXT_NAMES := kubelet cri-o crun cni etcd kubernetes-cp
+SYSEXT_NAMES := kubelet cri-o crun cni etcd kubernetes-cp perfetto
 
 .PHONY: $(addprefix sysext/,$(SYSEXT_NAMES)) sysexts download-sysexts
 
@@ -108,6 +108,12 @@ sysext/kubernetes-cp: ## Build kubernetes-cp sysext (apiserver, cm, scheduler, k
 	extensions/download-sysexts.sh kubernetes-cp
 	@echo 'Packaging kubernetes-cp sysext...'
 	extensions/build.sh sysext sysext/kubernetes-cp kubernetes-cp
+
+sysext/perfetto: ## Build perfetto sysext (tracebox)
+	@echo 'Downloading tracebox binary...'
+	extensions/download-sysexts.sh perfetto
+	@echo 'Packaging perfetto sysext...'
+	extensions/build.sh sysext sysext/perfetto perfetto
 
 sysexts: ## Build all sysext extensions in parallel
 	@echo 'Building all sysexts in parallel...'

@@ -148,6 +148,41 @@ Based on prior research on cgroup v2 CPU throttling:
 4. **Co-located**: P99 latency spikes during batch interference, mitigated by proper QoS class selection
 5. **crun conversion**: The cpu.weight → CpuShares mapping is logarithmic, verified by comparing cgroup values to pod spec
 
+## Perfetto System Tracing
+
+Perfetto is integrated into the research framework for capturing CPU scheduling traces during experiments.
+
+### Quick Start
+
+```bash
+# Build and deploy the Perfetto sysext
+make perfetto-sysext
+
+# Run an experiment with Perfetto tracing
+make experiment-baseline PERFETTO=1
+
+# Analyze and visualize traces
+make perfetto-analyze
+make perfetto-plots
+```
+
+### Trace Configs
+
+| Config | Description |
+|--------|-------------|
+| `scheduling` | CPU scheduling events (sched_switch, sched_waking) |
+| `full-system` | Scheduling + CPU frequency + process stats |
+| `syscalls` | System call tracing with scheduling context |
+
+### Make Targets
+
+| Target | Description |
+|--------|-------------|
+| `make perfetto-capture` | Interactive capture from a node |
+| `make perfetto-analyze` | Analyze all traces in experiment data |
+| `make perfetto-plots` | Generate CPU execution time plots |
+| `make perfetto-clean` | Remove all Perfetto trace data |
+
 ## File Structure
 
 ```
