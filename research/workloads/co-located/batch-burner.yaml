@@ -1,0 +1,35 @@
+# Batch CPU burner workload (stress-ng image)
+# Template markers {{CPU_REQUEST}} and {{CPU_LIMIT}} are replaced at deployment.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: batch-burner
+  labels:
+    app: batch-burner
+spec:
+  restartPolicy: Never
+  containers:
+    - name: stress-ng
+      image: 192.168.124.1:5000/k8labs/stress-ng:v1
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: STRESS_NG_CORES
+          value: "2"
+        - name: STRESS_NG_LOAD
+          value: "100"
+        - name: STRESS_NG_TIMEOUT
+          value: "600s"
+      command:
+        - stress-ng
+        - --cpu
+        - $(STRESS_NG_CORES)
+        - --cpu-load
+        - $(STRESS_NG_LOAD)
+        - --timeout
+        - $(STRESS_NG_TIMEOUT)
+        - --metrics-brief
+      resources:
+        requests:
+          cpu: "{{CPU_REQUEST}}"
+        limits:
+          cpu: "{{CPU_LIMIT}}"

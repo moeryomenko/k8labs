@@ -1,0 +1,22 @@
+# CPU burner workload — Go HTTP server for on-demand CPU stress
+# Template markers {{CPU_REQUEST}} and {{CPU_LIMIT}} are replaced at deployment.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cpu-burner
+  labels:
+    app: cpu-burner
+spec:
+  restartPolicy: Never
+  containers:
+    - name: cpu-burner
+      image: 192.168.124.1:5000/k8labs/cpu-burner:v1
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8080
+          name: http
+      resources:
+        requests:
+          cpu: "{{CPU_REQUEST}}"
+        limits:
+          cpu: "{{CPU_LIMIT}}"
