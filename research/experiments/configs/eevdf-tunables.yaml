@@ -1,0 +1,15 @@
+experiment:
+  name: eevdf-tunables
+  description: "Scheduler tunable sweep — requires tunable-sweep.sh to modify sysctl before each cell (REFERENCE ONLY, for TASK-EEVDF-014)"
+replicates: 3
+pre_warm: 10
+duration: 90
+cooldown: 15
+workload:
+  type: cpu-burner
+  params:
+    endpoint: /fibonacci?n=38
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: ""

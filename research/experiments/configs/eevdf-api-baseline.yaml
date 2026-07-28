@@ -1,0 +1,17 @@
+experiment:
+  name: eevdf-api-baseline
+  description: "API server baseline — CPU profile characterization at different request rates and limit configurations"
+replicates: 3
+pre_warm: 15
+duration: 120
+cooldown: 15
+workload:
+  type: cpu-burner
+  params:
+    endpoint: /fibonacci?n=38
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: ""
+  - request: "200m"; limit: "500m"
+  - request: "500m"; limit: "1000m"

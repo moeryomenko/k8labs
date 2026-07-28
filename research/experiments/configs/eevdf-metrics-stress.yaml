@@ -1,0 +1,19 @@
+experiment:
+  name: eevdf-metrics-stress
+  description: "EEVDF metrics — stress-ng workload for throttling analysis with full perfetto tracing"
+replicates: 3
+pre_warm: 10
+duration: 120
+cooldown: 15
+workload:
+  type: stress-ng
+  params:
+    cores: 2
+    load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: ""
+  - request: ""; limit: "250m"
+  - request: ""; limit: "750m"
+  - request: ""; limit: "1500m"
