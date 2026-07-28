@@ -219,6 +219,12 @@ get_workload_template() {
         batch)
             echo "${RESEARCH_DIR}/workloads/co-located/batch-burner.yaml"
             ;;
+        api-server)
+            echo "${RESEARCH_DIR}/workloads/api-server/deploy.yaml"
+            ;;
+        db-simulator)
+            echo "${RESEARCH_DIR}/workloads/db-simulator/deploy.yaml"
+            ;;
         *)
             die "Unknown workload type: ${workload_type}"
             ;;
