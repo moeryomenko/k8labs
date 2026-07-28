@@ -1,6 +1,8 @@
 # CiliumGatewayClassConfig configures the default cilium GatewayClass
 # with LoadBalancer service type, local external traffic policy to
 # preserve client source IP, and X-Forwarded-For trusted hops default.
+# NOTE: Requires Cilium 1.17+. On Cilium 1.16.x this CRD does not
+# exist and the resource is silently skipped.
 apiVersion: "cilium.io/v2alpha1"
 kind: CiliumGatewayClassConfig
 metadata:

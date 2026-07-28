@@ -1,13 +1,10 @@
 # GatewayClass defining the Cilium controller-based gateway implementation.
 # This class is cluster-scoped and must be used by all Gateway resources
 # that should be managed by Cilium's gateway-controller.
+# The parametersRef (CiliumGatewayClassConfig) is available in Cilium 1.17+
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: cilium
 spec:
   controllerName: "io.cilium/gateway-controller"
-  parametersRef:
-    group: "cilium.io"
-    kind: CiliumGatewayClassConfig
-    name: cilium-gateway-config

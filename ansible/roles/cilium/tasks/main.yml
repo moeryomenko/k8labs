@@ -163,14 +163,26 @@
 # Gateway API example resources
 # ---------------------------------------------------------------------------
 
-- name: Apply CiliumGatewayClassConfig
+- name: Check if CiliumGatewayClassConfig CRD exists (Cilium 1.17+)
+  ansible.builtin.raw: >
+    kubectl get crd ciliumgatewayclassconfigs.cilium.io --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: cgw_config_crd_check
+  changed_when: false
+  failed_when: false
+  when: gateway_api_enabled | default(true) | bool
+
+- name: Apply CiliumGatewayClassConfig (if CRD available)
   ansible.builtin.raw: >
     kubectl apply -f {{ project_dir }}/cilium/gateway-class-config.yaml --kubeconfig {{ project_dir }}/kubeconfig
   delegate_to: localhost
   run_once: true
   register: gw_class_config_result
   changed_when: '"created" in gw_class_config_result.stdout or "configured" in gw_class_config_result.stdout'
-  when: gateway_api_enabled | default(true) | bool
+  when:
+    - gateway_api_enabled | default(true) | bool
+    - cgw_config_crd_check.rc == 0
 
 - name: Apply CiliumGatewayClass
   ansible.builtin.raw: >
