@@ -9,6 +9,10 @@
     flat: true
   when: inventory_hostname == groups['control_plane'][0]
 
+- name: Install Gateway API CRDs (if enabled)
+  ansible.builtin.include_tasks: gateway-api-crds.yml
+  when: gateway_api_enabled | default(true) | bool
+
 - name: Check if Cilium is already installed
   ansible.builtin.raw: >
     cilium status --kubeconfig {{ project_dir }}/kubeconfig
@@ -32,6 +36,7 @@
     --set autoDirectNodeRoutes=true
     --set endpointRoutes.enabled=true
     --set operator.replicas=1
+    {% if gateway_api_enabled | default(true) | bool %}--set gatewayAPI.enabled=true{% endif %}
     --wait
   delegate_to: localhost
   run_once: true
@@ -52,6 +57,80 @@
   delay: 10
   until: crd_check.rc == 0
   changed_when: false
+
+# ---------------------------------------------------------------------------
+# Gateway API controller upgrade (existing installs only)
+# ---------------------------------------------------------------------------
+
+- name: Check if GatewayClass already exists
+  ansible.builtin.raw: >
+    kubectl get gatewayclass cilium --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: gateway_class_check
+  changed_when: false
+  failed_when: false
+  when:
+    - cilium_status.rc == 0
+    - gateway_api_enabled | default(true) | bool
+
+- name: Upgrade Cilium with Gateway API controller enabled
+  ansible.builtin.raw: >
+    cilium upgrade
+    --kubeconfig {{ project_dir }}/kubeconfig
+    --reuse-values
+    --set gatewayAPI.enabled=true
+  delegate_to: localhost
+  run_once: true
+  when:
+    - cilium_status.rc == 0
+    - gateway_api_enabled | default(true) | bool
+    - gateway_class_check.rc != 0
+  register: cilium_upgrade
+
+- name: Restart Cilium operator after Gateway API upgrade
+  ansible.builtin.raw: >
+    kubectl -n kube-system rollout restart deployment/cilium-operator
+    --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  when:
+    - cilium_status.rc == 0
+    - gateway_api_enabled | default(true) | bool
+    - gateway_class_check.rc != 0
+
+- name: Restart Cilium daemonset after Gateway API upgrade
+  ansible.builtin.raw: >
+    kubectl -n kube-system rollout restart ds/cilium
+    --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  when:
+    - cilium_status.rc == 0
+    - gateway_api_enabled | default(true) | bool
+    - gateway_class_check.rc != 0
+
+- name: Wait for Cilium operator rollout to complete
+  ansible.builtin.raw: >
+    kubectl -n kube-system rollout status deployment/cilium-operator
+    --timeout=5m --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  when:
+    - cilium_status.rc == 0
+    - gateway_api_enabled | default(true) | bool
+    - gateway_class_check.rc != 0
+
+- name: Wait for Cilium daemonset rollout to complete
+  ansible.builtin.raw: >
+    kubectl -n kube-system rollout status ds/cilium
+    --timeout=5m --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  when:
+    - cilium_status.rc == 0
+    - gateway_api_enabled | default(true) | bool
+    - gateway_class_check.rc != 0
 
 - name: Apply CiliumLoadBalancerIPPool (early, before health wait)
   ansible.builtin.raw: >
@@ -79,3 +158,43 @@
   delay: 10
   until: cilium_health is succeeded
   changed_when: false
+
+# ---------------------------------------------------------------------------
+# Gateway API example resources
+# ---------------------------------------------------------------------------
+
+- name: Apply CiliumGatewayClassConfig
+  ansible.builtin.raw: >
+    kubectl apply -f {{ project_dir }}/cilium/gateway-class-config.yaml --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: gw_class_config_result
+  changed_when: '"created" in gw_class_config_result.stdout or "configured" in gw_class_config_result.stdout'
+  when: gateway_api_enabled | default(true) | bool
+
+- name: Apply CiliumGatewayClass
+  ansible.builtin.raw: >
+    kubectl apply -f {{ project_dir }}/cilium/gatewayclass.yaml --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: gw_class_result
+  changed_when: '"created" in gw_class_result.stdout or "configured" in gw_class_result.stdout'
+  when: gateway_api_enabled | default(true) | bool
+
+- name: Apply CiliumGateway
+  ansible.builtin.raw: >
+    kubectl apply -f {{ project_dir }}/cilium/gateway.yaml --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: gw_result
+  changed_when: '"created" in gw_result.stdout or "configured" in gw_result.stdout'
+  when: gateway_api_enabled | default(true) | bool
+
+- name: Apply CiliumHttpRoute
+  ansible.builtin.raw: >
+    kubectl apply -f {{ project_dir }}/cilium/http-route.yaml --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: http_route_result
+  changed_when: '"created" in http_route_result.stdout or "configured" in http_route_result.stdout'
+  when: gateway_api_enabled | default(true) | bool
