@@ -71,7 +71,8 @@ for csv in "${CSV_FILES[@]}"; do
   log_info "Processing: $csv"
 
   # Determine experiment name from directory structure
-  EXPERIMENT=$(basename "$(dirname "$(dirname "$csv")")")
+  # Path format: .../data/<experiment-name>/summary.csv
+  EXPERIMENT=$(basename "$(dirname "$csv")")
 
   # Read CSV header to understand columns
   HEADER=$(head -1 "$csv")
@@ -86,6 +87,7 @@ for csv in "${CSV_FILES[@]}"; do
   NR == 1 {
     # Find column indices from header
     for (i=1; i<=NF; i++) {
+      if ($i == "cell_label") cell_idx = i
       if ($i == "config_cell") cell_idx = i
       if ($i == "nr_periods") periods_idx = i
       if ($i == "nr_throttled") throttled_idx = i
@@ -127,6 +129,7 @@ for csv in "${CSV_FILES[@]}"; do
   done < <(awk -F',' -v experiment="$EXPERIMENT" '
   NR == 1 {
     for (i=1; i<=NF; i++) {
+      if ($i == "cell_label") cell_idx = i
       if ($i == "config_cell") cell_idx = i
       if ($i == "nr_periods") periods_idx = i
       if ($i == "nr_throttled") throttled_idx = i
