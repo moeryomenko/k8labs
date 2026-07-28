@@ -1,7 +1,10 @@
 ---
-# gateway-api-crds — Install Gateway API v1.6.1 CRDs
+# gateway-api-crds — Install Gateway API {{ gateway_api_version }} CRDs
 # Applied before Cilium install so Cilium can reconcile them.
 # Uses raw + delegate_to to avoid Python dependency on the controller.
+# NOTE: Cilium 1.16.x requires Gateway API v1.1.x CRDs (not v1.6.x).
+#       BackendTLSPolicy requires v1.3+ and is omitted here.
+#       TLSRoute is installed from the experimental channel for v1alpha2 support.
 
 - name: Apply GatewayClass CRD
   ansible.builtin.raw: >
@@ -48,14 +51,14 @@
   register: grpcroute_crd
   changed_when: '"created" in grpcroute_crd.stdout or "configured" in grpcroute_crd.stdout'
 
-- name: Apply BackendTLSPolicy CRD
+- name: Apply TLSRoute CRD (experimental — includes v1alpha2 for Cilium 1.16.x)
   ansible.builtin.raw: >
-    kubectl apply -f {{ gateway_api_crd_base_url }}/gateway.networking.k8s.io_backendtlspolicies.yaml
+    kubectl apply -f {{ gateway_api_crd_experimental_base_url }}/gateway.networking.k8s.io_tlsroutes.yaml
     --kubeconfig {{ project_dir }}/kubeconfig
   delegate_to: localhost
   run_once: true
-  register: btls_crd
-  changed_when: '"created" in btls_crd.stdout or "configured" in btls_crd.stdout'
+  register: tlsroute_crd
+  changed_when: '"created" in tlsroute_crd.stdout or "configured" in tlsroute_crd.stdout'
 
 - name: Wait for Gateway API CRDs to be established
   ansible.builtin.raw: >
@@ -65,7 +68,7 @@
     crd/httproutes.gateway.networking.k8s.io
     crd/referencegrants.gateway.networking.k8s.io
     crd/grpcroutes.gateway.networking.k8s.io
-    crd/backendtlspolicies.gateway.networking.k8s.io
+    crd/tlsroutes.gateway.networking.k8s.io
     --timeout=60s
     --kubeconfig {{ project_dir }}/kubeconfig
   delegate_to: localhost

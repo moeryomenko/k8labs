@@ -113,7 +113,7 @@ This lab includes Cilium's built-in Gateway API controller, providing Kubernetes
 
 Gateway API support is enabled by default during the Ansible bootstrap. The Cilium role:
 
-1. Installs Gateway API v1.6.1 CRDs (GatewayClass, Gateway, HTTPRoute, GRPCRoute, ReferenceGrant, BackendTLSPolicy)
+1. Installs Gateway API v1.1.1 CRDs (GatewayClass, Gateway, HTTPRoute, GRPCRoute, ReferenceGrant, TLSRoute)
 2. Enables the Gateway API controller via `gatewayAPI.enabled=true` in Cilium
 3. Applies a `CiliumGatewayClassConfig` that configures the generated LoadBalancer service type and external traffic policy
 4. Applies example Gateway API resources (GatewayClass, Gateway, HTTPRoute)
