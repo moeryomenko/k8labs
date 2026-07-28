@@ -1,0 +1,113 @@
+# Combined api-server + db-simulator deployment for network-mode experiments.
+# Template markers {{DB_CPU_REQUEST}}, {{DB_CPU_LIMIT}}, {{API_CPU_REQUEST}},
+# {{API_CPU_LIMIT}} are replaced at deployment time.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-simulator
+spec:
+  clusterIP: None
+  selector:
+    app: db-simulator
+  ports:
+    - port: 8080
+      name: http
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: db-simulator
+  labels:
+    app: db-simulator
+spec:
+  restartPolicy: Always
+  containers:
+    - name: db-simulator
+      image: 192.168.124.1:5000/k8labs/db-simulator:v1
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8080
+          name: http
+      env:
+        - name: DB_PORT
+          value: "8080"
+        - name: DB_TABLE_SIZE
+          value: "10000"
+        - name: DB_CHECKPOINT_INTERVAL_S
+          value: "30"
+        - name: DB_POOL_SIZE
+          value: "10"
+        - name: DB_WORKLOAD_TYPE
+          value: "oltp_mixed"
+        - name: DB_QUERY_LATENCY_BASE_MS
+          value: "1"
+      resources:
+        requests:
+          cpu: "{{DB_CPU_REQUEST}}"
+        limits:
+          cpu: "{{DB_CPU_LIMIT}}"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: http
+        initialDelaySeconds: 2
+        periodSeconds: 5
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-server
+  labels:
+    app: api-server
+spec:
+  restartPolicy: Always
+  containers:
+    - name: api-server
+      image: 192.168.124.1:5000/k8labs/api-server:v1
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8080
+          name: http
+      env:
+        - name: API_PORT
+          value: "8080"
+        - name: API_DB_MODE
+          value: "remote"
+        - name: API_DB_SERVICE_HOST
+          value: "db-simulator"
+        - name: API_DB_SERVICE_PORT
+          value: "8080"
+        - name: API_DB_TIMEOUT_MS
+          value: "5000"
+        - name: API_DB_POOL_SIZE
+          value: "10"
+        - name: API_DB_LATENCY_MIN_MS
+          value: "5"
+        - name: API_DB_LATENCY_MAX_MS
+          value: "20"
+        - name: API_COMPLEXITY_FACTOR
+          value: "1.0"
+      resources:
+        requests:
+          cpu: "{{API_CPU_REQUEST}}"
+        limits:
+          cpu: "{{API_CPU_LIMIT}}"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: http
+        initialDelaySeconds: 3
+        periodSeconds: 5
