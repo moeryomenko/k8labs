@@ -11,7 +11,7 @@ k8labs exists to enable practical research into Kubernetes cluster internals. Ra
 Lab scenarios include:
 
 - **Kubernetes the Hard Way** — manual bootstrapping of control plane components (etcd, API server, controller manager, scheduler) and worker node registration.
-- **Cilium CNI networking** — installation, configuration, and exploration of Cilium's eBPF-based networking, including L2 announcements for LoadBalancer services.
+- **Cilium CNI networking** — installation, configuration, and exploration of Cilium's eBPF-based networking, including L2 announcements for LoadBalancer services and Gateway API for L7 traffic management.
 - **System extension layering** — using systemd-sysext and systemd-confext to overlay Kubernetes and container runtime binaries and configuration onto a minimal base OS image, demonstrating immutable OS extension patterns.
 - **Certificate lifecycle** — generation and distribution of TLS certificates for etcd, kubelet, API server, and service accounts using Ansible community.crypto modules.
 - **Infrastructure as Code** — full pipeline from Packer image baking through Terraform/OpenTofu VM provisioning to Ansible configuration management, all running locally on KVM.
@@ -42,7 +42,7 @@ The cluster environment is built in stages, each producing an artifact consumed 
 | Image baking | Packer (QEMU builder, kickstart) |
 | Configuration management | Ansible (community.crypto, community.general) |
 | Container runtime | CRI-O with crun |
-| CNI | Cilium (eBPF, L2 announcements) |
+| CNI / Service Mesh | Cilium (eBPF, L2 announcements, Gateway API) |
 | Service discovery | etcd |
 | OS extensions | systemd-sysext / systemd-confext |
 | Runner container | Podman |
@@ -70,7 +70,7 @@ Individual pipeline stages can be run separately:
 - `make wait-ips` — poll until all VMs have DHCP-assigned IPs
 - `make wait-ssh` — poll until SSH is reachable on all VMs
 - `make bootstrap` — run the full Ansible cluster bootstrap
-- `make smoke-test` — validate cluster health (nodes Ready, pods Running, Cilium healthy, test pod scheduling)
+- `make smoke-test` — validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling)
 - `make destroy` — tear down all VMs
 - `make destroy-full` — destroy VMs, certs, kubeconfig, and inventory
 - `make start` / `make stop` — gracefully start/stop all cluster VMs
@@ -89,7 +89,7 @@ The repository is organized by concern, not by lifecycle stage:
 - `sysext/` — Raw system extension directory structures (binaries, systemd units)
 - `confext/` — Raw configuration extension directory structures (config files, sysctl, sysfs params)
 - `certs/` — Generated TLS certificates (output artifact, gitignored except `.gitkeep`)
-- `cilium/` — Cilium manifest templates (L2 announcement policy, LB IP pool)
+- `cilium/` — Cilium manifest templates (L2 announcement policy, LB IP pool, Gateway API manifests)
 - `scripts/` — Standalone helper scripts
 - `build/` — Build artifacts (base image, extensions, temporary files)
 
@@ -104,3 +104,37 @@ The repository is organized by concern, not by lifecycle stage:
 - **MAC-based IP resolution**: The Makefile uses virsh DHCP lease information with MAC address matching (rather than relying solely on Terraform outputs) to reliably resolve VM IPs after provisioning.
 
 - **Headless Packer build**: The base image is built without a display, using a kickstart file delivered via virtual OEMDRV CD-ROM and a modified boot ISO with serial console and SSH in the installer environment.
+
+## Gateway API
+
+This lab includes Cilium's built-in Gateway API controller, providing Kubernetes-native L7 traffic management. The Gateway API is a SIG-Network standard that supersedes the Ingress API with a role-oriented, portable, and extensible resource model.
+
+### Configuration
+
+Gateway API support is enabled by default during the Ansible bootstrap. The Cilium role:
+
+1. Installs Gateway API v1.6.1 CRDs (GatewayClass, Gateway, HTTPRoute, GRPCRoute, ReferenceGrant, BackendTLSPolicy)
+2. Enables the Gateway API controller via `gatewayAPI.enabled=true` in Cilium
+3. Applies a `CiliumGatewayClassConfig` that configures the generated LoadBalancer service type and external traffic policy
+4. Applies example Gateway API resources (GatewayClass, Gateway, HTTPRoute)
+
+All Gateway API manifests are in `cilium/`:
+
+| File | Resource | Purpose |
+|------|----------|---------|
+| `gateway-class-config.yaml` | CiliumGatewayClassConfig | Configures LoadBalancer service for Gateway listeners |
+| `gatewayclass.yaml` | GatewayClass | Defines the `cilium` GatewayClass with Cilium controller |
+| `gateway.yaml` | Gateway | Example HTTP gateway with port 80 listener |
+| `http-route.yaml` | HTTPRoute | Demo route routing to echo-service:80 |
+
+### Usage
+
+Gateway API resources are applied automatically during `make cluster` or `make bootstrap`. To add your own routes:
+
+```
+kubectl apply -f cilium/http-route.yaml
+```
+
+The example Gateway exposes an HTTP listener on port 80 using the L2 LoadBalancer IP pool (10.0.10.0/24). Gateway API resources are verified during `make smoke-test`.
+
+For more details, see the [Cilium Gateway API documentation](https://docs.cilium.io/en/latest/network/servicemesh/gateway-api/gateway-api/).
