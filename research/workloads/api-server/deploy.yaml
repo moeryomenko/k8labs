@@ -1,0 +1,45 @@
+# API server workload — Go HTTP REST API with realistic CPU profiles.
+# Template markers {{CPU_REQUEST}} and {{CPU_LIMIT}} are replaced at deployment.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-server
+  labels:
+    app: api-server
+spec:
+  restartPolicy: Always
+  containers:
+    - name: api-server
+      image: 192.168.124.1:5000/k8labs/api-server:v1
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8080
+          name: http
+      env:
+        - name: API_PORT
+          value: "8080"
+        - name: API_DB_POOL_SIZE
+          value: "10"
+        - name: API_DB_LATENCY_MIN_MS
+          value: "5"
+        - name: API_DB_LATENCY_MAX_MS
+          value: "20"
+        - name: API_COMPLEXITY_FACTOR
+          value: "1.0"
+      resources:
+        requests:
+          cpu: "{{CPU_REQUEST}}"
+        limits:
+          cpu: "{{CPU_LIMIT}}"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: http
+        initialDelaySeconds: 3
+        periodSeconds: 5
