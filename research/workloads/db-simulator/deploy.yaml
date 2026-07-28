@@ -1,0 +1,46 @@
+# Database simulator workload — Go HTTP server simulating PostgreSQL-like query
+# patterns for CPU throttling experiments.
+# Template markers {{CPU_REQUEST}} and {{CPU_LIMIT}} are replaced at deployment.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: db-simulator
+  labels:
+    app: db-simulator
+spec:
+  restartPolicy: Never
+  containers:
+    - name: db-simulator
+      image: 192.168.124.1:5000/k8labs/db-simulator:v1
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8080
+          name: http
+      env:
+        - name: DB_TABLE_SIZE
+          value: "10000"
+        - name: DB_CHECKPOINT_INTERVAL_S
+          value: "30"
+        - name: DB_POOL_SIZE
+          value: "10"
+        - name: DB_WORKLOAD_TYPE
+          value: "oltp_mixed"
+        - name: DB_QUERY_LATENCY_BASE_MS
+          value: "1"
+      resources:
+        requests:
+          cpu: "{{CPU_REQUEST}}"
+        limits:
+          cpu: "{{CPU_LIMIT}}"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: http
+        initialDelaySeconds: 2
+        periodSeconds: 5
