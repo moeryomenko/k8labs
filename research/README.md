@@ -52,6 +52,24 @@ make all-experiments   # ~2 hours total
 make report   # (after TASK-R006 is implemented)
 ```
 
+### 6. Run EEVDF experiments
+
+```bash
+make experiment-eevdf-metrics            # ~15 min — cpu-burner, 3 limit configs x 3 replicates
+make experiment-eevdf-stress             # ~30 min — stress-ng, 4 limit configs x 3 replicates
+make experiment-eevdf-stress-perfetto    # ~30 min — stress-ng with Perfetto tracing
+make experiment-eevdf-api-baseline       # ~15 min — API server workload
+make experiment-eevdf-db-baseline        # ~15 min — database workload
+```
+
+### 7. Analyze EEVDF results
+
+```bash
+make eevdf-analyze   # Extract EEVDF metrics from experiment data
+make eevdf-plots     # Generate vruntime, slice, and latency plots
+make eevdf-report    # View findings in research/EEVDF-DEEP-DIVE.md
+```
+
 ## Experiment Descriptions
 
 ### Experiment A: Baseline (`throttling-baseline.yaml`)
@@ -99,6 +117,54 @@ make report   # (after TASK-R006 is implemented)
 | Replicates | 5 |
 | Cells | 1 |
 
+### Experiment E: EEVDF Metrics (`eevdf-metrics.yaml`)
+
+| Param | Value |
+|-------|-------|
+| Workload | cpu-burner (fibonacci endpoint) |
+| CPU configs | no limits, 500m limit, 1000m limit |
+| Duration | 120s per run |
+| Replicates | 3 |
+| Cells | 3 |
+| Measurement | cgroup stats + EEVDF vruntime/deadline/slice metrics |
+| Expected | Baseline latency distribution for EEVDF under different caps |
+
+### Experiment F: EEVDF Stress-ng Metrics (`eevdf-metrics-stress.yaml`)
+
+| Param | Value |
+|-------|-------|
+| Workload | stress-ng, 2 cores, 100% load |
+| CPU configs | no limits, 250m, 750m, 1500m |
+| Duration | 120s per run |
+| Replicates | 3 |
+| Cells | 4 |
+| Measurement | cgroup stats + full Perfetto tracing |
+| Expected | Throttling profiles match CFS behavior (same cpu.max mechanism) |
+
+### Experiment G: EEVDF API Server Baseline (`eevdf-api-baseline.yaml`)
+
+| Param | Value |
+|-------|-------|
+| Workload | cpu-burner (fibonacci endpoint) |
+| CPU configs | no limits, 200m/500m, 500m/1000m |
+| Duration | 120s per run |
+| Replicates | 3 |
+| Cells | 3 |
+| Measurement | cgroup stats + request-rate correlation |
+| Expected | Variable CPU intensity by endpoint; burst allowance absorbs traffic spikes |
+
+### Experiment H: EEVDF Database Baseline (`eevdf-db-baseline.yaml`)
+
+| Param | Value |
+|-------|-------|
+| Workload | cpu-burner (fibonacci endpoint) |
+| CPU configs | no limits, 500m/1000m, 1000m/2000m |
+| Duration | 120s per run |
+| Replicates | 3 |
+| Cells | 3 |
+| Measurement | cgroup stats + checkpoint spike simulation |
+| Expected | Guaranteed QoS absorbs periodic spikes without throttling |
+
 ## Output Structure
 
 After experiments run, data is organized as:
@@ -130,6 +196,27 @@ research/experiments/data/
 | `cgroup-snapshot.sh` | One-shot full cgroup state dump → JSON |
 | `trace-lifecycle.sh` | Trace pod creation to cgroup writes (OCI spec extraction) |
 
+### EEVDF Analysis Toolkit (`research/analysis/`)
+
+| Tool | Description |
+|------|-------------|
+| `eevdf-analyze.py` | Extract EEVDF scheduler metrics — vruntime trajectory, slice duration, wakeup latency, per-task lag |
+| `eevdf-plot.py` | Generate EEVDF visualization plots — vruntime trajectory, slice histogram, deadline drift, lag timeseries, sched latency ECDF |
+| `sched-latency-heatmap.py` | Generate scheduling latency heatmaps from perfetto trace data |
+
+### Make Targets for EEVDF
+
+| Target | Description |
+|--------|-------------|
+| `make experiment-eevdf-metrics` | EEVDF metrics with cpu-burner (9 runs) |
+| `make experiment-eevdf-stress` | EEVDF metrics with stress-ng (12 runs, ~30min) |
+| `make experiment-eevdf-stress-perfetto` | EEVDF stress-ng with Perfetto tracing |
+| `make experiment-eevdf-api-baseline` | HTTP API server workload baseline |
+| `make experiment-eevdf-db-baseline` | Database workload baseline |
+| `make eevdf-analyze` | Run EEVDF analysis pipeline |
+| `make eevdf-plots` | Generate EEVDF visualization plots |
+| `make eevdf-report` | Show pointer to EEVDF deep-dive report |
+
 ### Workloads (`research/workloads/`)
 
 | Workload | Type | Description |
@@ -137,6 +224,10 @@ research/experiments/data/
 | stress-ng | Container (alpine) | Configurable CPU stress via env vars |
 | cpu-burner | Go HTTP server | 6 endpoints, Prometheus metrics, `runtime.LockOSThread()` |
 | co-located | Dual deployment | Latency-sensitive + batch on same node |
+| eevdf-metrics | cpu-burner | EEVDF vruntime/deadline/slice analysis under limit sweep |
+| eevdf-metrics-stress | stress-ng | EEVDF throttling analysis with full Perfetto tracing |
+| eevdf-api-baseline | cpu-burner | HTTP API server CPU profile characterization |
+| eevdf-db-baseline | cpu-burner | Database checkpoint spike simulation |
 
 ## Expected Results
 
@@ -218,6 +309,10 @@ research/
 │   │   ├── throttling-request-limit.yaml
 │   │   └── co-located.yaml
 │   └── data/                      # Collected data (gitignored)
-├── analysis/                      # (TASK-R006) Analysis scripts
-└── FRAMEWORK.md                   # (TASK-R006) CPU parameter selection framework
+├── analysis/                      # Analysis scripts
+│   ├── eevdf-analyze.py           # EEVDF metrics extraction
+│   ├── eevdf-plot.py              # EEVDF visualization plots
+│   └── sched-latency-heatmap.py   # Scheduling latency heatmaps
+├── EEVDF-DEEP-DIVE.md             # Detailed EEVDF experimental results
+└── FRAMEWORK.md                   # CPU parameter selection framework
 ```

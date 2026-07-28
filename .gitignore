@@ -56,3 +56,19 @@ terraform.rc
 ansible/inventory/inventory.json
 
 .container.stamp
+perfetto-plots
+research/analysis/output/
+
+# Go compiled binaries — built from source
+**/api-server/api-server
+**/db-simulator/db-simulator
+**/api-server/bin/
+**/db-simulator/bin/
+
+# Experiment data directories — generated, not committed
+research/experiments/data/
+research/analysis/output/tunable-sweep-results/
+research/analysis/output/cpu-manager-comparison/
+research/analysis/output/eevdf-metrics-stress/
+research/analysis/output/throttling-stress/
+/tmp/tunable-sweep/

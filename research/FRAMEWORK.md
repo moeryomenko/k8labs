@@ -56,6 +56,39 @@ A critical implementation detail: in cgroup v2 with crun as the OCI runtime, whe
 
 **Best for**: Mixed-workload nodes, serving + offline processing, edge nodes with variable load.
 
+### Type 4: HTTP API Server
+
+- **Goal**: Balance throughput and tail latency across variable endpoints
+- **Strategy**: Guaranteed QoS for latency-critical endpoints; Burstable for background processing
+- **Sizing**: request = P95 CPU across all endpoints, limit = P99 + 20% headroom
+- **Example**: request=500m, limit=1000m for a service handling mixed CRUD + compute endpoints
+- **Why**: CPU intensity varies by endpoint — authentication is lightweight, report generation is heavy. Request-rate-driven profile means burst allowance is essential.
+- **Tradeoff**: Setting limits too low causes throttling during traffic spikes; setting too high wastes resources
+
+**Best for**: REST APIs, GraphQL servers, gRPC endpoints with mixed handler complexity.
+
+### Type 5: Database Workload
+
+- **Goal**: Absorb periodic checkpoint spikes without throttling
+- **Strategy**: Guaranteed QoS with headroom for checkpoints
+- **Sizing**: request = steady-state query processing, limit = steady-state + checkpoint overhead
+- **Example**: request=1000m, limit=2000m for a database with 800m steady-state and 400m checkpoint spikes
+- **Why**: Checkpoint spikes are periodic and unavoidable — throttling during a spike delays writes and increases p99 latency
+- **Tradeoff**: Over-provisioning sits idle between checkpoints; under-provisioning causes cascading latency under load
+
+**Best for**: OLTP databases, in-memory caches (Redis, Memcached), persistent queues (Kafka, Pulsar).
+
+### Type 6: Combined Stack
+
+- **Goal**: End-to-end latency predictability across a multi-tier service mesh
+- **Strategy**: Guaranteed QoS at every tier with coordinated sizing
+- **Sizing**: Each tier sized independently, then validated end-to-end with synthetic load
+- **Example**: Frontend (200m/500m) → Middleware (500m/1000m) → Database (1000m/2000m)
+- **Why**: A throttled middle tier amplifies latency spikes — queued requests compound across tiers. Multi-tier CPU profiles with service communication overhead mean each hop introduces scheduling delay.
+- **Tradeoff**: Higher resource cost for predictable performance; requires load testing across all tiers
+
+**Best for**: Microservice architectures with strict SLOs, real-time data pipelines, event-driven systems.
+
 ---
 
 ## Quantitative Thresholds
@@ -224,3 +257,118 @@ Before rolling to production, validate the parameters in a staging environment:
 4. **The difference between request and limit determines throttling behavior.** A large gap means more time spent at the limit, more throttling, and more variable performance. Small gaps mean stable performance but less flexibility.
 
 5. **Always validate with representative load.** Theoretical mappings (like cpu.weight values) depend on the specific kernel version, OCI runtime, and cgroup mode. Run experiments to get real numbers for your environment.
+
+---
+
+## CPU Manager Policy
+
+Kubernetes offers two CPU manager policies that affect how CPU is allocated to pods:
+
+### static vs none
+
+- **none** (default): CPU affinity is managed by the kernel scheduler. Pods can run on any available CPU. Best for general-purpose workloads.
+- **static**: The kubelet pins containers in Guaranteed QoS pods to dedicated CPU cores. This reduces context switching and cache thrashing at the cost of reduced flexibility.
+
+### When to Use Each
+
+| Policy | Use Case | Rationale |
+|--------|----------|-----------|
+| none | General-purpose, batch, burstable workloads | Kernel scheduler can optimize for throughput and utilization |
+| static | Latency-critical, Guaranteed QoS pods | Dedicated cores eliminate scheduling jitter and cache interference |
+
+### Combined with Guaranteed QoS
+
+For latency-critical workloads, combine **static** CPU manager with **Guaranteed QoS** (request == limit). This gives the pod both:
+
+1. **Exclusive CPU cores** (no co-scheduling contention)
+2. **No CFS throttling** (quota disabled when request == limit with crun)
+
+### Caveat: 2-vCPU Nodes
+
+On 2-vCPU nodes, the static policy offers **limited benefit** because:
+
+- There are only 2 cores to pin — a single Guaranteed QoS pod with 2 CPU cores takes the entire node
+- The kernel's EEVDF scheduler on modern kernels efficiently handles fast core switching with low overhead
+- Static pinning can paradoxically worsen latency if the pinned core is handling interrupts
+
+**Recommendation**: Use static CPU manager on nodes with 4+ vCPUs for latency-critical workloads. On 2-vCPU nodes, prefer the default `none` policy with Guaranteed QoS.
+
+### Switching and Verification
+
+```bash
+# Check current CPU manager policy
+kubectl get configmap -n kube-system kubelet-config -o json \
+  | jq '.data.kubelet' | jq '.cpuManagerPolicy'
+
+# Switch to static policy (edit kubelet configuration)
+# See research/scripts/configure-cpu-manager.sh
+
+# Verify static policy is working
+# Pods with Guaranteed QoS should show cpu pinning in cgroup
+research/scripts/cgroup-observe.sh <pod-name> | jq '.cpuset.cpus'
+```
+
+After switching, verify that Guaranteed QoS pods have `cpuset.cpus` set to dedicated cores and not the full node range.
+
+---
+
+## EEVDF Scheduler Considerations
+
+### How EEVDF Works
+
+The Earliest Eligible Virtual Deadline First (EEVDF) scheduler, introduced in Linux 6.6, replaces the Completely Fair Scheduler (CFS) as the default `SCHED_OTHER` / `SCHED_NORMAL` scheduler. Key concepts:
+
+- **Eligibility ordering**: Tasks are ordered by their virtual runtime (vruntime). The task with the smallest vruntime is eligible to run next.
+- **Deadline-based scheduling**: Each task receives a deadline proportional to its weight. The scheduler picks the eligible task with the earliest deadline.
+- **Slice allocation**: CPU time is allocated in slices. A task's slice is `base_slice * (weight / sum_of_weights)`. When a task consumes its slice, it gets a new deadline: `now + (slice * weight)`.
+- **Preemption**: A task is preempted when a newly-eligible task has an earlier deadline. This provides bounded latency guarantees.
+
+### Interaction with cgroup cpu.weight
+
+EEVDF inherits the cgroup v2 `cpu.weight` mechanism from CFS. The weight controls the proportion of CPU time a cgroup receives:
+
+- `cpu.weight` values range from 1 to 10000 (default 100)
+- Higher weight = larger slice = more CPU time
+- The crun OCI runtime converts Kubernetes CPU requests to `cpu.weight` (same formula as CFS)
+
+In EEVDF, weight directly determines slice size: a task with `cpu.weight=200` gets twice the slice of a task with `cpu.weight=100`, all else being equal. This is equivalent to the proportional fairness of CFS but with tighter latency bounds.
+
+### CFS Quota (cpu.max) in EEVDF
+
+The cgroup v2 `cpu.max` interface is **unchanged** from CFS. It still enforces an absolute CPU time limit per period:
+
+```
+cpu.max = <quota> <period>
+```
+
+Example: `50000 100000` = 50ms CPU time per 100ms period = 0.5 CPUs.
+
+EEVDF implements the same throttling mechanism: when a cgroup exceeds its quota within a period, it is throttled until the next period. **All throttling analysis from CFS experiments applies equally to EEVDF.**
+
+Key difference: EEVDF's deadline-based scheduling provides more consistent latency within the quota window, but the throttling boundary itself behaves identically.
+
+### Scheduler Tunables
+
+EEVDF exposes several tunables via `/sys/kernel/debug/sched/`:
+
+| Tunable | Description | Default | Impact |
+|---------|-------------|---------|--------|
+| `base_slice_ns` | Base time slice for a weight-100 task | 3,000,000 (3ms) | Smaller = more context switches, lower latency; larger = higher throughput |
+| `migration_cost_ns` | Cost estimate for task migration between CPUs | 500,000 (500us) | Higher = less migration, potential load imbalance |
+| `nr_migrate` | Max tasks to migrate in a single balance pass | 32 | Higher = faster load balancing, more overhead |
+
+These tunables can be adjusted dynamically:
+
+```bash
+# Check current values
+cat /sys/kernel/debug/sched/base_slice_ns
+cat /sys/kernel/debug/sched/migration_cost_ns
+cat /sys/kernel/debug/sched/nr_migrate
+
+# Adjust (example: reduce base slice for lower latency)
+echo 2000000 > /sys/kernel/debug/sched/base_slice_ns
+```
+
+### Reference
+
+For detailed experimental results on EEVDF behavior across workload types, including vruntime trajectories, slice distributions, and deadline drift analysis, see [EEVDF-DEEP-DIVE.md](EEVDF-DEEP-DIVE.md).

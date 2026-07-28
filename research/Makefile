@@ -140,6 +140,57 @@ experiment-colocated: ## Run co-located experiment
 	@echo "Running co-located experiment..."
 	$(RUNNER) $(CONFIGS_DIR)/co-located.yaml
 
+# ---- EEVDF Experiments ----
+
+.PHONY: experiment-eevdf-metrics
+experiment-eevdf-metrics: ## Run EEVDF metrics experiment (cpu-burner, 9 runs)
+	@echo "Running EEVDF metrics experiment..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/eevdf-metrics.yaml
+
+.PHONY: experiment-eevdf-stress
+experiment-eevdf-stress: ## Run EEVDF metrics experiment with stress-ng (12 runs, ~30min)
+	@echo "Running EEVDF stress-ng metrics experiment..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/eevdf-metrics-stress.yaml
+
+.PHONY: experiment-eevdf-stress-perfetto
+experiment-eevdf-stress-perfetto: ## Run EEVDF stress-ng with perfetto tracing
+	@echo "Running EEVDF stress-ng with perfetto..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/eevdf-metrics-stress.yaml --perfetto --perfetto-config eevdf-deep
+
+.PHONY: experiment-eevdf-api-baseline
+experiment-eevdf-api-baseline: ## Run EEVDF API server baseline experiment
+	@echo "Running EEVDF API server baseline..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/eevdf-api-baseline.yaml
+
+.PHONY: experiment-eevdf-db-baseline
+experiment-eevdf-db-baseline: ## Run EEVDF database baseline experiment
+	@echo "Running EEVDF database baseline..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/eevdf-db-baseline.yaml
+
+.PHONY: eevdf-analyze
+eevdf-analyze: ## Run EEVDF analysis pipeline on experiment data
+	@echo "Running EEVDF analysis..."
+	@if ls $(EXPERIMENTS_DIR)/data/eevdf-metrics-stress/*/summary.csv 2>/dev/null | head -1 >/dev/null; then \
+		latest=$$(ls -1t $(EXPERIMENTS_DIR)/data/eevdf-metrics-stress/ | head -1); \
+		cd $(PERFETTO_ANALYSIS_DIR) && python3 eevdf-analyze.py --csv-dir $(EXPERIMENTS_DIR)/data/eevdf-metrics-stress/$$latest --output-dir ./output/eevdf-metrics-stress; \
+	else \
+		echo "No experiment data found. Run experiment-eevdf-stress first."; \
+	fi
+
+.PHONY: eevdf-plots
+eevdf-plots: ## Generate EEVDF plots from analysis
+	@echo "Generating EEVDF plots..."
+	@if [ -d $(PERFETTO_ANALYSIS_DIR)/output/eevdf-metrics-stress ]; then \
+		cd $(PERFETTO_ANALYSIS_DIR) && python3 eevdf-plot.py --csv-dir ./output/eevdf-metrics-stress --output-dir ./output/eevdf-metrics-stress/plots; \
+	else \
+		echo "No analysis data. Run eevdf-analyze first."; \
+	fi
+
+.PHONY: eevdf-report
+eevdf-report: ## Generate EEVDF deep-dive report
+	@echo "EEVDF deep-dive report: research/EEVDF-DEEP-DIVE.md"
+	@echo "To regenerate, re-run experiments and analysis pipeline."
+
 # ---- All Experiments ----
 
 .PHONY: all-experiments
@@ -157,6 +208,9 @@ all-experiments: ## Run all experiments sequentially
 	@echo ""
 	@echo "=== 4/4: Co-located ==="
 	$(RUNNER) $(CONFIGS_DIR)/co-located.yaml
+	@echo ""
+	@echo "=== 5/5: EEVDF metrics ==="
+	$(RUNNER) $(CONFIGS_DIR)/eevdf-metrics.yaml
 	@echo ""
 	@echo "=== All experiments complete ==="
 
