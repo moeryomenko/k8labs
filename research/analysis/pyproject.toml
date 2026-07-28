@@ -1,14 +1,17 @@
 [project]
 name = "k8labs-perfetto-analysis"
-version = "0.1.0"
-description = "Perfetto trace analysis and visualization for k8labs research"
+version = "0.2.0"
+description = "Perfetto trace analysis and EEVDF visualization for k8labs research"
 requires-python = ">=3.11"
 dependencies = [
-    "perfetto>=24.1,<26.0",
-    "pandas>=2.0",
     "matplotlib>=3.7",
     "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
 ]
+
+[project.optional-dependencies]
+perfetto = ["perfetto>=24.1,<26.0"]
 
 [build-system]
 requires = ["setuptools>=64"]
