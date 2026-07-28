@@ -642,6 +642,29 @@ smoke-test:
 	else \
 		echo "  SKIP: no Cilium pod found"; \
 	fi; \
+	echo "--- check 5a: GatewayClass exists ---"; \
+	if kubectl --kubeconfig $(KUBECONFIG) get gatewayclass cilium &>/dev/null; then \
+		echo "  PASS: GatewayClass cilium exists"; \
+	else \
+		echo "  FAIL: GatewayClass cilium not found"; \
+		fail=1; \
+	fi; \
+	echo "--- check 5b: Gateway programmed ---"; \
+	GW_STATUS=$$(kubectl --kubeconfig $(KUBECONFIG) get gateway -n default cilium-gw -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null); \
+	if [ "$$GW_STATUS" = "True" ]; then \
+		echo "  PASS: Gateway cilium-gw is Programmed"; \
+	else \
+		echo "  FAIL: Gateway cilium-gw not Programmed (status=$${GW_STATUS:-unknown})"; \
+		fail=1; \
+	fi; \
+	echo "--- check 5c: HTTPRoute accepted ---"; \
+	HR_STATUS=$$(kubectl --kubeconfig $(KUBECONFIG) get httproute -n default http-echo -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null); \
+	if [ "$$HR_STATUS" = "True" ]; then \
+		echo "  PASS: HTTPRoute http-echo is Accepted"; \
+	else \
+		echo "  FAIL: HTTPRoute http-echo not Accepted (status=$${HR_STATUS:-unknown})"; \
+		fail=1; \
+	fi; \
 	echo "--- check 4: schedule test pod ---"; \
 	if kubectl --kubeconfig $(KUBECONFIG) run "$$POD_NAME" --image=nginx --restart=Never --port=80 2>/dev/null; then \
 		for i in $$(seq 1 15); do \
