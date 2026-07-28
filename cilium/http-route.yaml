@@ -1,0 +1,14 @@
+# HTTPRoute demo routing traffic to the echo-service backend.
+# All traffic matching this route is forwarded to echo-service:80.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-echo
+  namespace: default
+spec:
+  parentRefs:
+  - name: cilium-gw
+  rules:
+  - backendRefs:
+    - name: echo-service
+      port: 80

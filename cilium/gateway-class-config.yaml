@@ -1,0 +1,15 @@
+# CiliumGatewayClassConfig configures the default cilium GatewayClass
+# with LoadBalancer service type, local external traffic policy to
+# preserve client source IP, and X-Forwarded-For trusted hops default.
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumGatewayClassConfig
+metadata:
+  name: cilium-gateway-config
+spec:
+  # Service settings for the generated LoadBalancer service.
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+  # X-Forwarded-For trusted hops can be configured via the Cilium operator
+  # flag --gateway-api-xff-num-trusted-hops (default: 0). The default of 0
+  # means Envoy uses the immediate downstream connection's source address.
