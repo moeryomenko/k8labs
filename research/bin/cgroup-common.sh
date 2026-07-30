@@ -90,18 +90,37 @@ log_error() { printf '[ERROR] %s\n' "$*" >&2; }
 # ---------------------------------------------------------------------------
 # get_worker_ips — Returns space-separated list of worker IPs from Terraform
 # ---------------------------------------------------------------------------
-get_worker_ips() {
-    tofu -chdir="$PROJECT_ROOT/terraform" output -json worker_ips 2>/dev/null \
-        | python3 -c "import sys,json; ips=json.load(sys.stdin); print(' '.join(filter(None, ips)))" 2>/dev/null \
-        || { log_error "Failed to get worker IPs from Terraform state"; return 1; }
+# Resolve IPs from dnsmasq DHCP leases by MAC address.
+# VMs are configured with predictable MACs in terraform.tfvars.
+# The lease file is at /var/lib/misc/dnsmasq/k8sbr0.leases (configurable via DNSMASQ_LEASES).
+: "${DNSMASQ_LEASES:=/var/lib/misc/dnsmasq/k8sbr0.leases}"
+
+# MAC addresses for node resolution (must match terraform.tfvars)
+: "${CP_MAC:=c6:e5:50:1c:ec:01}"
+: "${WORKER_MACS:=c6:e5:50:1c:ec:02}"
+
+get_node_ip() {
+    local mac="$1"
+    [ ! -f "$DNSMASQ_LEASES" ] && { log_error "DHCP lease file not found: $DNSMASQ_LEASES"; return 1; }
+    ip=$(awk -v m="$mac" 'BEGIN{IGNORECASE=1} $2 == m {print $3; exit}' "$DNSMASQ_LEASES" 2>/dev/null)
+    [ -z "$ip" ] && { log_error "No IP found for MAC $mac in $DNSMASQ_LEASES"; return 1; }
+    echo "$ip"
 }
 
-# ---------------------------------------------------------------------------
-# get_cp_ip — Returns control-plane IP from Terraform
-# ---------------------------------------------------------------------------
+get_worker_ips() {
+    local ips=()
+    for mac in $WORKER_MACS; do
+        ip=$(get_node_ip "$mac" 2>/dev/null) && ips+=("$ip")
+    done
+    if [ ${#ips[@]} -eq 0 ]; then
+        log_error "Failed to get worker IPs from DHCP leases"
+        return 1
+    fi
+    echo "${ips[*]}"
+}
+
 get_cp_ip() {
-    tofu -chdir="$PROJECT_ROOT/terraform" output -raw control_plane_ip 2>/dev/null \
-        || { log_error "Failed to get control-plane IP from Terraform state"; return 1; }
+    get_node_ip "$CP_MAC"
 }
 
 # ---------------------------------------------------------------------------
@@ -138,61 +157,45 @@ get_pod_node_ip() {
     local node_name
     node_name="$(get_pod_node "$pod_name")" || return 1
 
-    # Try to get the IP from terraform node_names output by index
-    local node_idx
-    node_idx=$(tofu -chdir="$PROJECT_ROOT/terraform" output -json node_names 2>/dev/null \
+    # Resolve IP by reading terraform nodes output and matching on MAC from dnsmasq leases
+    local node_info
+    node_info=$(tofu -chdir="$PROJECT_ROOT/terraform" output -json nodes 2>/dev/null \
         | python3 -c "
 import sys,json
-names = json.load(sys.stdin)
+nodes = json.load(sys.stdin)
 target = '$node_name'
-for i, n in enumerate(names):
-    if n == target:
-        print(i)
+for n in nodes:
+    if n['name'] == target:
+        print(f\"{n['name']}\\t{n['mac']}\")
         sys.exit(0)
 print(-1)
 ") || true
 
-    # If index found and it's 0 → CP IP, else worker IP
-    if [[ -n "$node_idx" && "$node_idx" -ge 0 ]]; then
-        if [[ "$node_idx" -eq 0 ]]; then
-            get_cp_ip
-        else
-            local worker_idx=$(( node_idx - 1 ))
-            tofu -chdir="$PROJECT_ROOT/terraform" output -json worker_ips 2>/dev/null \
-                | python3 -c "
-import sys,json
-ips = json.load(sys.stdin)
-idx = $worker_idx
-if idx < len(ips) and ips[idx]:
-    print(ips[idx])
-else:
-    print(-1)
-" || { log_error "Could not resolve IP for node '$node_name'"; return 1; }
-        fi
-    else
-        # Fallback: try to find by iterating all worker IPs and SSH-checking hostname
-        local cp_ip worker_ips_fallback
-        cp_ip="$(get_cp_ip 2>/dev/null || true)"
-        if [[ -n "$cp_ip" ]]; then
-            local hostname_on_node
-            hostname_on_node="$(ssh_node "$cp_ip" "hostname" 2>/dev/null || true)"
-            if [[ "$hostname_on_node" == "$node_name" ]]; then
-                echo "$cp_ip"
-                return 0
-            fi
-        fi
-        worker_ips_fallback="$(get_worker_ips 2>/dev/null || true)"
-        local ip
-        for ip in $worker_ips_fallback; do
-            hostname_on_node="$(ssh_node "$ip" "hostname" 2>/dev/null || true)"
-            if [[ "$hostname_on_node" == "$node_name" ]]; then
-                echo "$ip"
-                return 0
-            fi
-        done
-        log_error "Could not resolve IP for node '$node_name'"
-        return 1
+    if [[ -n "$node_info" && "$node_info" != "-1" ]]; then
+        local node_mac
+        node_mac=$(echo "$node_info" | cut -f2)
+        get_node_ip "$node_mac" && return 0
     fi
+
+    # Fallback: try to find by SSH-checking hostname on all known IPs
+    local known_ips
+    known_ips=$(get_cp_ip 2>/dev/null || true) || known_ips=""
+    local w_ips
+    w_ips=$(get_worker_ips 2>/dev/null || true) || w_ips=""
+    known_ips="$known_ips $w_ips"
+
+    local ip hostname_on_node
+    for ip in $known_ips; do
+        [ -z "$ip" ] && continue
+        hostname_on_node="$(ssh_node "$ip" "hostname" 2>/dev/null || true)"
+        if [[ "$hostname_on_node" == "$node_name" ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+
+    log_error "Could not resolve IP for node '$node_name'"
+    return 1
 }
 
 # ---------------------------------------------------------------------------

@@ -86,27 +86,29 @@ require_cluster() {
 # ---- Worker IPs ----
 
 # ---------------------------------------------------------------------------
-# get_worker_ips — Return array of worker IPs from OpenTofu/Terraform
+# get_worker_ips — Return worker IPs from DHCP leases (by MAC address)
 # Returns space-separated IP addresses to stdout
 # ---------------------------------------------------------------------------
 get_worker_ips() {
-    local tf_cmd=""
-    if command -v tofu &>/dev/null; then
-        tf_cmd="tofu"
-    elif command -v terraform &>/dev/null; then
-        tf_cmd="terraform"
-    else
-        die "Neither 'tofu' nor 'terraform' found on PATH"
+    local dnsmasq_leases="${DNSMASQ_LEASES:-/var/lib/misc/dnsmasq/k8sbr0.leases}"
+    local macs="${WORKER_MACS:-c6:e5:50:1c:ec:02}"
+    local ips=()
+    local mac ip
+
+    if [[ ! -f "$dnsmasq_leases" ]]; then
+        die "DHCP lease file not found: $dnsmasq_leases"
     fi
 
-    local tf_dir="${PROJECT_ROOT}/terraform"
-    if [[ ! -d "$tf_dir" ]]; then
-        die "Terraform directory not found: $tf_dir"
+    for mac in $macs; do
+        ip=$(awk -v m="$mac" 'BEGIN{IGNORECASE=1} $2 == m {print $3; exit}' "$dnsmasq_leases" 2>/dev/null || true)
+        [[ -n "$ip" ]] && ips+=("$ip")
+    done
+
+    if [[ ${#ips[@]} -eq 0 ]]; then
+        die "No worker IPs found in DHCP leases"
     fi
 
-    "${tf_cmd}" -chdir="${tf_dir}" output -json worker_ips 2>/dev/null \
-        | python3 -c "import sys,json; ips=json.load(sys.stdin); print(' '.join(filter(None, ips)))" 2>/dev/null \
-        || die "Failed to get worker IPs from Terraform state"
+    echo "${ips[*]}"
 }
 
 # ---- Template Substitution ----

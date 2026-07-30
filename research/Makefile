@@ -109,11 +109,13 @@ setup: ## Verify prerequisites (kubectl access, tools, tofu state)
 		fi
 	done
 	echo ""
-	echo "--- Terraform State ---"
-	if command -v tofu &>/dev/null; then
-		tofu -chdir=$(PROJECT_ROOT)/terraform output worker_ips 2>/dev/null | head -1 || echo "  [WARN] Could not read Terraform state"
-	elif command -v terraform &>/dev/null; then
-		terraform -chdir=$(PROJECT_ROOT)/terraform output worker_ips 2>/dev/null | head -1 || echo "  [WARN] Could not read Terraform state"
+	echo "--- DHCP Leases ---"
+	LEASE_FILE=/var/lib/misc/dnsmasq/k8sbr0.leases; \
+	if [ -f "$$LEASE_FILE" ]; then \
+		echo "  [OK] DHCP lease file: $$LEASE_FILE ($$(wc -l < $$LEASE_FILE) leases)"; \
+		cat "$$LEASE_FILE" | awk '{printf "  %s → %s (%s)\n", $$2, $$3, $$4}'; \
+	else \
+		echo "  [WARN] DHCP lease file not found at $$LEASE_FILE (are VMs deployed?)"; \
 	fi
 	echo ""
 	echo "=== Setup complete ==="

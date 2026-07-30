@@ -166,28 +166,27 @@ resolve_project_root() {
 
 # ---- Worker IP Discovery ----
 get_worker_ips() {
-    local tf_cmd=""
-    if command -v tofu &>/dev/null; then
-        tf_cmd="tofu"
-    elif command -v terraform &>/dev/null; then
-        tf_cmd="terraform"
-    else
-        log_error "Neither 'tofu' nor 'terraform' found on PATH"
+    local dnsmasq_leases="${DNSMASQ_LEASES:-/var/lib/misc/dnsmasq/k8sbr0.leases}"
+    local macs="${WORKER_MACS:-c6:e5:50:1c:ec:02}"
+    local ips=()
+    local mac ip
+
+    if [[ ! -f "$dnsmasq_leases" ]]; then
+        log_error "DHCP lease file not found: $dnsmasq_leases"
         return 1
     fi
 
-    local tf_dir="${PROJECT_ROOT}/terraform"
-    if [[ ! -d "$tf_dir" ]]; then
-        log_error "Terraform directory not found: $tf_dir"
+    for mac in $macs; do
+        ip=$(awk -v m="$mac" 'BEGIN{IGNORECASE=1} $2 == m {print $3; exit}' "$dnsmasq_leases" 2>/dev/null || true)
+        [[ -n "$ip" ]] && ips+=("$ip")
+    done
+
+    if [[ ${#ips[@]} -eq 0 ]]; then
+        log_error "No worker IPs found in DHCP leases"
         return 1
     fi
 
-    "${tf_cmd}" -chdir="${tf_dir}" output -json worker_ips 2>/dev/null \
-        | python3 -c "import sys,json; ips=json.load(sys.stdin); print(' '.join(filter(None, ips)))" 2>/dev/null \
-        || {
-            log_error "Failed to get worker IPs from Terraform state"
-            return 1
-        }
+    echo "${ips[*]}"
 }
 
 # ---- SSH Helper ----
