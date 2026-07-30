@@ -19,50 +19,160 @@ help: ## Prints this help message
 
 # --- Base Image ---
 
-FEDORA_ISO_URL := https://download.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-44-1.7.iso
-FEDORA_ISO_CHECKSUM := bd285201494dd0ba09b54d05ac707de1401668b8512a573edb5922dcf9d7067e
-FEDORA_ISO_CACHE := $(shell ls -t $(HOME)/.cache/packer/*.iso 2>/dev/null | head -1)
-MODIFIED_ISO := build/fedora-boot.iso
+FIRMWARE_URL := https://github.com/cloud-hypervisor/edk2/releases/latest/download/CLOUDHV.fd
+FIRMWARE_DEST := build/CLOUDHV.fd
+FEDORA_CLOUD_URL := https://mirror.arizona.edu/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+FEDORA_CLOUD_CHECKSUM := 28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f
+FEDORA_CLOUD_DEST := build/fedora-cloud-base.qcow2
+BASE_IMAGE_DEST := build/k8labs-base.qcow2
+CLOUDINIT_DISK := build/cloudinit.img
+SSH_KEY := build/packer-ssh-key
+TAP := packer-tap
+PACKER_PLUGIN_SRC := /home/eryoma/workspace/packer-plugin-cloud-hypervisor
+PACKER_PLUGIN := ~/.packer.d/plugins/packer-plugin-cloud-hypervisor
 
-.PHONY: prepare-iso
-prepare-iso: ## Download Fedora ISO and prepare modified version with serial console + SSH support
-	@echo '==> Preparing modified Fedora boot ISO for headless Packer build...'
-	mkdir -p build
-	if [ -f "$(MODIFIED_ISO)" ]; then \
-		echo '    Modified ISO already exists: $(MODIFIED_ISO)'; \
-	elif [ -n "$(FEDORA_ISO_CACHE)" ] && [ -f "$(FEDORA_ISO_CACHE)" ]; then \
-		echo '    Using Packer-cached ISO: $(FEDORA_ISO_CACHE)'; \
-		packer/scripts/prepare-iso.sh "$(FEDORA_ISO_CACHE)" "$(MODIFIED_ISO)"; \
+.PHONY: plugin
+plugin: ## Build and install Cloud-Hypervisor Packer plugin
+	@echo '==> Building Cloud-Hypervisor Packer plugin...'
+	@if [ ! -f "$(PACKER_PLUGIN)" ]; then \
+		mkdir -p ~/.packer.d/plugins; \
+		$(MAKE) -C "$(PACKER_PLUGIN_SRC)" build; \
+		cp "$(PACKER_PLUGIN_SRC)/packer-plugin-cloud-hypervisor" "$(PACKER_PLUGIN)"; \
+		echo '    Installed Packer plugin'; \
 	else \
-		echo '    Downloading Fedora ISO...'; \
-		curl -Lo /tmp/fedora-44-netinst.iso "$(FEDORA_ISO_URL)"; \
-		packer/scripts/prepare-iso.sh /tmp/fedora-44-netinst.iso "$(MODIFIED_ISO)"; \
+		echo '    Plugin already installed'; \
+	fi
+
+.PHONY: base-deps
+base-deps: ## Download CLOUDHV.fd firmware and Fedora Cloud Base image
+	@echo '==> Downloading Cloud-Hypervisor UEFI firmware (CLOUDHV.fd)...'
+	mkdir -p build
+	if [ ! -f "$(FIRMWARE_DEST)" ]; then \
+		curl -fL -o "$(FIRMWARE_DEST)" "$(FIRMWARE_URL)"; \
+		echo '    Downloaded CLOUDHV.fd'; \
+	else \
+		echo '    CLOUDHV.fd already exists'; \
+	fi
+	@echo '==> Downloading Fedora Cloud Base image...'
+	if [ ! -f "$(FEDORA_CLOUD_DEST)" ]; then \
+		curl -fL -o "$(FEDORA_CLOUD_DEST)" "$(FEDORA_CLOUD_URL)"; \
+		echo "    Verifying checksum..."; \
+		echo "$(FEDORA_CLOUD_CHECKSUM)  $(FEDORA_CLOUD_DEST)" | sha256sum -c - || { \
+			echo '    WARNING: checksum mismatch, deleting corrupted download'; \
+			rm -f "$(FEDORA_CLOUD_DEST)"; \
+			exit 1; \
+		}; \
+	else \
+		echo '    Fedora Cloud image already exists'; \
+	fi
+	@echo '==> Converting Fedora Cloud image to raw format (CH is more compatible)...'
+	RAW_DEST="$(FEDORA_CLOUD_DEST:.qcow2=.raw)"; \
+	if [ ! -f "$$RAW_DEST" ]; then \
+		qemu-img convert -O raw "$(FEDORA_CLOUD_DEST)" "$$RAW_DEST"; \
+		echo '    Converted to raw format'; \
+	else \
+		echo '    Raw image already exists'; \
+	fi
+
+.PHONY: base-ssh-key
+base-ssh-key: ## Generate SSH keypair for Packer provisioning
+	@echo '==> Generating Packer SSH keypair...'
+	if [ ! -f "$(SSH_KEY)" ]; then \
+		ssh-keygen -t ed25519 -f "$(SSH_KEY)" -N "" -q; \
+		echo '    Generated $(SSH_KEY)'; \
+	else \
+		echo '    SSH key already exists'; \
+	fi
+
+.PHONY: base-cloudinit
+base-cloudinit: base-ssh-key ## Generate cloud-init CIDATA disk for Packer build
+	@echo '==> Generating cloud-init disk for Packer build...'
+	PUB_KEY=$$(cat "$(SSH_KEY).pub"); \
+	sed "s|__SSH_PUBLIC_KEY__|$$PUB_KEY|" packer/cloud-init/user-data > /tmp/base-user-data; \
+	scripts/create-cloudinit.sh \
+		--user-data /tmp/base-user-data \
+		--meta-data packer/cloud-init/meta-data \
+		--network-config packer/cloud-init/network-config \
+		--output "$(CLOUDINIT_DISK)"
+
+.PHONY: base-tap
+base-tap: ## Create TAP device for Packer build (attached to k8sbr0 bridge)
+	@echo '==> Creating TAP device $(TAP) and attaching to bridge...'
+	@if ip link show "$(TAP)" &>/dev/null 2>&1; then \
+		echo '    TAP $(TAP) already exists'; \
+	else \
+		sudo ip tuntap add dev "$(TAP)" mode tap; \
+		echo '    Created TAP $(TAP)'; \
+	fi
+	@if ip link show "$(TAP)" | grep -q "master k8sbr0" 2>/dev/null; then \
+		echo '    $(TAP) already attached to bridge k8sbr0'; \
+	else \
+		sudo ip link set "$(TAP)" master k8sbr0 2>/dev/null; \
+		echo '    Attached $(TAP) to k8sbr0'; \
+	fi
+	@sudo ip link set "$(TAP)" up
+	@echo '    $(TAP) ready (DHCP handled by bridge dnsmasq on k8sbr0)'
+
+.PHONY: base-cleanup-tap
+base-cleanup-tap: ## Remove Packer build TAP device and DHCP
+	@echo '==> Stopping dnsmasq DHCP...'
+	@sudo pkill -F /tmp/dnsmasq-base.pid 2>/dev/null && echo '    Stopped dnsmasq' || echo '    dnsmasq not running'
+	@echo '==> Removing TAP device $(TAP)...'
+	@if ip link show "$(TAP)" &>/dev/null 2>&1; then \
+		sudo ip link delete "$(TAP)"; \
+		echo '    Removed TAP $(TAP)'; \
+	else \
+		echo '    TAP $(TAP) does not exist'; \
 	fi
 
 .PHONY: base
-BASE_IMAGE_DEST := build/k8labs-base.qcow2
-
-base: prepare-iso ## Build the base OS image via Packer (skip if already built)
+base: base-deps base-cloudinit base-tap ## Build base image via Packer
 	@if [ -f "$(BASE_IMAGE_DEST)" ]; then \
 		echo 'Base image already exists: $(BASE_IMAGE_DEST)'; \
 		echo 'To force a rebuild, run: make base-rebuild'; \
 		exit 0; \
 	fi
-	@echo 'Building base OS image via Packer...'
-	rm -rf build/base
-	(cd packer && packer build -var-file=vars.pkrvars.hcl .)
+	@echo 'Building base image via Packer...'
+	mkdir -p build/base-image
+	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
+		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
 	@echo 'Copying base image to build/ for Terraform consumption...'
 	mkdir -p build
-	cp build/base/k8labs-base $(BASE_IMAGE_DEST)
+	cp build/base-image/k8labs-base.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || \
+		cp build/base-image/*.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || true
 
 .PHONY: base-rebuild
-base-rebuild: prepare-iso ## Force rebuild of the base OS image via Packer
-	@echo 'Forcing base OS image rebuild via Packer...'
-	rm -f $(BASE_IMAGE_DEST)
-	rm -rf build/base
-	(cd packer && packer build -var-file=vars.pkrvars.hcl .)
+base-rebuild: base-deps base-cloudinit base-tap ## Force rebuild of the base image
+	@echo 'Forcing base image rebuild via Packer...'
+	rm -f "$(BASE_IMAGE_DEST)"
+	rm -rf build/base-image
+	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
+		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
 	mkdir -p build
-	cp build/base/k8labs-base $(BASE_IMAGE_DEST)
+	cp build/base-image/k8labs-base.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || \
+		cp build/base-image/*.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || true
+
+# --- Networking ---
+
+.PHONY: network-up
+network-up: ## Create bridge, TAP devices, and start dnsmasq for VMs
+	@echo '==> Setting up VM networking...'
+	@sudo bash scripts/create-taps.sh 1 2>&1 | tail -3
+	@echo '==> Enabling IP forwarding for bridge NAT...'
+	@sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
+	@sudo iptables -t nat -C POSTROUTING -s 192.168.124.0/24 -j MASQUERADE 2>/dev/null || \
+		sudo iptables -t nat -A POSTROUTING -s 192.168.124.0/24 -j MASQUERADE
+	@sudo iptables -C FORWARD -i k8sbr0 -j ACCEPT 2>/dev/null || \
+		sudo iptables -A FORWARD -i k8sbr0 -j ACCEPT
+	@sudo iptables -C FORWARD -o k8sbr0 -j ACCEPT 2>/dev/null || \
+		sudo iptables -A FORWARD -o k8sbr0 -j ACCEPT
+	@echo '==> Networking ready (bridge k8sbr0, DHCP 192.168.124.20-200)'
+
+.PHONY: network-down
+network-down: ## Destroy bridge, TAP devices, and stop dnsmasq
+	@echo '==> Tearing down VM networking...'
+	@sudo bash scripts/destroy-taps.sh 1 2>&1 | tail -3
+	@echo '==> Networking teardown complete'
 
 # --- System Extensions ---
 
@@ -158,20 +268,63 @@ extensions: sysexts confexts ## Build all extensions (sysexts + confexts)
 # --- Full Build ---
 
 .PHONY: all
-all: base extensions ## Build base image + all extensions (legacy alias)
+all: base extensions ## Build base image + all extensions
 	@echo 'Full build complete.'
 
 # --- Terraform ---
 
+TFVARS := build/deploy.tfvars
+
+.PHONY: tfvars
+tfvars: ## Generate terraform.tfvars from defaults for deployment
+	@echo 'Generating deployment tfvars...'
+	@if [ ! -f "$(TFVARS)" ]; then \
+		echo '==> Creating $(TFVARS) from example...'; \
+		sed "s|ssh-ed25519 AAAAC3.*|$$(cat ~/.ssh/id_rsa.pub 2>/dev/null || echo 'YOUR_SSH_PUB_KEY')|" \
+			terraform/terraform.tfvars.example > "$(TFVARS)"; \
+		echo '    Edit $(TFVARS) to adjust VM count and MAC addresses'; \
+	fi
+
 .PHONY: deploy
-deploy: ## Apply Terraform/OpenTofu infrastructure
-	@echo 'Applying Terraform/OpenTofu infrastructure...'
-	tofu -chdir=terraform apply -auto-approve -var="base_image_path=../build/k8labs-base.qcow2"
+deploy: network-up tfvars ## Apply Terraform/OpenTofu infrastructure
+	@echo 'Applying Terraform infrastructure...'
+	tofu -chdir=terraform apply -auto-approve -var-file="../$(TFVARS)"
 
 .PHONY: destroy
-destroy: ## Destroy Terraform/OpenTofu infrastructure
-	@echo 'Destroying Terraform/OpenTofu infrastructure...'
-	tofu -chdir=terraform destroy -auto-approve
+destroy: tfvars ## Destroy all VMs
+	@echo 'Destroying VMs...'
+	tofu -chdir=terraform destroy -auto-approve -var-file="../$(TFVARS)"
+
+# --- VM Lifecycle ---
+
+.PHONY: start stop
+start: ## Start all VMs via ch-remote API (or curl fallback)
+	@set -euo pipefail; \
+	for sock in /tmp/ch-tf-*/api.sock; do \
+		[ -S "$$sock" ] || continue; \
+		name=$$(basename "$$(dirname "$$sock")"); \
+		if command -v ch-remote &>/dev/null; then \
+			echo "  $$name: starting..."; \
+			ch-remote --api-socket "$$sock" resume-vm 2>/dev/null || true; \
+		else \
+			echo "  $$name: starting via API..."; \
+			curl -s --unix-socket "$$sock" -X PUT "http://localhost/api/v1/vm.boot" >/dev/null 2>&1 || echo "  WARNING: could not start $$name"; \
+		fi; \
+	done
+
+stop: ## Gracefully stop all VMs via ACPI shutdown
+	@set -euo pipefail; \
+	for sock in /tmp/ch-tf-*/api.sock; do \
+		[ -S "$$sock" ] || continue; \
+		name=$$(basename "$$(dirname "$$sock")"); \
+		if command -v ch-remote &>/dev/null; then \
+			echo "  $$name: shutting down..."; \
+			ch-remote --api-socket "$$sock" shutdown-vm 2>/dev/null && echo "    shutdown sent" || echo "    shutdown failed"; \
+		else \
+			echo "  $$name: shutting down via API..."; \
+			curl -s --unix-socket "$$sock" -X PUT "http://localhost/api/v1/vm.shutdown" >/dev/null 2>&1 || echo "  WARNING: could not shutdown $$name"; \
+		fi; \
+	done
 
 .PHONY: destroy-full
 destroy-full: destroy ## Destroy all artifacts (VMs + certs + inventory + kubeconfig)
@@ -193,102 +346,7 @@ destroy-full: destroy ## Destroy all artifacts (VMs + certs + inventory + kubeco
 	@rm -f kubeconfig
 	@echo '==> Cleanup complete.'
 
-.PHONY: start stop
-start: ## Gracefully start all Kubernetes cluster VMs
-stop: ## Gracefully stop all Kubernetes cluster VMs
-	@set -euo pipefail; \
-	if ! command -v virsh &>/dev/null; then \
-		echo "  ERROR: required tool 'virsh' not found" >&2; \
-		exit 1; \
-	fi; \
-	raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null) || { \
-		echo "  ERROR: failed to get VM list from Terraform state" >&2; \
-		exit 1; \
-	}; \
-	node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names" 2>/dev/null || true); \
-	if [ -z "$$node_names" ]; then \
-		echo "  No VMs to stop"; \
-		exit 0; \
-	fi; \
-	echo "  Stopping cluster VMs..."; \
-	has_error=0; \
-	for vm in $$node_names; do \
-		state=$$(virsh -c $(LIBVIRT_URI) dominfo "$$vm" 2>/dev/null | awk -F': ' '/State:/{print $$2}' | xargs || true); \
-		if [ "$$state" = "shut off" ] || [ "$$state" = "shut-off" ]; then \
-			echo "  $$vm already shut off -- skipping"; \
-			continue; \
-		fi; \
-		echo "  $$vm: sending ACPI shutdown..."; \
-		virsh -c $(LIBVIRT_URI) shutdown "$$vm" >/dev/null 2>&1 || true; \
-		shut_off=0; \
-		# Wait up to 60 seconds for graceful shutdown
-		for i in $$(seq 1 12); do \
-			sleep 5; \
-			new_state=$$(virsh -c $(LIBVIRT_URI) dominfo "$$vm" 2>/dev/null | awk -F': ' '/State:/{print $$2}' | xargs || true); \
-			if [ "$$new_state" = "shut off" ] || [ "$$new_state" = "shut-off" ]; then \
-				shut_off=1; \
-				break; \
-			fi; \
-		done; \
-		if [ "$$shut_off" -eq 1 ]; then \
-			echo "  $$vm shut off gracefully"; \
-		else \
-			echo "  $$vm: graceful shutdown timed out, forcing..."; \
-			if ! virsh -c $(LIBVIRT_URI) destroy "$$vm" >/dev/null 2>&1; then \
-				echo "  ERROR: failed to force stop $$vm" >&2; \
-				has_error=1; \
-			else \
-				echo "  $$vm forced off"; \
-			fi; \
-		fi; \
-	done; \
-	if [ "$$has_error" -ne 0 ]; then \
-		echo "  ERROR: one or more VMs failed to stop" >&2; \
-		exit 1; \
-	fi; \
-	echo "  All VMs stopped."
-
-start:
-	@set -euo pipefail; \
-	if ! command -v virsh &>/dev/null; then \
-		echo "  ERROR: required tool 'virsh' not found" >&2; \
-		exit 1; \
-	fi; \
-	raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null) || { \
-		echo "  ERROR: failed to get VM list from Terraform state" >&2; \
-		exit 1; \
-	}; \
-	node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names" 2>/dev/null || true); \
-	if [ -z "$$node_names" ]; then \
-		echo "  No VMs to start"; \
-		exit 0; \
-	fi; \
-	echo "  Starting cluster VMs..."; \
-	has_error=0; \
-	for vm in $$node_names; do \
-		state=$$(virsh -c $(LIBVIRT_URI) dominfo "$$vm" 2>/dev/null | awk -F': ' '/State:/{print $$2}' | xargs || true); \
-		if [ "$$state" = "running" ]; then \
-			echo "  $$vm already running -- skipping"; \
-			continue; \
-		fi; \
-		echo "  $$vm: starting..."; \
-		if ! virsh -c $(LIBVIRT_URI) start "$$vm" >/dev/null 2>&1; then \
-			echo "  ERROR: failed to start $$vm" >&2; \
-			has_error=1; \
-		else \
-			echo "  $$vm started"; \
-		fi; \
-	done; \
-	if [ "$$has_error" -ne 0 ]; then \
-		echo "  ERROR: one or more VMs failed to start" >&2; \
-		exit 1; \
-	fi; \
-	echo "  All VMs started."
-
 # --- Ansible Container ---
-
-# Libvirt connection URI (must match tofu/terraform provider config)
-LIBVIRT_URI := qemu:///system
 
 ANSIBLE_IMAGE := localhost/ansible-podman
 ANSIBLE_DIR := ansible
@@ -297,7 +355,6 @@ ANSIBLE_RUN := podman run --rm --network host \
 	-v $(PWD):/workspace:z \
 	-v $(HOME)/.ssh:/root/.ssh:ro,z \
 	-v $(SSH_AUTH_SOCK):/ssh-agent:z \
-	-v /var/run/libvirt:/var/run/libvirt:ro,z \
 	-e SSH_AUTH_SOCK=/ssh-agent \
 	-e ANSIBLE_ROLES_PATH=/workspace/$(ANSIBLE_DIR)/roles \
 	-e ANSIBLE_INVENTORY=/workspace/$(ANSIBLE_DIR)/inventory/inventory.json \
@@ -335,93 +392,59 @@ certs: ## Generate TLS certificates via Ansible (community.crypto)
 bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	@echo 'Bootstrapping Kubernetes cluster via Ansible...'
 	@echo '  Prerequisites: make deploy must have been run, SSH keys injected'
-	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || { echo "  ERROR: tofu refresh failed" >&2; exit 1; }; \
+	@echo '  Generating Ansible inventory from tofu state + dnsmasq leases...'
 	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
 		ansible/playbooks/bootstrap.yml; \
 	echo '  Adding host route for LB pool...'; \
-	LB_BRIDGE=$$(virsh -c $(LIBVIRT_URI) net-info k8s-cluster-net 2>/dev/null | sed -n 's/^Bridge:[[:space:]]*//p'); \
-	if [ -n "$$LB_BRIDGE" ]; then \
-		if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "$$LB_BRIDGE"; then \
-			sudo ip route add 10.0.10.0/24 dev "$$LB_BRIDGE"; \
-			echo "  Route added via $$LB_BRIDGE"; \
-		else \
-			echo "  Route already exists via $$LB_BRIDGE"; \
-		fi; \
+	if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "k8sbr0"; then \
+		sudo ip route add 10.0.10.0/24 dev k8sbr0; \
+		echo "  Route 10.0.10.0/24 → k8sbr0 added"; \
 	else \
-		echo "  WARNING: could not detect bridge for k8s-cluster-net, skipping route"; \
+		echo "  Route 10.0.10.0/24 → k8sbr0 already exists"; \
 	fi
 
 .PHONY: wait-ips
-wait-ips: ## Wait for ALL VMs to get DHCP leases after tofu apply
+wait-ips: ## Wait for ALL VMs to get DHCP leases (reads dnsmasq lease file by MAC)
 	@echo '  Waiting for all VM IP addresses (DHCP leases)...'
 	@set -euo pipefail; \
-	if command -v virsh &>/dev/null; then \
-		raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null); \
-		if [ -z "$$raw_names" ]; then echo "  ERROR: no node_names from tofu output" >&2; exit 1; fi; \
-		node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names"); \
-		if [ -z "$$node_names" ]; then echo "  ERROR: empty node_names" >&2; exit 1; fi; \
-		mac_list=""; \
-		for name in $$node_names; do \
-			mac=$$(virsh -c $(LIBVIRT_URI) domiflist "$$name" 2>/dev/null | awk 'NR>2 && $$5 {print $$5; exit}'); \
-			if [ -z "$$mac" ]; then \
-				echo "  WARNING: no MAC found for $$name via virsh, falling back to tofu refresh" >&2; \
-				mac_list=""; \
-				break; \
-			fi; \
-			mac_list="$$mac_list $$mac@$$name"; \
-		done; \
-		if [ -n "$$mac_list" ]; then \
-			total=$$(echo "$$node_names" | wc -w); \
-			for i in $$(seq 1 60); do \
-				cp_ip=""; w_ips=""; found_count=0; \
-				leases_data=$$(virsh -c $(LIBVIRT_URI) net-dhcp-leases k8s-cluster-net 2>/dev/null); \
-				for entry in $$mac_list; do \
-					target_mac=$${entry%%@*}; \
-					ip=$$(echo "$$leases_data" | awk -v mac="$$target_mac" '$$3 == mac {print $$5; exit}'); \
-					ip=$$(echo "$$ip" | sed 's|/.*||'); \
-					if [ -n "$$ip" ]; then \
-						if [ -z "$$cp_ip" ]; then \
-							cp_ip="$$ip"; \
-						else \
-							w_ips="$$w_ips $$ip"; \
-						fi; \
-						found_count=$$((found_count + 1)); \
-					fi; \
-				done; \
-				if [ "$$found_count" -ge "$$total" ]; then \
-					w_ips_trimmed=$$(echo "$$w_ips" | sed 's/^ *//'); \
-					echo "  All $$total VMs ready after $$i cycles — CP: $$cp_ip, Workers: $$w_ips_trimmed"; \
-					exit 0; \
-				fi; \
-				echo "  waiting ($$i/60)... CP=$${cp_ip:-none} workers=$$found_count/$$total"; \
-				sleep 5; \
-			done; \
-			echo "  ERROR: VMs did not get IPs within timeout" >&2; \
-			exit 1; \
-		fi; \
-	fi; \
-	echo "  Falling back to tofu refresh method..."; \
+	LEASE_FILE=/var/lib/misc/dnsmasq/k8sbr0.leases; \
+	NODES_JSON=$$(tofu -chdir=terraform output -json nodes 2>/dev/null); \
+	if [ -z "$$NODES_JSON" ]; then echo "  ERROR: tofu output failed" >&2; exit 1; fi; \
+	total=$$(echo "$$NODES_JSON" | jq length); \
 	for i in $$(seq 1 60); do \
-		tofu -chdir=terraform refresh -var="base_image_path=../build/k8labs-base.qcow2" >/dev/null 2>&1; \
-		cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null); \
-		w_count=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(len([x for x in json.load(sys.stdin) if x]))" 2>/dev/null || echo 0); \
-		w_total=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0); \
-		if [ -n "$$cp_ip" ] && [ "$$w_count" -ge "$$w_total" ] && [ "$$w_total" -gt 0 ]; then \
-			w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; print(' '.join(filter(None, json.load(sys.stdin))))"); \
-			echo "  All $$((w_total + 1)) VMs ready after $$i cycles — CP: $$cp_ip, Workers: $$w_ips"; \
+		cp_ip=""; w_ips=""; found_count=0; \
+		while IFS=',' read -r name mac; do \
+			ip=$$(awk -v m="$$mac" 'BEGIN{IGNORECASE=1} $$2 == m {print $$3; exit}' "$$LEASE_FILE" 2>/dev/null || true); \
+			if [ -n "$$ip" ]; then \
+				if [ -z "$$cp_ip" ]; then \
+					cp_ip="$$ip"; \
+				else \
+					w_ips="$$w_ips $$ip"; \
+				fi; \
+				found_count=$$((found_count + 1)); \
+			fi; \
+		done < <(echo "$$NODES_JSON" | jq -r '.[] | [.name, .mac] | @csv' | tr -d '"'); \
+		if [ "$$found_count" -ge "$$total" ]; then \
+			echo "  All $$total VMs ready after $$i cycles — CP: $$cp_ip, Workers: $$w_ips"; \
 			exit 0; \
 		fi; \
-		echo "  waiting ($$i/60)... CP=$${cp_ip:-none} workers=$$w_count/$$w_total"; \
+		echo "  waiting ($$i/60)... CP=$${cp_ip:-none} workers=$$found_count/$$total"; \
 		sleep 5; \
 	done; \
 	echo "  ERROR: VMs did not get IPs within timeout" >&2; \
 	exit 1
 
 .PHONY: wait-ssh
-wait-ssh: ## Wait for SSH to become available on all VMs (after DHCP leases)
+wait-ssh: ## Wait for SSH to become available on all VMs (reads dnsmasq leases for IPs)
 	@echo '  Waiting for SSH connectivity on all VMs...'
 	@set -euo pipefail; \
+	LEASE_FILE=/var/lib/misc/dnsmasq/k8sbr0.leases; \
+	resolve_ip() { \
+		local vname="$$1"; \
+		local mac=$$(tofu -chdir=terraform output -json nodes 2>/dev/null | jq -r ".[] | select(.name==\"$$vname\") | .mac"); \
+		awk -v m="$$mac" 'BEGIN{IGNORECASE=1} $$2 == m {print $$3; exit}' "$$LEASE_FILE" 2>/dev/null || true; \
+	}; \
 	check_ssh() { \
 		local ip="$$1" name="$$2"; \
 		for i in $$(seq 1 30); do \
@@ -435,131 +458,85 @@ wait-ssh: ## Wait for SSH to become available on all VMs (after DHCP leases)
 		echo "  ERROR: SSH not available on $$name ($$ip) after 30 attempts" >&2; \
 		return 1; \
 	}; \
-	collect_ips_virsh() { \
-		local names="$$1"; \
-		local first=1; \
-		for vname in $$names; do \
-			local mac=$$(virsh -c $(LIBVIRT_URI) domiflist "$$vname" 2>/dev/null | awk 'NR>2 && $$5 {print $$5; exit}'); \
-			local ip=""; \
-			if [ -n "$$mac" ]; then \
-				ip=$$(virsh -c $(LIBVIRT_URI) net-dhcp-leases k8s-cluster-net 2>/dev/null | awk -v m="$$mac" '$$3 == m {print $$5; exit}'); \
-				ip=$$(echo "$$ip" | sed 's|/.*||'); \
-			fi; \
-			if [ $$first -eq 1 ]; then \
-				printf "%s" "$$ip"; \
-				first=0; \
-			else \
-				printf " %s" "$$ip"; \
-			fi; \
-		done; \
-	}; \
-	raw_names=$$(tofu -chdir=terraform output -json node_names 2>/dev/null); \
-	if [ -z "$$raw_names" ]; then echo "  ERROR: no node_names from tofu output" >&2; exit 1; fi; \
-	node_names=$$(python3 -c "import sys,json; print(' '.join(json.load(sys.stdin)))" <<< "$$raw_names"); \
-	if command -v virsh &>/dev/null; then \
-		ips=$$(collect_ips_virsh "$$node_names"); \
-	else \
-		cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>/dev/null || true); \
-		w_ips=$$(tofu -chdir=terraform output -json worker_ips 2>/dev/null | python3 -c "import sys,json; ips=json.load(sys.stdin); print(' '.join(filter(None, ips)))" 2>/dev/null || true); \
-		ips="$$cp_ip $$w_ips"; \
-	fi; \
-	names_arr=(); while IFS= read -r n; do names_arr+=("$$n"); done < <(echo "$$node_names" | tr ' ' '\n'); \
-	ips_arr=(); while IFS= read -r ip; do ips_arr+=("$$ip"); done < <(echo "$$ips" | tr ' ' '\n'); \
-	pids=""; \
+	raw_names=$$(tofu -chdir=terraform output -json nodes 2>/dev/null); \
+	if [ -z "$$raw_names" ]; then echo "  ERROR: no nodes from tofu output" >&2; exit 1; fi; \
+	node_names=$$(echo "$$raw_names" | jq -r '.[].name'); \
+	ips_arr=(); names_arr=(); \
+	for name in $$node_names; do \
+		ip=$$(resolve_ip "$$name"); \
+		names_arr+=("$$name"); ips_arr+=("$$ip"); \
+	done; \
+	pids=""; has_error=0; \
 	for idx in "$${!names_arr[@]}"; do \
-		name="$${names_arr[idx]}"; \
-		ip="$${ips_arr[idx]:-}"; \
-		if [ -z "$$ip" ]; then \
-			echo "  WARNING: no IP for $$name, skipping SSH check" >&2; \
-			continue; \
-		fi; \
-		(check_ssh "$$ip" "$$name") & \
-		pids="$$pids $$!"; \
+		name="$${names_arr[idx]}"; ip="$${ips_arr[idx]:-}"; \
+		if [ -z "$$ip" ]; then echo "  WARNING: no IP for $$name" >&2; continue; fi; \
+		(check_ssh "$$ip" "$$name") & pids="$$pids $$!"; \
 	done; \
-	has_error=0; \
-	for pid in $$pids; do \
-		[ -z "$$pid" ] && continue; \
-		wait "$$pid" || has_error=1; \
-	done; \
-	if [ "$$has_error" -ne 0 ]; then \
-		echo "  ERROR: one or more VMs failed SSH check" >&2; \
-		exit 1; \
-	fi
+	for pid in $$pids; do [ -z "$$pid" ] && continue; wait "$$pid" || has_error=1; done; \
+	if [ "$$has_error" -ne 0 ]; then echo "  ERROR: one or more VMs failed SSH check" >&2; exit 1; fi
 
 .PHONY: prereq
-prereq: ## Validate required build tools are installed (tofu/terraform, virsh, podman, openssl)
+prereq: ## Validate required build tools (tofu, cloud-hypervisor, podman, openssl)
 	@set -euo pipefail; \
 	fail=0; \
-	if ! command -v tofu &>/dev/null && ! command -v terraform &>/dev/null; then \
-		echo "ERROR: required tool 'tofu' or 'terraform' not found. Install with: mise install opentofu" >&2; \
-		fail=1; \
-	fi; \
-	if ! command -v virsh &>/dev/null; then \
-		echo "ERROR: required tool 'virsh' not found. Install with: apt install libvirt-clients" >&2; \
-		fail=1; \
-	fi; \
-	if ! command -v podman &>/dev/null; then \
-		echo "ERROR: required tool 'podman' not found. Install with: apt install podman" >&2; \
-		fail=1; \
-	fi; \
-	if ! command -v openssl &>/dev/null; then \
-		echo "ERROR: required tool 'openssl' not found. Install with: apt install openssl" >&2; \
-		fail=1; \
-	fi; \
+	for cmd in tofu terraform cloud-hypervisor podman openssl; do \
+		if ! command -v $$cmd &>/dev/null; then \
+			echo "ERROR: required tool '$$cmd' not found" >&2; \
+			fail=1; \
+		fi; \
+	done; \
 	exit $$fail
 
 .PHONY: cluster
-cluster: prereq base extensions container ## Full pipeline: base -> extensions -> container -> deploy -> bootstrap
+cluster: network-up base sysexts confexts container ## Full pipeline: network -> base -> extensions -> container -> deploy -> bootstrap
 	@set -euo pipefail; \
-	echo 'Bootstrapping cluster via Ansible...'; \
+	echo 'Bootstrapping cluster...'; \
 	echo '  Step 1: Deploy VMs (tofu apply)...'; \
-	tofu -chdir=terraform apply -auto-approve -var="base_image_path=../build/k8labs-base.qcow2"; \
+	tofu -chdir=terraform apply -auto-approve -var-file="../build/deploy.tfvars"; \
 	echo '  Step 2: Wait for VM IP addresses...'; \
 	$(MAKE) wait-ips; \
 	echo '  Step 3: Wait for SSH connectivity on all VMs...'; \
 	$(MAKE) wait-ssh; \
-	echo '  Step 4: Refresh tofu state (DHCP lease IPs) and generate inventory...'; \
-	tofu -chdir=terraform apply -refresh-only -auto-approve -var="base_image_path=../build/k8labs-base.qcow2" 2>&1 | tail -5 || { echo "  ERROR: tofu refresh failed" >&2; exit 1; }; \
+	echo '  Step 4: Generate Ansible inventory...'; \
 	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json; \
 	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
 	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
 		$(ANSIBLE_DIR)/playbooks/bootstrap.yml; \
 	echo '  Step 6: Add host route for LB pool...'; \
-	LB_BRIDGE=$$(virsh -c $(LIBVIRT_URI) net-info k8s-cluster-net 2>/dev/null | sed -n 's/^Bridge:[[:space:]]*//p'); \
-	if [ -n "$$LB_BRIDGE" ]; then \
-		if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "$$LB_BRIDGE"; then \
-			sudo ip route add 10.0.10.0/24 dev "$$LB_BRIDGE"; \
-			echo "  Route added via $$LB_BRIDGE"; \
-		else \
-			echo "  Route already exists via $$LB_BRIDGE"; \
-		fi; \
+	if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "k8sbr0"; then \
+		sudo ip route add 10.0.10.0/24 dev k8sbr0; \
+		echo "  Route 10.0.10.0/24 added via k8sbr0"; \
 	else \
-		echo "  WARNING: could not detect bridge for k8s-cluster-net, skipping route"; \
+		echo "  Route 10.0.10.0/24 already exists"; \
 	fi; \
-	echo '  Step 7: Fetch DHCP-resistant kubeconfig...'; \
+	echo '  Step 7: Fetch kubeconfig...'; \
 	$(MAKE) kubeconfig; \
-	echo 'Full cluster build and bootstrap complete.'
+	echo '  Step 8: Wait for control plane node Ready (up to 10m)...'; \
+	for i in $$(seq 1 120); do \
+		if kubectl --kubeconfig=kubeconfig wait --for=condition=Ready node/cp1 --timeout=10s 2>/dev/null; then \
+			echo "  Control plane node cp1 is Ready after $$((i * 5))s"; \
+			break; \
+		fi; \
+		echo "  waiting for cp1 Ready ($$i/120)..."; \
+		sleep 5; \
+	done; \
+	if ! kubectl --kubeconfig=kubeconfig get node cp1 2>/dev/null | grep -q "Ready"; then \
+		echo "  WARNING: control plane node cp1 did not become Ready within timeout" >&2; \
+		echo "  Check node status: kubectl --kubeconfig=kubeconfig get nodes" >&2; \
+	else \
+		echo "  Control plane node cp1 is Ready"; \
+	fi; \
+	echo 'Cluster build and bootstrap complete.'
 
 # --- kubeconfig ---
 
 .PHONY: kubeconfig update-kubeconfig
 kubeconfig: ## Fetch DHCP-resistant kubeconfig from control-plane node
 	@set -euo pipefail; \
-	cp_ip=""; \
-	if command -v virsh &>/dev/null; then \
-		cp_name=$$(tofu -chdir=terraform output -json node_names 2>/dev/null | python3 -c "import sys,json;n=json.load(sys.stdin);print(n[0])" 2>/dev/null || true); \
-		if [ -n "$$cp_name" ] && [ "$$cp_name" != "null" ]; then \
-			mac=$$(virsh -c $(LIBVIRT_URI) domiflist "$$cp_name" 2>/dev/null | awk 'NR>2 && $$5 {print $$5; exit}'); \
-			if [ -n "$$mac" ]; then \
-				cp_ip=$$(virsh -c $(LIBVIRT_URI) net-dhcp-leases k8s-cluster-net 2>/dev/null | awk -v m="$$mac" '$$3 == m {print $$5; exit}'); \
-				cp_ip=$$(echo "$$cp_ip" | sed 's|/.*||'); \
-			fi; \
-		fi; \
-	fi; \
-	if [ -z "$$cp_ip" ] || [ "$$cp_ip" = "null" ]; then \
-		cp_ip=$$(tofu -chdir=terraform output -raw control_plane_ip 2>&1 | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1 || true); \
-	fi; \
-	if [ -z "$$cp_ip" ] || [ "$$cp_ip" = "null" ]; then \
+	LEASE_FILE=/var/lib/misc/dnsmasq/k8sbr0.leases; \
+	CP_MAC=$$(tofu -chdir=terraform output -json nodes 2>/dev/null | jq -r '.[0].mac'); \
+	cp_ip=$$(awk -v m="$$CP_MAC" 'BEGIN{IGNORECASE=1} $$2 == m {print $$3; exit}' "$$LEASE_FILE" 2>/dev/null || true); \
+	if [ -z "$$cp_ip" ]; then \
 		echo "ERROR: Cannot determine control-plane IP. Ensure VMs are deployed (make deploy)." >&2; \
 		exit 1; \
 	fi; \
@@ -693,6 +670,16 @@ smoke-test:
 	fi; \
 	exit $$fail
 
+# --- Metrics Server ---
+
+.PHONY: metrics-server
+metrics-server: ## Deploy metrics-server for kubectl top
+	@echo 'Deploying metrics-server...'
+	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/metrics-server.yaml
+	@echo 'Waiting for metrics-server to be ready...'
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system wait --for=condition=Available deployment/metrics-server --timeout=60s
+	@echo 'metrics-server ready. Run: kubectl top nodes'
+
 # --- Cleanup ---
 
 .PHONY: clean
@@ -705,9 +692,8 @@ clean: ## Remove build artifacts
 .PHONY: validate-packer
 validate-packer: ## Validate Packer template syntax
 	@echo 'Validating Packer template syntax...'
-	# Unset vars (iso_url, iso_checksum, ssh_password) are expected
-	# without a var-file — we only check syntax here.
-	cd packer && packer validate . 2>&1 | grep -v 'Unset variable' || true
+	# Some vars don't have defaults (firmware_path, etc.) -- checked at build time.
+	cd packer && packer validate -var="firmware_path=/tmp/test" -var="cloud_image_path=/tmp/test" -var="cloudinit_disk_path=/tmp/test" -var="ssh_private_key_file=/tmp/test" . 2>&1 || true
 
 .PHONY: validate-terraform
 validate-terraform: ## Validate Terraform/OpenTofu configuration
