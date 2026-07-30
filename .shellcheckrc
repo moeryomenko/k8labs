@@ -1,0 +1,7 @@
+# .shellcheckrc — Project-wide ShellCheck configuration
+shell=bash
+enable=all
+severity=style
+source-path=SCRIPTDIR
+external-sources=true
+disable=SC1091,SC2154,SC2034
