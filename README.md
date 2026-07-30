@@ -22,13 +22,13 @@ Lab scenarios include:
 
 The cluster environment is built in stages, each producing an artifact consumed by the next:
 
-1. **Base OS image** (Packer) — a minimal Fedora image built from a Fedora Cloud Base qcow2, with a pinned kernel version and SSH access configured via cloud-init. The resulting qcow2 image serves as the immutable base for all cluster VMs.
+1. **Base OS image** (Packer) — a minimal Fedora image built from a Fedora Cloud Base qcow2 using the [cloudhypervisor builder plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor), with a pinned kernel version and SSH access configured via cloud-init. The resulting qcow2 image serves as the immutable base for all cluster VMs.
 
 2. **System extensions** (sysext/confext) — Kubernetes and container runtime binaries (kubelet, CRI-O, crun, CNI plugins, etcd, API server, controller manager, scheduler, kubectl) are packaged as systemd-sysext images and dropped into `/var/lib/extensions/`. Corresponding configuration overlays (sysctl parameters, module loading, kubelet config, CRI-O config, etcd config) are built as systemd-confext images layered over `/etc/`. This keeps the base OS pristine and allows atomic updates of individual components without re-baking the VM image.
 
 3. **Ansible runner container** (Podman/Containerfile) — a self-contained execution environment with Ansible, community.crypto, community.general, kubectl, and Cilium CLI. All Ansible operations run inside this container for reproducibility.
 
-4. **VM provisioning** (OpenTofu/Terraform) — a cloudhypervisor provider configuration that provisions control plane and worker VMs from the base image, with cloud-init metadata (hostname, SSH keys) attached as a FAT16 CIDATA disk. VM specifications (CPU, RAM, disk) are configurable per node. VMs use TAP devices on a shared Linux bridge (`k8sbr0`) with DHCP from a standalone dnsmasq.
+4. **VM provisioning** (OpenTofu/Terraform) — a [cloudhypervisor provider](https://github.com/moeryomenko/tf-provider-cloud-hypervisor) configuration that provisions control plane and worker VMs from the base image, with cloud-init metadata (hostname, SSH keys) attached as a FAT16 CIDATA disk. VM specifications (CPU, RAM, disk) are configurable per node. VMs use TAP devices on a shared Linux bridge (`k8sbr0`) with DHCP from a standalone dnsmasq.
 
 5. **Cluster bootstrapping** (Ansible) — Ansible playbooks orchestrate the full cluster bring-up: distributing system extensions, generating and deploying TLS certificates, bootstrapping etcd, initializing the Kubernetes control plane, configuring kubelet on workers, deploying Cilium CNI, and configuring Layer 2 load balancer IP pools. The bootstrap follows the KTHW service sequence (etcd -> API server -> controller manager -> scheduler -> kubelet -> kube-proxy -> CNI).
 
@@ -72,7 +72,7 @@ Individual pipeline stages can be run separately:
 | `make base-deps` | Download CLOUDHV.fd firmware + Fedora Cloud Base qcow2 |
 | `make base-cloudinit` | Generate FAT16 CIDATA disk for Packer SSH key injection |
 | `make base-tap` | Create TAP device for Packer build VM |
-| `make plugin` | Build and install cloudhypervisor Packer plugin from source |
+| `make plugin` | Build and install [cloudhypervisor Packer plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) from source |
 
 **Extensions and container:**
 
