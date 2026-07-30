@@ -1,0 +1,13 @@
+# OpenTofu CLI configuration for k8labs
+# The cloudhypervisor provider is only available via the Terraform registry
+# (not the OpenTofu registry). This config maps it from the local plugin cache
+# to avoid registry translation issues.
+provider_installation {
+  filesystem_mirror {
+    path    = "~/.terraform.d/plugins"
+    include = ["registry.opentofu.org/community/cloudhypervisor"]
+  }
+  direct {
+    exclude = ["registry.opentofu.org/community/cloudhypervisor"]
+  }
+}

@@ -420,10 +420,12 @@ main() {
             esac
 
             # Spawn download in a background subshell with per-sysext lock
+            # NOTE: trap set AFTER acquiring lock so losing processes
+            # (which return 0 on mkdir failure) don't delete the winner's lock.
             (
                 set -e
-                trap 'rm -rf "${SYSEXT_DIR}/${name}.lock"' EXIT
                 mkdir "${SYSEXT_DIR}/${name}.lock" 2>/dev/null || return 0
+                trap 'rm -rf "${SYSEXT_DIR}/${name}.lock"' EXIT
                 info "Downloading ${name}..."
                 case "$name" in
                     cri-o)    download_crio ;;

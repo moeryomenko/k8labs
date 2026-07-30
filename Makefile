@@ -104,10 +104,17 @@ base-tap: ## Create TAP device for Packer build (attached to k8sbr0 bridge)
 		sudo ip tuntap add dev "$(TAP)" mode tap; \
 		echo '    Created TAP $(TAP)'; \
 	fi
+	@if ! ip link show k8sbr0 &>/dev/null; then \
+		echo '    Creating bridge k8sbr0...'; \
+		sudo ip link add name k8sbr0 type bridge; \
+		sudo ip addr add 192.168.124.1/24 dev k8sbr0; \
+		sudo ip link set k8sbr0 up; \
+		echo '    Created and brought up bridge k8sbr0'; \
+	fi
 	@if ip link show "$(TAP)" | grep -q "master k8sbr0" 2>/dev/null; then \
 		echo '    $(TAP) already attached to bridge k8sbr0'; \
 	else \
-		sudo ip link set "$(TAP)" master k8sbr0 2>/dev/null; \
+		sudo ip link set "$(TAP)" master k8sbr0; \
 		echo '    Attached $(TAP) to k8sbr0'; \
 	fi
 	@sudo ip link set "$(TAP)" up
@@ -479,7 +486,7 @@ wait-ssh: ## Wait for SSH to become available on all VMs (reads dnsmasq leases f
 prereq: ## Validate required build tools (tofu, cloud-hypervisor, podman, openssl)
 	@set -euo pipefail; \
 	fail=0; \
-	for cmd in tofu terraform cloud-hypervisor podman openssl; do \
+	for cmd in tofu cloud-hypervisor podman openssl; do \
 		if ! command -v $$cmd &>/dev/null; then \
 			echo "ERROR: required tool '$$cmd' not found" >&2; \
 			fail=1; \
