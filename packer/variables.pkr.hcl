@@ -1,66 +1,129 @@
 # Base OS: Fedora 44 (kernel 7.1)
-# Required: Fedora 44 netinstall ISO URL and checksum
 
 variable "kernel_version" {
   description = "Kernel version to pin during image baking"
   type        = string
   default     = "7.1"
 }
-variable "iso_url" {
-  type = string
+
+# ---------------------------------------------------------------------------
+# Cloud-Hypervisor builder settings
+# ---------------------------------------------------------------------------
+
+variable "ch_binary_path" {
+  description = "Path to cloud-hypervisor binary (empty = use PATH)"
+  type        = string
+  default     = ""
 }
 
-variable "iso_checksum" {
-  type = string
+variable "firmware_path" {
+  description = "Path to CLOUDHV.fd UEFI firmware binary"
+  type        = string
 }
 
-# VM configuration
-variable "vm_name" {
-  type    = string
-  default = "k8labs-base"
+variable "tap_device" {
+  description = "TAP device name for Packer SSH connectivity"
+  type        = string
+  default     = "packer-tap"
 }
+
+variable "guest_ip" {
+  description = "Static IP assigned to the guest VM (used for SSH provisioning)"
+  type        = string
+  default     = "192.168.124.10"
+}
+
+variable "guest_mac" {
+  description = "MAC address for the guest"
+  type        = string
+  default     = "de:ad:be:ef:00:01"
+}
+
+variable "guest_mask" {
+  description = "Netmask for the guest (e.g., 255.255.255.0)"
+  type        = string
+  default     = "255.255.255.0"
+}
+
+# ---------------------------------------------------------------------------
+# Fedora Cloud Base image
+# ---------------------------------------------------------------------------
+
+variable "cloud_image_url" {
+  description = "Download URL for Fedora Cloud Base qcow2"
+  type        = string
+}
+
+variable "cloud_image_checksum" {
+  description = "SHA256 checksum for the Fedora Cloud Base image"
+  type        = string
+}
+
+variable "cloud_image_path" {
+  description = "Local path to the Fedora Cloud Base qcow2 (downloaded)"
+  type        = string
+}
+
+# ---------------------------------------------------------------------------
+# Cloud-init disk (Packer SSH key injection)
+# ---------------------------------------------------------------------------
+
+variable "cloudinit_disk_path" {
+  description = "Path to the pre-generated cloud-init CIDATA FAT disk"
+  type        = string
+}
+
+variable "ssh_username" {
+  description = "SSH user for Packer provisioning (root for builds; key injected via cloud-init)"
+  type        = string
+  default     = "root"
+}
+
+variable "ssh_private_key_file" {
+  description = "Path to the SSH private key for Packer provisioning"
+  type        = string
+}
+
+variable "ssh_timeout" {
+  description = "Timeout for SSH connection during provisioning"
+  type        = string
+  default     = "15m"
+}
+
+# ---------------------------------------------------------------------------
+# VM hardware
+# ---------------------------------------------------------------------------
 
 variable "vm_cpu_cores" {
-  type    = number
-  default = 2
+  description = "Number of CPU cores for the build VM"
+  type        = number
+  default     = 2
 }
 
 variable "vm_memory" {
-  type    = number
-  default = 2048
+  description = "Memory in MiB for the build VM"
+  type        = number
+  default     = 2048
 }
 
-variable "vm_disk_size" {
-  type    = number
-  default = 20480
-}
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
 
-# SSH communicator credentials
-variable "ssh_username" {
-  type    = string
-  default = "root"
-}
-
-variable "ssh_password" {
-  type = string
-}
-
-# Output path for the baked qcow2 image
 variable "output_directory" {
-  type    = string
-  default = "../build/base"
+  description = "Output directory for the baked image"
+  type        = string
+  default     = "../build/base-image"
 }
 
-# Fedora installer boot command — minimal, just select "Install Fedora 44"
-# Kickstart is auto-detected by anaconda from the OEMDRV CD volume.
-# Kernel params (console=ttyS0, inst.sshd=1) are baked into the modified grub.cfg.
-variable "boot_command" {
-  type    = list(string)
-  default = ["<up>", "<enter>"]
+variable "output_image_name" {
+  description = "Output image filename"
+  type        = string
+  default     = "k8labs-base.qcow2"
 }
 
-# Path to the kickstart file served via Packer HTTP
-variable "kickstart_file" {
-  type    = string
-  default = "packer/fedora/ks.cfg"
+variable "manifest_output" {
+  description = "Output path for the manifest file (created by post-processor)"
+  type        = string
+  default     = "../build"
 }

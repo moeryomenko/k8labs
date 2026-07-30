@@ -8,8 +8,8 @@ mkdir -p /etc/extensions
 systemctl enable systemd-sysext
 systemctl enable systemd-confext
 
-# Ensure qemu-guest-agent is running (service may be named differently per distro)
-systemctl enable qemu-guest-agent 2>/dev/null || systemctl enable qemu-ga 2>/dev/null || true
+# Cloud-Hypervisor uses ACPI for graceful shutdown — no guest agent needed.
+# Unlike the QEMU/libvirt variant, no qemu-guest-agent is installed or enabled.
 
 # Remove machine-id so each VM gets unique ID on first boot
 rm -f /etc/machine-id

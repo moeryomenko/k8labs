@@ -1,42 +1,63 @@
-# Packer QEMU/KVM base image definition for k8labs.
-# This source block builds a minimal Fedora 44 VM image that serves
-# as the immutable base for Kubernetes node sysext/confext layering.
+# Base image definition for k8labs.
+# Uses Fedora Cloud Base qcow2 as source with UEFI firmware (CLOUDHV.fd).
+# Cloud-init FAT disk injects SSH key for Packer provisioning.
+# Networking: TAP device on k8sbr0 bridge, DHCP reservation for SSH.
+#
+# Plugin: manually installed at ~/.packer.d/plugins/github.com/moeryomenko/cloud-hypervisor/
 
-source "qemu" "kvm" {
-  iso_url          = var.iso_url
-  iso_checksum     = var.iso_checksum
-  output_directory = var.output_directory
-  shutdown_timeout = "5m"
-  disk_size        = var.vm_disk_size
-  format           = "qcow2"
-  accelerator      = "kvm"
-  ssh_username     = var.ssh_username
-  ssh_password     = var.ssh_password
-  ssh_timeout      = "30m"
-  boot_wait        = "30s"
-  boot_command     = var.boot_command
-  vm_name          = var.vm_name
-  memory           = var.vm_memory
-  cores            = var.vm_cpu_cores
-  disk_interface   = "virtio"
-  net_device       = "virtio-net"
-  headless            = true
-  use_default_display = true
-  vnc_bind_address    = "127.0.0.1"
-  qemu_binary         = "qemu-system-x86_64"
+source "cloud-hypervisor" "base" {
+  # CH binary path (falls back to PATH if empty)
+  ch_binary_path = var.ch_binary_path
 
-  # Attach kickstart as OEMDRV volume (auto-detected by anaconda)
-  cd_files = ["fedora/ks.cfg"]
-  cd_label = "OEMDRV"
+  # UEFI firmware boot
+  firmware = var.firmware_path
 
-  # Capture serial console for debugging
-  qemuargs = [
-    ["-serial", "file:/tmp/packer-serial.log"]
-  ]
+  # Hardware
+  vcpus  = var.vm_cpu_cores
+  memory = var.vm_memory
+
+  # Root disk: Fedora Cloud Base raw (writable)
+  disk_images {
+    path       = var.cloud_image_path
+    readonly   = false
+    image_type = "raw"
+    id         = "rootfs"
+  }
+
+  # Cloud-init disk: FAT16 CIDATA (read-only, SSH key injection)
+  disk_images {
+    path       = var.cloudinit_disk_path
+    readonly   = true
+    image_type = "raw"
+    id         = "cloud-init"
+  }
+
+  # Networking: TAP attached to k8sbr0 bridge.
+  # No ip set — the bridge handles L3 routing.
+  # Guest gets 192.168.124.10 via DHCP reservation (MAC->IP mapping in dnsmasq).
+  network_interfaces {
+    tap  = var.tap_device
+    mac  = var.guest_mac
+    ip   = var.guest_ip
+    mask = var.guest_mask
+  }
+
+  # SSH communicator for provisioning
+  communicator           = "ssh"
+  ssh_host               = var.guest_ip
+  ssh_username           = var.ssh_username
+  ssh_private_key_file   = var.ssh_private_key_file
+  ssh_agent_auth         = false
+  ssh_clear_authorized_keys = false
+  ssh_port               = 22
+  ssh_timeout            = var.ssh_timeout
+
+  serial  = "null"
+  console = "null"
 }
 
 build {
-  sources = ["source.qemu.kvm"]
+  sources = ["source.cloud-hypervisor.base"]
 
   provisioner "shell" {
     environment_vars = [
@@ -50,7 +71,7 @@ build {
   }
 
   post-processor "manifest" {
-    output     = "${var.output_directory}/manifest.json"
+    output     = "${var.manifest_output}/manifest.json"
     strip_path = true
   }
 }
