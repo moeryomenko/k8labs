@@ -55,6 +55,9 @@ override.tf.json
 terraform.rc
 ansible/inventory/inventory.json
 
+# Generated cloud-init disk images — created at build time
+terraform/cloud-init/out/
+
 .container.stamp
 perfetto-plots
 research/analysis/output/
