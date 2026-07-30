@@ -36,6 +36,18 @@
         dnf install -y conmon tar 2>&1 | tail -3
       changed_when: true
 
+    - name: Install SELinux policy module for eBPF device filter (Fedora 44+)
+      ansible.builtin.raw: |
+        set -e
+        if ! semodule -l 2>/dev/null | grep -q ebpf-fix; then
+          HOST="{{ ansible_host }}"
+          ROOT="{{ project_dir }}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'cat > /tmp/ebpf-fix.pp' < "$ROOT"/extensions/selinux/ebpf-fix.pp
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'semodule -i /tmp/ebpf-fix.pp'
+        fi
+      changed_when: true
+      delegate_to: localhost
+
     - name: Create containers policy for image pulling
       ansible.builtin.raw: |
         mkdir -p /etc/containers
