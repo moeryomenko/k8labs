@@ -1,8 +1,10 @@
 # k8labs
 
-Kubernetes cluster lab environment for experimentation and research. k8labs provisions disposable, reproducible Kubernetes clusters on local KVM/libvirt infrastructure using a "Kubernetes the Hard Way" approach, layered with system extensions (sysext/confext) and Cilium CNI with L2-aware load balancing.
+Kubernetes cluster lab environment for experimentation and research. k8labs provisions disposable, reproducible Kubernetes clusters on local KVM infrastructure using a "Kubernetes the Hard Way" approach, layered with system extensions (sysext/confext) and Cilium CNI with L2-aware load balancing.
 
 The project is designed for hands-on exploration of Kubernetes internals — cluster bootstrapping, certificate management, CNI configuration, service load balancing, and OS-level extension mechanics — without depending on cloud providers.
+
+The VM infrastructure uses **Cloud-Hypervisor** (CH) as the VMM — offering fast VM startup (~200--400 ms), a small dependency chain (no libvirtd), and a stateless architecture where CH processes are managed directly by the Terraform provider.
 
 ## Purpose
 
@@ -20,13 +22,13 @@ Lab scenarios include:
 
 The cluster environment is built in stages, each producing an artifact consumed by the next:
 
-1. **Base OS image** (Packer) — a minimal Fedora installation built from a netinstall ISO via kickstart, with a pinned kernel version and SSH access configured. The resulting qcow2 image serves as the immutable base for all cluster VMs.
+1. **Base OS image** (Packer) — a minimal Fedora image built from a Fedora Cloud Base qcow2, with a pinned kernel version and SSH access configured via cloud-init. The resulting qcow2 image serves as the immutable base for all cluster VMs.
 
 2. **System extensions** (sysext/confext) — Kubernetes and container runtime binaries (kubelet, CRI-O, crun, CNI plugins, etcd, API server, controller manager, scheduler, kubectl) are packaged as systemd-sysext images and dropped into `/var/lib/extensions/`. Corresponding configuration overlays (sysctl parameters, module loading, kubelet config, CRI-O config, etcd config) are built as systemd-confext images layered over `/etc/`. This keeps the base OS pristine and allows atomic updates of individual components without re-baking the VM image.
 
 3. **Ansible runner container** (Podman/Containerfile) — a self-contained execution environment with Ansible, community.crypto, community.general, kubectl, and Cilium CLI. All Ansible operations run inside this container for reproducibility.
 
-4. **VM provisioning** (OpenTofu/Terraform) — a libvirt provider configuration that clones the base image for each node, attaches cloud-init metadata (hostname, SSH keys), and provisions control plane and worker VMs on a dedicated NAT network. VM specifications (CPU, RAM, disk) are configurable per node.
+4. **VM provisioning** (OpenTofu/Terraform) — a cloudhypervisor provider configuration that provisions control plane and worker VMs from the base image, with cloud-init metadata (hostname, SSH keys) attached as a FAT16 CIDATA disk. VM specifications (CPU, RAM, disk) are configurable per node. VMs use TAP devices on a shared Linux bridge (`k8sbr0`) with DHCP from a standalone dnsmasq.
 
 5. **Cluster bootstrapping** (Ansible) — Ansible playbooks orchestrate the full cluster bring-up: distributing system extensions, generating and deploying TLS certificates, bootstrapping etcd, initializing the Kubernetes control plane, configuring kubelet on workers, deploying Cilium CNI, and configuring Layer 2 load balancer IP pools. The bootstrap follows the KTHW service sequence (etcd -> API server -> controller manager -> scheduler -> kubelet -> kube-proxy -> CNI).
 
@@ -36,10 +38,10 @@ The cluster environment is built in stages, each producing an artifact consumed 
 
 | Layer | Technology |
 |---|---|
-| Hypervisor | KVM/QEMU via libvirt |
+| Hypervisor | KVM (Cloud-Hypervisor) |
 | Base OS | Fedora (kernel 7.1) |
-| VM provisioning | OpenTofu / Terraform (terraform-provider-libvirt) |
-| Image baking | Packer (QEMU builder, kickstart) |
+| VM provisioning | OpenTofu / Terraform (cloudhypervisor provider) |
+| Image baking | Packer (cloudhypervisor builder on Fedora Cloud) |
 | Configuration management | Ansible (community.crypto, community.general) |
 | Container runtime | CRI-O with crun |
 | CNI / Service Mesh | Cilium (eBPF, L2 announcements, Gateway API) |
@@ -49,7 +51,7 @@ The cluster environment is built in stages, each producing an artifact consumed 
 
 ## Quick Start
 
-Requirements: a Linux host with KVM-capable hardware, `virsh`, `tofu` (or `terraform`), `packer`, `podman`, and `openssl`.
+Requirements: a Linux host with KVM-capable hardware, `cloud-hypervisor` (>= v38), `tofu` (or `terraform`), `packer`, `podman`, `openssl`, `mkdosfs` (dosfstools), `mcopy` (mtools), and `dnsmasq`. Run `make prereq` to validate core tools. The Packer plugin must be built from source with `make plugin`.
 
 The full cluster build pipeline is driven through a single Makefile:
 
@@ -61,19 +63,52 @@ This executes the complete sequence: validate prerequisites, bake the base OS im
 
 Individual pipeline stages can be run separately:
 
-- `make base` — build the base OS qcow2 image
-- `make sysexts` — build all system extension images
-- `make confexts` — build all configuration extension overlays
-- `make extensions` — build all extensions (both sysext and confext)
-- `make container` — build the Ansible runner container
-- `make deploy` — provision cluster VMs via OpenTofu
-- `make wait-ips` — poll until all VMs have DHCP-assigned IPs
-- `make wait-ssh` — poll until SSH is reachable on all VMs
-- `make bootstrap` — run the full Ansible cluster bootstrap
-- `make smoke-test` — validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling)
-- `make destroy` — tear down all VMs
-- `make destroy-full` — destroy VMs, certs, kubeconfig, and inventory
-- `make start` / `make stop` — gracefully start/stop all cluster VMs
+**Image baking:**
+
+| Target | Description |
+|--------|-------------|
+| `make base` | Build base image from Fedora Cloud + cloud-init |
+| `make base-rebuild` | Force rebuild base image |
+| `make base-deps` | Download CLOUDHV.fd firmware + Fedora Cloud Base qcow2 |
+| `make base-cloudinit` | Generate FAT16 CIDATA disk for Packer SSH key injection |
+| `make base-tap` | Create TAP device for Packer build VM |
+| `make plugin` | Build and install cloudhypervisor Packer plugin from source |
+
+**Extensions and container:**
+
+| Target | Description |
+|--------|-------------|
+| `make sysexts` | Build all system extension images |
+| `make confexts` | Build all configuration extension overlays |
+| `make extensions` | Build all extensions (both sysext and confext) |
+| `make container` | Build the Ansible runner container |
+
+**Networking:**
+
+| Target | Description |
+|--------|-------------|
+| `sudo ./scripts/create-taps.sh N` | Create bridge `k8sbr0` + TAP devices + start dnsmasq for N workers |
+| `sudo ./scripts/destroy-taps.sh N` | Tear down TAPs, bridge, and stop dnsmasq |
+
+**VM provisioning:**
+
+| Target | Description |
+|--------|-------------|
+| `make deploy` | Provision cluster VMs via OpenTofu (cloudhypervisor provider) |
+| `make wait-ips` | Poll until all VMs have DHCP-assigned IPs |
+| `make wait-ssh` | Poll until SSH is reachable on all VMs |
+| `make destroy` | Tear down all VMs |
+| `make destroy-full` | Destroy VMs, certs, kubeconfig, and inventory |
+
+**Cluster operations:**
+
+| Target | Description |
+|--------|-------------|
+| `make bootstrap` | Run the full Ansible cluster bootstrap |
+| `make smoke-test` | Validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling) |
+| `make start` / `make stop` | Start/stop VMs via ch-remote API (ACPI shutdown) |
+| `make kubeconfig` | Fetch DHCP-resistant kubeconfig from control-plane |
+| `make update-kubeconfig` | Refresh kubeconfig after DHCP IP change |
 
 Pre-built dependencies are cached: re-running `make cluster` skips stages whose artifacts already exist. Use `make base-rebuild` to force re-baking the base image.
 
@@ -81,8 +116,8 @@ Pre-built dependencies are cached: re-running `make cluster` skips stages whose 
 
 The repository is organized by concern, not by lifecycle stage:
 
-- `packer/` — Packer template, kickstart configuration, and provisioning scripts for the base OS image
-- `terraform/` — OpenTofu/Terraform configuration for libvirt networking, storage pools, and VM definitions
+- `packer/` — Packer templates (`base.pkr.hcl`), cloud-init configs, and provisioning scripts for base image baking
+- `terraform/` — OpenTofu/Terraform configuration for VM definitions (cloudhypervisor provider), bridge TAP networking, and cloud-init
 - `ansible/` — Ansible playbooks, roles (certs, etcd, kubernetes-cp, kubelet, cilium), and dynamic inventory script
 - `container/` — Containerfile for the Ansible runner
 - `extensions/` — Build scripts and download utilities for systemd-sysext and systemd-confext packaging
@@ -101,9 +136,11 @@ The repository is organized by concern, not by lifecycle stage:
 
 - **Podman-based Ansible runner**: Ansible runs inside a container rather than directly on the host. This keeps the host clean of Python/Ansible dependencies and ensures the execution environment matches the tested configuration.
 
-- **MAC-based IP resolution**: The Makefile uses virsh DHCP lease information with MAC address matching (rather than relying solely on Terraform outputs) to reliably resolve VM IPs after provisioning.
+- **MAC-based IP resolution**: The Makefile reads `/var/lib/misc/dnsmasq/k8sbr0.leases` with MAC address matching to reliably resolve VM IPs after provisioning — no reliance on Terraform outputs or libvirt.
 
-- **Headless Packer build**: The base image is built without a display, using a kickstart file delivered via virtual OEMDRV CD-ROM and a modified boot ISO with serial console and SSH in the installer environment.
+- **Headless Packer build**: The base image is built without a display using a Fedora Cloud Base image with cloud-init SSH key injection — no kickstart or ISO modification needed.
+
+- **Cloud-Hypervisor VMM**: CH was adopted for its fast VM startup (~200--400 ms per VM), smaller binary, stateless operation (no libvirtd daemon), and cloud-native VMM design (virtio-only, no legacy emulation).
 
 ## Gateway API
 
