@@ -1,9 +1,13 @@
 terraform {
   required_version = ">= 1.5"
   required_providers {
-    libvirt = {
-      source  = "registry.terraform.io/dmacvicar/libvirt"
-      version = "~> 0.8"
+    cloudhypervisor = {
+      source  = "registry.terraform.io/community/cloudhypervisor"
+      version = "~> 0.1"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
     }
   }
 }

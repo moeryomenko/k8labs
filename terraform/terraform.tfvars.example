@@ -1,23 +1,22 @@
-libvirt_uri       = "qemu:///system"
-base_image_path   = "../build/k8labs-base.qcow2"
-pool_path         = "/var/lib/libvirt/k8s-pool"
+base_image_path = "../build/k8labs-base.qcow2"
+firmware_path  = "../build/CLOUDHV.fd"
 
 control_plane = {
-  name = "k8s-cp-1"
+  name = "cp1"
   cpu  = 2
   ram  = 2048
   disk = 20480
+  mac  = "c6:e5:50:1c:ec:01"
 }
 
 workers = [
   {
-    name = "k8s-worker-1"
+    name = "w1"
     cpu  = 2
     ram  = 4096
     disk = 40960
+    mac  = "c6:e5:50:1c:ec:02"
   }
 ]
 
-network_cidr     = "192.168.124.0/24"
-bridge_name      = "virbr0"
-ssh_public_key_path = "~/.ssh/id_rsa.pub"
+ssh_public_key = "ssh-ed25519 AAAAC3... user@host"

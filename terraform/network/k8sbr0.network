@@ -1,0 +1,9 @@
+# k8sbr0.network — systemd-networkd network configuration for the cluster bridge
+# dnsmasq handles DHCP, not systemd-networkd
+[Match]
+Name=k8sbr0
+
+[Network]
+Address=192.168.124.1/24
+IPForward=yes
+DHCPServer=no

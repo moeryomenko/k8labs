@@ -1,23 +1,19 @@
-resource "libvirt_pool" "cluster" {
-  name = "k8s-cluster-pool"
-  type = "dir"
+# Storage for VMs.
+#
+# Unlike libvirt, Cloud-Hypervisor does not manage storage pools. VM disk
+# images are files on the host filesystem, passed directly by path.
+#
+# The base image is built by Packer (make base) and stored at
+# build/k8labs-base.qcow2. Each VM shares this base image as its root disk.
+#
+# For copy-on-write efficiency, consider using qcow2 backing files:
+#   qemu-img create -b ../build/k8labs-base.qcow2 -f qcow2 /path/to/overlay.qcow2
+# and pass the overlay path as base_image_path per VM.
 
-  target = {
-    path = var.pool_path
-  }
-}
-
-resource "libvirt_volume" "base_image" {
-  name   = "k8labs-base"
-  pool   = libvirt_pool.cluster.name
-  target = {
-    format = { type = "qcow2" }
-  }
-
-  create = {
-    content = {
-      # base_image_path is relative to terraform/ directory: ../build/k8labs-base.qcow2
-      url = "file://${abspath(var.base_image_path)}"
-    }
+output "base_image" {
+  description = "Base image path for VMs"
+  value = {
+    path   = var.base_image_path
+    format = "qcow2"
   }
 }
