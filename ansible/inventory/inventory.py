@@ -18,6 +18,10 @@ from typing import Any
 
 PROJECT_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "../.."))
 TERRAFORM_DIR = os.path.join(PROJECT_DIR, "terraform")
+# systemd-networkd DHCP server lease file (JSON). The legacy dnsmasq lease
+# file at /var/lib/misc/dnsmasq/k8sbr0.leases is read as a fallback for
+# deployments that still run dnsmasq as the DHCP server.
+SYSTEMD_LEASES = "/var/lib/systemd/network/dhcp-server-lease/k8sbr0"
 DNSMASQ_LEASES = "/var/lib/misc/dnsmasq/k8sbr0.leases"
 
 
@@ -87,6 +91,30 @@ def read_leases(path: str) -> dict[str, str]:
                 ip = parts[2]
                 leases[mac] = ip
     except (FileNotFoundError, PermissionError, OSError):
+        pass
+    return leases
+
+
+def read_systemd_leases(path: str) -> dict[str, str]:
+    """Parse the systemd-networkd DHCP server lease file into a MAC-to-IP map.
+
+    The file is JSON with a ``Leases`` array; each lease carries
+    ``HardwareAddress`` (byte list) and ``AddressString`` fields.
+    Returns an empty dict when the file cannot be read or has no leases.
+    """
+    leases: dict[str, str] = {}
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        for lease in data.get("Leases", []):
+            mac_bytes = lease.get("HardwareAddress", [])
+            if len(mac_bytes) != 6:
+                continue
+            mac = ":".join(f"{b:02x}" for b in mac_bytes)
+            ip = lease.get("AddressString", "")
+            if ip:
+                leases[mac] = ip
+    except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
         pass
     return leases
 
@@ -162,7 +190,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         nodes = run_tofu()
-        leases = read_leases(DNSMASQ_LEASES)
+        leases = read_systemd_leases(SYSTEMD_LEASES)
+        if not leases:
+            leases = read_leases(DNSMASQ_LEASES)
         inventory = build_inventory(nodes, leases)
         json.dump(inventory, sys.stdout, indent=2)
         print()

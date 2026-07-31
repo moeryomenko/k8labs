@@ -91,7 +91,7 @@
             ]
           }
         mode: "0644"
-      force: false
+        force: false
 
     - name: Set correct hostname from inventory
       ansible.builtin.hostname:
