@@ -1,0 +1,9 @@
+# k8sbr0.netdev — Bridge for cluster VM networking
+#
+# Creates a Linux bridge that TAP devices attach to,
+# providing L2 connectivity between host and VMs.
+
+[NetDev]
+Name=k8sbr0
+Kind=bridge
+MACAddress=c6:e5:50:1c:ec:00

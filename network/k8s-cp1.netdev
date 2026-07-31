@@ -1,0 +1,9 @@
+# k8s-cp1.netdev — TAP device for the control-plane VM
+#
+# Creates a persistent TAP device that the control-plane
+# QEMU VM connects to. Must be enslaved to k8sbr0 via a
+# .network file (see README).
+
+[NetDev]
+Name=k8s-cp1
+Kind=tap

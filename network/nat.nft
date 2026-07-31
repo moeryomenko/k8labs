@@ -1,0 +1,24 @@
+#!/usr/sbin/nft -f
+# nat.nft — NAT and forwarding rules for cluster networking
+#
+# Replaces the iptables rules in the Makefile:
+#   - MASQUERADE for traffic from 192.168.124.0/24
+#   - ACCEPT forward on iifname/oifname k8sbr0
+#
+# Load: nft -f network/nat.nft
+# Auto-load: systemctl enable nftables && cp to /etc/nftables.conf
+
+table inet nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept
+        ip saddr 192.168.124.0/24 masquerade
+    }
+}
+
+table inet filter {
+    chain forward {
+        type filter hook forward priority filter; policy accept
+        iifname "k8sbr0" accept
+        oifname "k8sbr0" accept
+    }
+}

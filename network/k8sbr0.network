@@ -1,0 +1,40 @@
+# k8sbr0.network — Bridge addressing and DHCP server
+#
+# Assigns the bridge address and runs a DHCP server for
+# attached VMs. Replaces the former dnsmasq-based DHCP configuration.
+
+[Match]
+Name=k8sbr0
+
+[Network]
+Address=192.168.124.1/24
+DHCPServer=yes
+
+[DHCPServer]
+# Pool: 192.168.124.20 - 192.168.124.200
+# (offset 20 from network base, size 181 = 200 - 20 + 1)
+PoolOffset=20
+PoolSize=181
+
+# Subnet mask is derived from the /24 prefix on the address.
+
+# Gateway / Router
+EmitRouter=yes
+Router=192.168.124.1
+
+# DNS
+EmitDNS=yes
+DNS=192.168.124.1
+
+# Domain
+EmitDomain=yes
+Domain=k8s.local
+
+# Lease time: 12 hours
+DefaultLeaseTimeSec=43200
+MaxLeaseTimeSec=43200
+
+[DHCPServerStaticLease]
+# Packer build VM
+MACAddress=de:ad:be:ef:00:01
+Address=192.168.124.10
