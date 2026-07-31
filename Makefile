@@ -95,91 +95,76 @@ base-cloudinit: base-ssh-key ## Generate cloud-init CIDATA disk for Packer build
 		--network-config packer/cloud-init/network-config \
 		--output "$(CLOUDINIT_DISK)"
 
-.PHONY: base-tap
-base-tap: ## Create TAP device for Packer build (attached to k8sbr0 bridge)
-	@echo '==> Creating TAP device $(TAP) and attaching to bridge...'
-	@if ip link show "$(TAP)" &>/dev/null 2>&1; then \
-		echo '    TAP $(TAP) already exists'; \
-	else \
-		sudo ip tuntap add dev "$(TAP)" mode tap; \
-		echo '    Created TAP $(TAP)'; \
-	fi
-	@if ! ip link show k8sbr0 &>/dev/null; then \
-		echo '    Creating bridge k8sbr0...'; \
-		sudo ip link add name k8sbr0 type bridge; \
-		sudo ip addr add 192.168.124.1/24 dev k8sbr0; \
-		sudo ip link set k8sbr0 up; \
-		echo '    Created and brought up bridge k8sbr0'; \
-	fi
-	@if ip link show "$(TAP)" | grep -q "master k8sbr0" 2>/dev/null; then \
-		echo '    $(TAP) already attached to bridge k8sbr0'; \
-	else \
-		sudo ip link set "$(TAP)" master k8sbr0; \
-		echo '    Attached $(TAP) to k8sbr0'; \
-	fi
-	@sudo ip link set "$(TAP)" up
-	@echo '    $(TAP) ready (DHCP handled by bridge dnsmasq on k8sbr0)'
-
-.PHONY: base-cleanup-tap
-base-cleanup-tap: ## Remove Packer build TAP device and DHCP
-	@echo '==> Stopping dnsmasq DHCP...'
-	@sudo pkill -F /tmp/dnsmasq-base.pid 2>/dev/null && echo '    Stopped dnsmasq' || echo '    dnsmasq not running'
-	@echo '==> Removing TAP device $(TAP)...'
-	@if ip link show "$(TAP)" &>/dev/null 2>&1; then \
-		sudo ip link delete "$(TAP)"; \
-		echo '    Removed TAP $(TAP)'; \
-	else \
-		echo '    TAP $(TAP) does not exist'; \
-	fi
-
 .PHONY: base
-base: base-deps base-cloudinit base-tap ## Build base image via Packer
+base: base-deps base-cloudinit ## Build base image via Packer
 	@if [ -f "$(BASE_IMAGE_DEST)" ]; then \
 		echo 'Base image already exists: $(BASE_IMAGE_DEST)'; \
 		echo 'To force a rebuild, run: make base-rebuild'; \
 		exit 0; \
 	fi
 	@echo 'Building base image via Packer...'
-	mkdir -p build/base-image
+	rm -rf build/base-image
 	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
 		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
 	@echo 'Copying base image to build/ for Terraform consumption...'
-	mkdir -p build
-	cp build/base-image/k8labs-base.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || \
-		cp build/base-image/*.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || true
+	@set -euo pipefail; \
+	ARTIFACT=$$(find packer/output-base -maxdepth 1 -type f ! -name '*.lock' | head -1); \
+	if [ -z "$$ARTIFACT" ]; then \
+		echo 'ERROR: no Packer artifact found in packer/output-base/' >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p build; \
+	qemu-img convert -O qcow2 "$$ARTIFACT" "$(BASE_IMAGE_DEST)"; \
+	echo "    Converted $$ARTIFACT -> $(BASE_IMAGE_DEST)"
 
 .PHONY: base-rebuild
-base-rebuild: base-deps base-cloudinit base-tap ## Force rebuild of the base image
+base-rebuild: base-deps base-cloudinit ## Force rebuild of the base image
 	@echo 'Forcing base image rebuild via Packer...'
 	rm -f "$(BASE_IMAGE_DEST)"
 	rm -rf build/base-image
 	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
 		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
-	mkdir -p build
-	cp build/base-image/k8labs-base.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || \
-		cp build/base-image/*.qcow2 "$(BASE_IMAGE_DEST)" 2>/dev/null || true
+	@set -euo pipefail; \
+	ARTIFACT=$$(find packer/output-base -maxdepth 1 -type f ! -name '*.lock' | head -1); \
+	if [ -z "$$ARTIFACT" ]; then \
+		echo 'ERROR: no Packer artifact found in packer/output-base/' >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p build; \
+	qemu-img convert -O qcow2 "$$ARTIFACT" "$(BASE_IMAGE_DEST)"; \
+	echo "    Converted $$ARTIFACT -> $(BASE_IMAGE_DEST)"
 
 # --- Networking ---
 
 .PHONY: network-up
-network-up: ## Create bridge, TAP devices, and start dnsmasq for VMs
-	@echo '==> Setting up VM networking...'
-	@sudo bash scripts/create-taps.sh 1 2>&1 | tail -3
-	@echo '==> Enabling IP forwarding for bridge NAT...'
-	@sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
-	@sudo iptables -t nat -C POSTROUTING -s 192.168.124.0/24 -j MASQUERADE 2>/dev/null || \
-		sudo iptables -t nat -A POSTROUTING -s 192.168.124.0/24 -j MASQUERADE
-	@sudo iptables -C FORWARD -i k8sbr0 -j ACCEPT 2>/dev/null || \
-		sudo iptables -A FORWARD -i k8sbr0 -j ACCEPT
-	@sudo iptables -C FORWARD -o k8sbr0 -j ACCEPT 2>/dev/null || \
-		sudo iptables -A FORWARD -o k8sbr0 -j ACCEPT
-	@echo '==> Networking ready (bridge k8sbr0, DHCP 192.168.124.20-200)'
+network-up: ## Configure bridge+TAP networking + NAT/forwarding + DNS forwarder
+	@echo '==> Installing systemd-networkd bridge and TAP configs...'
+	sudo cp network/k8sbr0.netdev network/k8sbr0.network /etc/systemd/network/
+	sudo cp network/k8s-cp1.netdev network/k8s-cp1.network /etc/systemd/network/
+	sudo cp network/k8s-w1.netdev network/k8s-w1.network /etc/systemd/network/
+	sudo cp network/packer-tap.netdev network/packer-tap.network /etc/systemd/network/
+	sudo systemctl reload-or-restart systemd-networkd
+	@echo '==> Loading nftables NAT/forwarding rules...'
+	sudo nft -f network/nat.nft
+	@echo '==> Enabling DNS forwarder on bridge (dnsmasq)...'
+	sudo mkdir -p /etc/dnsmasq.d
+	sudo cp network/dnsmasq-k8sbr0.conf /etc/dnsmasq.d/k8sbr0.conf
+	sudo systemctl enable --now dnsmasq 2>/dev/null || true
+	sudo systemctl restart dnsmasq
+	@echo '==> Network ready (bridge k8sbr0, DHCP 192.168.124.20-200, DNS 192.168.124.1)'
 
 .PHONY: network-down
-network-down: ## Destroy bridge, TAP devices, and stop dnsmasq
-	@echo '==> Tearing down VM networking...'
-	@sudo bash scripts/destroy-taps.sh 1 2>&1 | tail -3
-	@echo '==> Networking teardown complete'
+network-down: ## Remove networking configs and flush nftables
+	@echo '==> Removing network configs...'
+	sudo rm -f /etc/systemd/network/k8sbr0.netdev /etc/systemd/network/k8sbr0.network
+	sudo rm -f /etc/systemd/network/k8s-cp1.netdev /etc/systemd/network/k8s-cp1.network
+	sudo rm -f /etc/systemd/network/k8s-w1.netdev /etc/systemd/network/k8s-w1.network
+	sudo rm -f /etc/systemd/network/packer-tap.netdev /etc/systemd/network/packer-tap.network
+	sudo rm -f /etc/dnsmasq.d/k8sbr0.conf
+	sudo systemctl restart systemd-networkd
+	@echo '==> Flushing nftables...'
+	sudo nft flush ruleset
+	@echo '==> Network teardown complete'
 
 # --- System Extensions ---
 
@@ -287,13 +272,45 @@ tfvars: ## Generate terraform.tfvars from defaults for deployment
 	@echo 'Generating deployment tfvars...'
 	@if [ ! -f "$(TFVARS)" ]; then \
 		echo '==> Creating $(TFVARS) from example...'; \
-		sed "s|ssh-ed25519 AAAAC3.*|$$(cat ~/.ssh/id_rsa.pub 2>/dev/null || echo 'YOUR_SSH_PUB_KEY')|" \
+		PUB_KEY="$$(cat ~/.ssh/id_ed25519.pub 2>/dev/null || cat ~/.ssh/id_rsa.pub 2>/dev/null || echo 'YOUR_SSH_PUB_KEY')"; \
+		sed "s|ssh-ed25519 AAAAC3.*|$$PUB_KEY|" \
 			terraform/terraform.tfvars.example > "$(TFVARS)"; \
 		echo '    Edit $(TFVARS) to adjust VM count and MAC addresses'; \
 	fi
 
+.PHONY: vm-disks
+vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backing chain)
+	@echo 'Creating VM root disks from base image...'
+	@set -euo pipefail; \
+	if [ ! -f "$(BASE_IMAGE_DEST)" ]; then \
+		echo 'ERROR: base image not found: $(BASE_IMAGE_DEST) (run make base first)' >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -f "$(TFVARS)" ]; then \
+		echo 'ERROR: $(TFVARS) not found (run make tfvars first)' >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p build/vm-disks; \
+	VDIR="$$(pwd)/build/vm-disks"; \
+	BASE="$$(pwd)/$(BASE_IMAGE_DEST)"; \
+	{ \
+		cp_line="$$(grep -A8 '^control_plane' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk '{print $$2}')"; \
+		echo "$$cp_line"; \
+		grep -A8 'name = "w' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk '{print $$2}'; \
+	} | paste - - 2>/dev/null | while read -r node size; do \
+		disk="$${VDIR}/$${node}-root.qcow2"; \
+		if [ ! -f "$$disk" ]; then \
+			echo "  Creating $$disk ($${size} MiB)..."; \
+			qemu-img convert -O qcow2 "$$BASE" "$$disk"; \
+			qemu-img resize "$$disk" "$${size}M" >/dev/null; \
+		else \
+			echo "  $$disk already exists"; \
+		fi; \
+	done; \
+	echo '  VM disks ready'
+
 .PHONY: deploy
-deploy: network-up tfvars ## Apply Terraform/OpenTofu infrastructure
+deploy: network-up tfvars vm-disks ## Apply Terraform/OpenTofu infrastructure
 	@echo 'Applying Terraform infrastructure...'
 	tofu -chdir=terraform apply -auto-approve -var-file="../$(TFVARS)"
 
@@ -379,19 +396,19 @@ container: .container.stamp ## Build Ansible runner container image
 .PHONY: inventory
 inventory: ## Test dynamic inventory output
 	@echo 'Testing Ansible dynamic inventory...'
-	ansible/inventory/tf-inventory.sh --list | python3 -m json.tool
+	ansible/inventory/inventory.py --list | python3 -m json.tool
 
 .PHONY: deploy-extensions
 deploy-extensions: ## Deploy sysext/confext extensions to all VMs (Ansible)
 	@echo 'Deploying extensions via Ansible...'
-	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
+	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
 		ansible/playbooks/deploy-extensions.yml
 
 .PHONY: certs
 certs: ## Generate TLS certificates via Ansible (community.crypto)
 	@echo 'Generating TLS certificates (Ansible)...'
-	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
+	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
 		ansible/playbooks/bootstrap.yml --tags certs
 
@@ -400,7 +417,7 @@ bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	@echo 'Bootstrapping Kubernetes cluster via Ansible...'
 	@echo '  Prerequisites: make deploy must have been run, SSH keys injected'
 	@echo '  Generating Ansible inventory from tofu state + dnsmasq leases...'
-	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json
+	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
 		ansible/playbooks/bootstrap.yml; \
 	echo '  Adding host route for LB pool...'; \
@@ -412,28 +429,24 @@ bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	fi
 
 .PHONY: wait-ips
-wait-ips: ## Wait for ALL VMs to get DHCP leases (reads dnsmasq lease file by MAC)
+wait-ips: ## Wait for ALL VMs to get DHCP leases (reads systemd-networkd lease file by MAC)
 	@echo '  Waiting for all VM IP addresses (DHCP leases)...'
 	@set -euo pipefail; \
-	LEASE_FILE=/var/lib/misc/dnsmasq/k8sbr0.leases; \
 	NODES_JSON=$$(tofu -chdir=terraform output -json nodes 2>/dev/null); \
 	if [ -z "$$NODES_JSON" ]; then echo "  ERROR: tofu output failed" >&2; exit 1; fi; \
 	total=$$(echo "$$NODES_JSON" | jq length); \
 	for i in $$(seq 1 60); do \
 		cp_ip=""; w_ips=""; found_count=0; \
-		while IFS=',' read -r name mac; do \
-			ip=$$(awk -v m="$$mac" 'BEGIN{IGNORECASE=1} $$2 == m {print $$3; exit}' "$$LEASE_FILE" 2>/dev/null || true); \
+		while IFS=, read -r name mac; do \
+			ip=$$(scripts/vm-ip.sh "$$mac" 2>/dev/null || true); \
 			if [ -n "$$ip" ]; then \
-				if [ -z "$$cp_ip" ]; then \
-					cp_ip="$$ip"; \
-				else \
-					w_ips="$$w_ips $$ip"; \
-				fi; \
+				if [ -z "$$cp_ip" ]; then cp_ip="$$ip"; \
+				else w_ips="$$w_ips $$ip"; fi; \
 				found_count=$$((found_count + 1)); \
 			fi; \
-		done < <(echo "$$NODES_JSON" | jq -r '.[] | [.name, .mac] | @csv' | tr -d '"'); \
+		done < <(echo "$$NODES_JSON" | jq -r '.[] | "\(.name),\(.mac)"'); \
 		if [ "$$found_count" -ge "$$total" ]; then \
-			echo "  All $$total VMs ready after $$i cycles — CP: $$cp_ip, Workers: $$w_ips"; \
+			echo "  All $$total VMs ready after $$i cycles -- CP: $$cp_ip, Workers:$$w_ips"; \
 			exit 0; \
 		fi; \
 		echo "  waiting ($$i/60)... CP=$${cp_ip:-none} workers=$$found_count/$$total"; \
@@ -443,14 +456,13 @@ wait-ips: ## Wait for ALL VMs to get DHCP leases (reads dnsmasq lease file by MA
 	exit 1
 
 .PHONY: wait-ssh
-wait-ssh: ## Wait for SSH to become available on all VMs (reads dnsmasq leases for IPs)
+wait-ssh: ## Wait for SSH to become available on all VMs (reads DHCP leases for IPs)
 	@echo '  Waiting for SSH connectivity on all VMs...'
 	@set -euo pipefail; \
-	LEASE_FILE=/var/lib/misc/dnsmasq/k8sbr0.leases; \
 	resolve_ip() { \
 		local vname="$$1"; \
 		local mac=$$(tofu -chdir=terraform output -json nodes 2>/dev/null | jq -r ".[] | select(.name==\"$$vname\") | .mac"); \
-		awk -v m="$$mac" 'BEGIN{IGNORECASE=1} $$2 == m {print $$3; exit}' "$$LEASE_FILE" 2>/dev/null || true; \
+		scripts/vm-ip.sh "$$mac" 2>/dev/null || true; \
 	}; \
 	check_ssh() { \
 		local ip="$$1" name="$$2"; \
@@ -483,10 +495,10 @@ wait-ssh: ## Wait for SSH to become available on all VMs (reads dnsmasq leases f
 	if [ "$$has_error" -ne 0 ]; then echo "  ERROR: one or more VMs failed SSH check" >&2; exit 1; fi
 
 .PHONY: prereq
-prereq: ## Validate required build tools (tofu, cloud-hypervisor, podman, openssl)
+prereq: ## Validate required build tools (tofu, cloud-hypervisor, podman, openssl, nft, systemctl)
 	@set -euo pipefail; \
 	fail=0; \
-	for cmd in tofu cloud-hypervisor podman openssl; do \
+	for cmd in tofu cloud-hypervisor podman openssl nft systemctl; do \
 		if ! command -v $$cmd &>/dev/null; then \
 			echo "ERROR: required tool '$$cmd' not found" >&2; \
 			fail=1; \
@@ -495,7 +507,7 @@ prereq: ## Validate required build tools (tofu, cloud-hypervisor, podman, openss
 	exit $$fail
 
 .PHONY: cluster
-cluster: network-up base sysexts confexts container ## Full pipeline: network -> base -> extensions -> container -> deploy -> bootstrap
+cluster: network-up base tfvars vm-disks sysexts confexts container ## Full pipeline: network -> base -> extensions -> container -> deploy -> bootstrap
 	@set -euo pipefail; \
 	echo 'Bootstrapping cluster...'; \
 	echo '  Step 1: Deploy VMs (tofu apply)...'; \
@@ -505,7 +517,7 @@ cluster: network-up base sysexts confexts container ## Full pipeline: network ->
 	echo '  Step 3: Wait for SSH connectivity on all VMs...'; \
 	$(MAKE) wait-ssh; \
 	echo '  Step 4: Generate Ansible inventory...'; \
-	$(ANSIBLE_DIR)/inventory/tf-inventory.sh --list > $(ANSIBLE_DIR)/inventory/inventory.json; \
+	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json; \
 	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
 	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
 		$(ANSIBLE_DIR)/playbooks/bootstrap.yml; \
@@ -540,9 +552,8 @@ cluster: network-up base sysexts confexts container ## Full pipeline: network ->
 .PHONY: kubeconfig update-kubeconfig
 kubeconfig: ## Fetch DHCP-resistant kubeconfig from control-plane node
 	@set -euo pipefail; \
-	LEASE_FILE=/var/lib/misc/dnsmasq/k8sbr0.leases; \
 	CP_MAC=$$(tofu -chdir=terraform output -json nodes 2>/dev/null | jq -r '.[0].mac'); \
-	cp_ip=$$(awk -v m="$$CP_MAC" 'BEGIN{IGNORECASE=1} $$2 == m {print $$3; exit}' "$$LEASE_FILE" 2>/dev/null || true); \
+	cp_ip=$$(scripts/vm-ip.sh "$$CP_MAC" 2>/dev/null || true); \
 	if [ -z "$$cp_ip" ]; then \
 		echo "ERROR: Cannot determine control-plane IP. Ensure VMs are deployed (make deploy)." >&2; \
 		exit 1; \
