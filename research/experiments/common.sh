@@ -273,6 +273,58 @@ wait_for_pod_running() {
 # ---- Data Collection ----
 
 # ---------------------------------------------------------------------------
+# start_load_generation — Generate HTTP load against a workload pod
+#
+# Used by cpu-burner and other HTTP-based workloads: the runner deploys
+# the pod but the pod stays idle unless something hits its endpoint.
+# The host has no route to the pod CIDR, so the load loop runs on the
+# node that hosts the pod (SSH) where the pod IP is directly reachable.
+#
+# Arguments:
+#   $1 — pod name
+#   $2 — endpoint path (e.g. "/fibonacci?n=38")
+#   $3 — duration in seconds
+# Returns: background PID on stdout
+# ---------------------------------------------------------------------------
+start_load_generation() {
+    local pod_name="$1"
+    local endpoint="$2"
+    local duration="$3"
+
+    local pod_ip
+    pod_ip="$(kubectl --kubeconfig "$KUBECONFIG" get pod "$pod_name" \
+        -o jsonpath='{.status.podIP}' 2>/dev/null || true)"
+    if [[ -z "$pod_ip" ]]; then
+        log_error "Cannot resolve pod IP for '$pod_name' — skipping load generation"
+        return 1
+    fi
+
+    local node_ip
+    node_ip="$(get_pod_node_ip "$pod_name" 2>/dev/null || true)"
+    if [[ -z "$node_ip" ]]; then
+        log_error "Cannot resolve node IP for '$pod_name' — skipping load generation"
+        return 1
+    fi
+
+    local url="http://${pod_ip}:8080${endpoint}"
+    log "Generating HTTP load on node ${node_ip} against ${url} (duration: ${duration}s)"
+
+    # Background loop on the pod's node: hammer the endpoint until the
+    # duration elapses. Kept alive across the SSH session via nohup and
+    # killed by the outer bg_stop_all (pid is the ssh client process).
+    (
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=5 -o BatchMode=yes \
+            "root@${node_ip}" \
+            "end_time=\$(( \$(date +%s) + ${duration} )); \
+             while [ \$(date +%s) -lt \$end_time ]; do \
+                 curl -s -o /dev/null '${url}' || true; \
+             done" || true
+    ) &
+    echo "$!"
+}
+
+# ---------------------------------------------------------------------------
 # collect_cgroup_data — Run cgroup-watch.sh for a duration, save output
 #
 # Arguments:

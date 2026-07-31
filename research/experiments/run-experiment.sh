@@ -350,7 +350,7 @@ main() {
     if [[ "$is_colocated" == false ]]; then
         single_workload_type="$(parse_yaml_value "$config_file" "workload.type")" \
             || die "Config missing 'workload.type'"
-        single_workload_params_endpoint="$(parse_yaml_value "$config_file" "workload.params.endpoint" 2>/dev/null || true)"
+        single_workload_params_endpoint="$(parse_yaml_subkey "$config_file" "workload.params.endpoint" 2>/dev/null || true)"
     fi
 
     # ---- Parse matrix entries ----
@@ -600,6 +600,16 @@ with open('${mdf}', 'w') as f:
                 # Deploy pod
                 local pod_name
                 pod_name="$(run_cmd deploy_pod "$manifest")"
+
+                # Start HTTP load generation for endpoint-based workloads
+                local load_pid=""
+                if [[ -n "$single_workload_params_endpoint" && "$DRY_RUN" == false ]]; then
+                    load_pid="$(start_load_generation "$pod_name" "$single_workload_params_endpoint" "$duration" 2>/dev/null || true)"
+                    if [[ -n "$load_pid" ]]; then
+                        _BG_PIDS+=("$load_pid")
+                        log "Load generator started (PID ${load_pid})"
+                    fi
+                fi
 
                 # ---- Perfetto trace setup ----
                 local perfetto_node_ip=""
