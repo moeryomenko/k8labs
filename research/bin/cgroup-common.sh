@@ -227,8 +227,9 @@ get_container_pid() {
     local node_ip="$1"
     local container_id="$2"
 
+    # Nodes may not have jq installed; parse the inspect JSON with python3.
     local pid
-    pid="$(ssh_node "$node_ip" "/usr/bin/crictl inspect '$container_id' 2>/dev/null | jq -r '.info.pid'")" || {
+    pid="$(ssh_node "$node_ip" "/usr/bin/crictl inspect '$container_id' 2>/dev/null | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)[\"info\"][\"pid\"])'")" || {
         log_error "Failed to get PID for container $container_id on node $node_ip"
         return 1
     }
