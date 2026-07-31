@@ -71,7 +71,6 @@ Individual pipeline stages can be run separately:
 | `make base-rebuild` | Force rebuild base image |
 | `make base-deps` | Download CLOUDHV.fd firmware + Fedora Cloud Base qcow2 |
 | `make base-cloudinit` | Generate FAT16 CIDATA disk for Packer SSH key injection |
-| `make base-tap` | Create TAP device for Packer build VM |
 | `make plugin` | Build and install [cloudhypervisor Packer plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) from source |
 
 **Extensions and container:**
@@ -87,8 +86,8 @@ Individual pipeline stages can be run separately:
 
 | Target | Description |
 |--------|-------------|
-| `sudo ./scripts/create-taps.sh N` | Create bridge `k8sbr0` + TAP devices + start dnsmasq for N workers |
-| `sudo ./scripts/destroy-taps.sh N` | Tear down TAPs, bridge, and stop dnsmasq |
+| `sudo make network-up` | Create bridge `k8sbr0` + TAP devices + DHCP via systemd-networkd |
+| `sudo make network-down` | Tear down TAPs, bridge, and flush nftables |
 
 **VM provisioning:**
 
