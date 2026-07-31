@@ -173,8 +173,10 @@ deploy_pod() {
     [[ -f "$manifest" ]] || die "Pod manifest not found: $manifest"
 
     log "Deploying pod from: $manifest"
-    # Delete first to avoid conflicts with changed fields (e.g. env vars)
-    kubectl --kubeconfig "$KUBECONFIG" delete -f "$manifest" --ignore-not-found --now 2>/dev/null || true
+    # Delete first to avoid conflicts with changed fields (e.g. env vars).
+    # Suppress stdout too — kubectl prints 'pod "name" deleted' to stdout,
+    # which would pollute the returned pod name below.
+    kubectl --kubeconfig "$KUBECONFIG" delete -f "$manifest" --ignore-not-found --now >/dev/null 2>&1 || true
     kubectl --kubeconfig "$KUBECONFIG" apply -f "$manifest" >/dev/null
 
     # Extract pod name from manifest
