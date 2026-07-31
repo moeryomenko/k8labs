@@ -1,0 +1,271 @@
+# extensions/manifest.yaml — Declarative extension manifest
+#
+# Describes all systemd-sysext and systemd-confext extensions that the
+# project builds. Each entry is self-contained: source source, metadata,
+# and build configuration.
+#
+# schema_version: 1  (initial version)
+#
+# Sources of truth:
+#  - extensions/download-sysexts.sh  (download URLs, versions, binary paths)
+#  - extensions/build.sh             (build process, validation)
+#  - Makefile (lines 149-230)        (sysext/confext names, targets, output names)
+#  - sysext/*/extension-release.d/   (sysext metadata)
+#  - confext/*/extension-release.d/  (confext metadata)
+
+schema_version: 1
+
+# ---------------------------------------------------------------------------
+# Global settings applied to all extensions
+# ---------------------------------------------------------------------------
+settings:
+  # Base OS metadata — all extensions target the same host OS
+  id: "fedora"
+  version_id: "44"
+  kernel_version: "7.1"
+
+  # Directory (relative to project root) where built .raw images are placed
+  release_dir: "extensions/release"
+
+# ---------------------------------------------------------------------------
+# Build configuration — shared across extension types
+# ---------------------------------------------------------------------------
+build:
+  # Supported extension types and their validation requirements
+  types:
+    - name: sysext
+      description: "systemd-sysext — overlays usr/ hierarchy, activated by systemd-sysext"
+      required_directories:
+        - usr
+        - extension-release.d
+      release_file_pattern: "{name}.raw"
+
+    - name: confext
+      description: "systemd-confext — overlays etc/ hierarchy, activated by systemd-confext"
+      required_directories:
+        - etc
+        - extension-release.d
+      release_file_pattern: "{name}.raw"
+
+  # Output format priority (first available tool wins)
+  output_formats:
+    - type: squashfs
+      tool: mksquashfs
+      options: ["-noappend", "-all-root"]
+    - type: iso
+      tool: genisoimage
+      options: []
+    - type: directory
+      tool: cp
+      options: ["-R"]
+
+# ===========================================================================
+# Sysexts — system extension images overlaying /usr
+# ===========================================================================
+sysexts:
+  # -----------------------------------------------------------------------
+  # kubelet: Kubernetes kubelet node agent
+  # Source: single binary from dl.k8s.io
+  # -----------------------------------------------------------------------
+  - name: kubelet
+    version: v1.32.13
+    source_dir: sysext/kubelet
+    metadata:
+      extension_name: kubelet
+    sources:
+      - url: "https://dl.k8s.io/v1.32.13/bin/linux/amd64/kubelet"
+        path: usr/bin/kubelet
+        type: binary
+        mode: 755
+    systemd_units:
+      - usr/lib/systemd/system/kubelet.service
+
+  # -----------------------------------------------------------------------
+  # cri-o: CRI-O container runtime (crio, crictl, pinns)
+  # Source: archive from storage.googleapis.com
+  # -----------------------------------------------------------------------
+  - name: cri-o
+    version: v1.35.5
+    source_dir: sysext/cri-o
+    metadata:
+      extension_name: crio
+    sources:
+      - url: "https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.v1.35.5.tar.gz"
+        type: archive
+        archive_paths:
+          - from: "*/bin/crio"
+            to: usr/bin/crio
+            mode: 755
+          - from: "*/bin/crictl"
+            to: usr/bin/crictl
+            mode: 755
+          - from: "*/bin/pinns"
+            to: usr/bin/pinns
+            mode: 755
+    systemd_units:
+      - usr/lib/systemd/system/crio.service
+      - usr/lib/systemd/system/crio-wipe.service
+
+  # -----------------------------------------------------------------------
+  # crun: Container runtime (OCI-compatible)
+  # Source: single binary from GitHub releases
+  # -----------------------------------------------------------------------
+  - name: crun
+    version: "1.28"
+    source_dir: sysext/crun
+    metadata:
+      extension_name: crun
+    sources:
+      - url: "https://github.com/containers/crun/releases/download/1.28/crun-1.28-linux-amd64"
+        path: usr/bin/crun
+        type: binary
+        mode: 755
+
+  # -----------------------------------------------------------------------
+  # cni: CNI network plugins (bridge, host-local, etc.)
+  # Source: archive from GitHub releases
+  # -----------------------------------------------------------------------
+  - name: cni
+    version: v1.9.1
+    source_dir: sysext/cni
+    metadata:
+      extension_name: cni
+    sources:
+      - url: "https://github.com/containernetworking/plugins/releases/download/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz"
+        type: archive
+        archive_strip_components: 0
+        archive_target_dir: usr/lib/cni
+        mode: 755
+
+  # -----------------------------------------------------------------------
+  # etcd: Distributed key-value store (etcd + etcdctl)
+  # Source: archive from GitHub releases
+  # -----------------------------------------------------------------------
+  - name: etcd
+    version: v3.5.17
+    source_dir: sysext/etcd
+    metadata:
+      extension_name: etcd
+    sources:
+      - url: "https://github.com/etcd-io/etcd/releases/download/v3.5.17/etcd-v3.5.17-linux-amd64.tar.gz"
+        type: archive
+        archive_paths:
+          - from: "*/etcd"
+            to: usr/bin/etcd
+            mode: 755
+          - from: "*/etcdctl"
+            to: usr/bin/etcdctl
+            mode: 755
+    systemd_units:
+      - usr/lib/systemd/system/etcd.service
+
+  # -----------------------------------------------------------------------
+  # kubernetes-cp: Kubernetes control-plane components
+  # Source: archive from dl.k8s.io (apiserver, controller-manager, scheduler, kubectl)
+  # -----------------------------------------------------------------------
+  - name: kubernetes-cp
+    version: v1.32.13
+    source_dir: sysext/kubernetes-cp
+    metadata:
+      extension_name: kubernetes-cp
+    sources:
+      - url: "https://dl.k8s.io/v1.32.13/kubernetes-server-linux-amd64.tar.gz"
+        type: archive
+        archive_paths:
+          - from: "kubernetes/server/bin/kube-apiserver"
+            to: usr/bin/kube-apiserver
+            mode: 755
+          - from: "kubernetes/server/bin/kube-controller-manager"
+            to: usr/bin/kube-controller-manager
+            mode: 755
+          - from: "kubernetes/server/bin/kube-scheduler"
+            to: usr/bin/kube-scheduler
+            mode: 755
+          - from: "kubernetes/server/bin/kubectl"
+            to: usr/bin/kubectl
+            mode: 755
+    systemd_units:
+      - usr/lib/systemd/system/kube-apiserver.service
+      - usr/lib/systemd/system/kube-controller-manager.service
+      - usr/lib/systemd/system/kube-scheduler.service
+
+  # -----------------------------------------------------------------------
+  # perfetto: Performance tracing tool (tracebox)
+  # Source: single binary from get.perfetto.dev
+  # -----------------------------------------------------------------------
+  - name: perfetto
+    version: latest
+    source_dir: sysext/perfetto
+    metadata:
+      extension_name: perfetto
+    sources:
+      - url: "https://get.perfetto.dev/tracebox"
+        path: usr/bin/tracebox
+        type: binary
+        mode: 755
+
+# ===========================================================================
+# Confexts — configuration extension images overlaying /etc
+#
+# Confexts are local configuration overlays with no external downloads.
+# Each overlays etc/ files onto the host filesystem via systemd-confext.
+# ===========================================================================
+confexts:
+  # -----------------------------------------------------------------------
+  # worker: Worker node kubeadm join configuration
+  # -----------------------------------------------------------------------
+  - name: worker
+    source_dir: confext/worker
+    output_name: confext-worker
+    metadata:
+      extension_name: worker
+    config_files:
+      - etc/kubernetes/kubeadm-join-config.yaml
+
+  # -----------------------------------------------------------------------
+  # cri-o: CRI-O and container runtime configuration
+  # -----------------------------------------------------------------------
+  - name: cri-o
+    source_dir: confext/cri-o
+    output_name: confext-cri-o
+    metadata:
+      extension_name: cri-o
+    config_files:
+      - etc/crio/crio.conf
+      - etc/crio/crio.conf.d/10-crun.conf
+      - etc/containers/registries.conf.d/10-k8s-labs.conf
+
+  # -----------------------------------------------------------------------
+  # kubernetes: Kubernetes node configuration (kubelet, sysctl, modules)
+  # -----------------------------------------------------------------------
+  - name: kubernetes
+    source_dir: confext/kubernetes
+    output_name: confext-kubernetes
+    metadata:
+      extension_name: kubernetes
+    config_files:
+      - etc/kubernetes/kubelet/config.yaml
+      - etc/sysctl.d/60-kubernetes.conf
+      - etc/modules-load.d/k8s.conf
+
+  # -----------------------------------------------------------------------
+  # etcd: etcd configuration
+  # -----------------------------------------------------------------------
+  - name: etcd
+    source_dir: confext/etcd
+    output_name: confext-etcd
+    metadata:
+      extension_name: etcd
+    config_files:
+      - etc/etcd/etcd.conf.yml
+
+  # -----------------------------------------------------------------------
+  # kubernetes-cp: Control-plane static pod manifests directory (stub)
+  # -----------------------------------------------------------------------
+  - name: kubernetes-cp
+    source_dir: confext/kubernetes-cp
+    output_name: confext-kubernetes-cp
+    metadata:
+      extension_name: kubernetes-cp
+    config_files:
+      - etc/kubernetes/manifests/.gitkeep
