@@ -40,12 +40,11 @@
     dest: /var/lib/kubelet/kubeconfig
     mode: "0600"
 
-- name: Resolve {{NODE_IP}} placeholder in kubelet config
-  ansible.builtin.replace:
-    path: /etc/kubernetes/kubelet/config.yaml
-    regexp: "{{ '{{NODE_IP}}' }}"
-    replace: "{{ ansible_host }}"
-  failed_when: false
+- name: Configure kubelet settings from template
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/kubernetes/kubelet/config.yaml
+    mode: "0644"
 
 - name: Start kubelet
   ansible.builtin.systemd:
