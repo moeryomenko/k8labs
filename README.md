@@ -28,7 +28,7 @@ The cluster environment is built in stages, each producing an artifact consumed 
 
 3. **Ansible runner container** (Podman/Containerfile) — a self-contained execution environment with Ansible, community.crypto, community.general, kubectl, and Cilium CLI. All Ansible operations run inside this container for reproducibility.
 
-4. **VM provisioning** (OpenTofu/Terraform) — a [cloudhypervisor provider](https://github.com/moeryomenko/tf-provider-cloud-hypervisor) configuration that provisions control plane and worker VMs from the base image, with cloud-init metadata (hostname, SSH keys) attached as a FAT16 CIDATA disk. VM specifications (CPU, RAM, disk) are configurable per node. VMs use TAP devices on a shared Linux bridge (`k8sbr0`) with DHCP from a standalone dnsmasq.
+4. **VM provisioning** (OpenTofu/Terraform) — a [cloudhypervisor provider](https://github.com/moeryomenko/tf-provider-cloud-hypervisor) configuration that provisions control plane and worker VMs from the base image, with cloud-init metadata (hostname, SSH keys) attached as a FAT16 CIDATA disk. VM specifications (CPU, RAM, disk) are configurable per node. VMs use TAP devices on a shared Linux bridge (`k8sbr0`) with DHCP from systemd-networkd and DNS forwarding via dnsmasq.
 
 5. **Cluster bootstrapping** (Ansible) — Ansible playbooks orchestrate the full cluster bring-up: distributing system extensions, generating and deploying TLS certificates, bootstrapping etcd, initializing the Kubernetes control plane, configuring kubelet on workers, deploying Cilium CNI, and configuring Layer 2 load balancer IP pools. The bootstrap follows the KTHW service sequence (etcd -> API server -> controller manager -> scheduler -> kubelet -> kube-proxy -> CNI).
 
@@ -135,7 +135,7 @@ The repository is organized by concern, not by lifecycle stage:
 
 - **Podman-based Ansible runner**: Ansible runs inside a container rather than directly on the host. This keeps the host clean of Python/Ansible dependencies and ensures the execution environment matches the tested configuration.
 
-- **MAC-based IP resolution**: The Makefile reads `/var/lib/misc/dnsmasq/k8sbr0.leases` with MAC address matching to reliably resolve VM IPs after provisioning — no reliance on Terraform outputs or libvirt.
+- **MAC-based IP resolution**: The Makefile reads the systemd-networkd DHCP server lease file (`/var/lib/systemd/network/dhcp-server-lease/k8sbr0`) with MAC address matching to reliably resolve VM IPs after provisioning — no reliance on Terraform outputs or libvirt. A `scripts/vm-ip.sh` helper provides the lookup for both systemd-networkd and legacy dnsmasq lease formats.
 
 - **Headless Packer build**: The base image is built without a display using a Fedora Cloud Base image with cloud-init SSH key injection — no kickstart or ISO modification needed.
 
