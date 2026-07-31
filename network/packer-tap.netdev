@@ -1,0 +1,9 @@
+# packer-tap.netdev — TAP device for Packer base-image build VM
+#
+# Used during make base to provide SSH connectivity to the
+# cloud-hypervisor Packer builder. Attached to k8sbr0 bridge
+# so the builder VM gets a DHCP lease.
+
+[NetDev]
+Name=packer-tap
+Kind=tap

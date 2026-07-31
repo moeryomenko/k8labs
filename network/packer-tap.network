@@ -1,0 +1,11 @@
+# packer-tap.network — Enslave Packer build TAP to k8sbr0 bridge
+#
+# Must be copied alongside packer-tap.netdev so the TAP device
+# is attached to the bridge and the Packer builder VM gets
+# network access during base-image baking.
+
+[Match]
+Name=packer-tap
+
+[Network]
+Bridge=k8sbr0

@@ -11,7 +11,12 @@ files that replace the imperative bash scripts (`scripts/create-taps.sh`,
 | `k8sbr0.netdev` | Declares the `k8sbr0` Linux bridge. |
 | `k8sbr0.network` | Assigns `192.168.124.1/24` to the bridge and runs a DHCP server (pool 192.168.124.20–200, 12h lease, domain `k8s.local`, static lease for Packer VM at .10). |
 | `k8s-cp1.netdev` | Declares the `k8s-cp1` TAP device for the control-plane VM. |
+| `k8s-cp1.network` | Enslaves `k8s-cp1` TAP to `k8sbr0` bridge. |
 | `k8s-w1.netdev` | Declares the `k8s-w1` TAP device for the first worker VM. |
+| `k8s-w1.network` | Enslaves `k8s-w1` TAP to `k8sbr0` bridge. |
+| `packer-tap.netdev` | Declares the `packer-tap` TAP device for the Packer base-image build VM. |
+| `packer-tap.network` | Enslaves `packer-tap` to `k8sbr0` bridge. |
+| `dnsmasq-k8sbr0.conf` | dnsmasq DNS forwarder listening on the bridge address (192.168.124.1:53) for cluster VMs. |
 | `nat.nft` | nftables ruleset: MASQUERADE for the VM subnet + FORWARD ACCEPT on `k8sbr0`. |
 
 ## How to Load
@@ -36,6 +41,18 @@ For persistence, include `nat.nft` in `/etc/nftables.conf` or copy it:
 ```bash
 sudo cp network/nat.nft /etc/nftables.conf
 sudo systemctl enable --now nftables
+```
+
+### DNS forwarding (dnsmasq)
+
+The DHCP server hands out `192.168.124.1` as the DNS server, so the host
+must run a DNS forwarder on the bridge address. Install the dnsmasq
+config and start the service:
+
+```bash
+sudo mkdir -p /etc/dnsmasq.d
+sudo cp network/dnsmasq-k8sbr0.conf /etc/dnsmasq.d/k8sbr0.conf
+sudo systemctl enable --now dnsmasq
 ```
 
 ## Enslaving TAPs to the Bridge

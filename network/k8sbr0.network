@@ -22,7 +22,8 @@ PoolSize=181
 EmitRouter=yes
 Router=192.168.124.1
 
-# DNS
+# DNS — dnsmasq runs on the host at the bridge address and forwards
+# to upstream resolvers (see /etc/dnsmasq.d/k8sbr0.conf).
 EmitDNS=yes
 DNS=192.168.124.1
 
