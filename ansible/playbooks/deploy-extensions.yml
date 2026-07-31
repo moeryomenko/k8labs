@@ -4,24 +4,36 @@
   gather_facts: false
   vars:
     project_dir: "{{ playbook_dir }}/../.."
+    sysext_names:
+      - cni
+      - cri-o
+      - crun
+      - etcd
+      - kubelet
+      - kubernetes-cp
+      - perfetto
+    confext_names:
+      - cri-o
+      - etcd
+      - kubernetes
+      - kubernetes-cp
+      - worker
   tasks:
     # ---------------------------------------------------------------------------
     # Stage 0 — Node initialization (disk resize, dependencies, configuration)
     # ---------------------------------------------------------------------------
-    - name: Grow root partition to fill available disk space
-      ansible.builtin.raw: |
-        set -e
-        # Fix GPT if needed
-        sgdisk -e /dev/vda 2>/dev/null || true
-        # Grow partition 3 to fill the disk
-        parted -s /dev/vda resizepart 3 100% 2>/dev/null || (
-          sgdisk -d 3 /dev/vda 2>/dev/null
-          sgdisk -N 3 /dev/vda 2>/dev/null
-          partprobe /dev/vda
-        ) 2>/dev/null || true
-        # Grow LVM PV
+    - name: Resize root partition 3 to fill disk
+      community.general.parted:
+        device: /dev/vda
+        number: 3
+        part_end: 100%
+        state: present
+      register: parted_result
+      failed_when: false
+
+    - name: Resize LVM physical volume and filesystem
+      ansible.builtin.shell: |
         pvresize /dev/vda3 || true
-        # Grow LV to use all free space
         ROOT_LV=$(lvs --noheadings -o lv_path | head -1 | tr -d ' ')
         if [ -n "$ROOT_LV" ]; then
           lvextend -l +100%FREE "$ROOT_LV" || true
@@ -31,90 +43,106 @@
       failed_when: false
 
     - name: Install container runtime dependencies (conmon, tar)
-      ansible.builtin.raw: |
-        set -e
-        dnf install -y conmon tar 2>&1 | tail -3
-      changed_when: true
+      ansible.builtin.dnf:
+        name:
+          - conmon
+          - tar
+        state: present
 
-    - name: Install SELinux policy module for eBPF device filter (Fedora 44+)
-      ansible.builtin.raw: |
-        set -e
-        if ! semodule -l 2>/dev/null | grep -q ebpf-fix; then
-          HOST="{{ ansible_host }}"
-          ROOT="{{ project_dir }}"
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'cat > /tmp/ebpf-fix.pp' < "$ROOT"/extensions/selinux/ebpf-fix.pp
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'semodule -i /tmp/ebpf-fix.pp'
-        fi
-      changed_when: true
-      delegate_to: localhost
+    - name: Install rsync for sysext/confext synchronize
+      ansible.builtin.dnf:
+        name: rsync
+        state: present
 
-    - name: Create containers policy for image pulling
-      ansible.builtin.raw: |
-        mkdir -p /etc/containers
-        if [ ! -f /etc/containers/policy.json ]; then
-          cat > /etc/containers/policy.json <<'POLICY'
-        {
-          "default": [
-            {
-              "type": "insecureAcceptAnything"
-            }
-          ]
-        }
-        POLICY
-        fi
+    - name: Check if ebpf-fix SELinux module is already installed
+      ansible.builtin.command:
+        cmd: semodule -l 2>/dev/null
+      register: semodule_check
       changed_when: false
+      failed_when: false
+
+    - name: Copy SELinux policy module for eBPF device filter
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/extensions/selinux/ebpf-fix.pp"
+        dest: /tmp/ebpf-fix.pp
+        mode: "0644"
+      when: "'ebpf-fix' not in semodule_check.stdout"
+
+    - name: Install SELinux policy module for eBPF
+      ansible.builtin.command:
+        cmd: semodule -i /tmp/ebpf-fix.pp
+      when: "'ebpf-fix' not in semodule_check.stdout"
+
+    - name: Create /etc/containers directory
+      ansible.builtin.file:
+        path: /etc/containers
+        state: directory
+        mode: "0755"
+
+    - name: Create containers policy.json for image pulling
+      ansible.builtin.copy:
+        dest: /etc/containers/policy.json
+        content: |
+          {
+            "default": [
+              {
+                "type": "insecureAcceptAnything"
+              }
+            ]
+          }
+        mode: "0644"
+      force: false
 
     - name: Set correct hostname from inventory
-      ansible.builtin.shell: |
-        hostnamectl set-hostname "{{ inventory_hostname }}" 2>/dev/null || true
-      changed_when: false
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
 
     - name: Create /etc/kubernetes directories upfront
-      ansible.builtin.raw: |
-        mkdir -p /etc/kubernetes/pki /etc/kubernetes/manifests /var/lib/kubelet/pki
-      changed_when: false
-    - name: Purge any existing sysext/confext files to avoid stale binaries
-      ansible.builtin.raw: |
-        set -e
-        for d in crio crun kubelet etcd etcdctl kube-apiserver kube-controller-manager kube-scheduler kubectl; do
-          rm -f /usr/bin/$d
-        done
-        for f in crio kubelet etcd kube-apiserver kube-controller-manager kube-scheduler; do
-          rm -f /usr/lib/systemd/system/$f.service
-        done
-      changed_when: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /etc/kubernetes/pki
+        - /etc/kubernetes/manifests
+        - /var/lib/kubelet/pki
 
-    - name: Deploy sysexts and confexts via tar-over-SSH
-      ansible.builtin.raw: |
-        set -e
-        HOST="{{ ansible_host }}"
-        ROOT="{{ project_dir }}"
-        
-        # Sysexts: tar form local sysext/*/usr/ -> extract at /
-        for src in "$ROOT"/sysext/*/usr; do
-          [ -d "$src" ] || continue
-          name=$(basename "$(dirname "$src")")
-          echo "Sysext: $name"
-          tar cf - -C "$(dirname "$src")" usr/ | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'cd / && tar xpf -'
-          echo "  Done: $name"
-        done
-        
-        # Confexts: tar form local confext/*/etc/ -> extract at /
-        for src in "$ROOT"/confext/*/etc; do
-          [ -d "$src" ] || continue
-          name=$(basename "$(dirname "$src")")
-          echo "Confext: $name"
-          tar cf - -C "$(dirname "$src")" etc/ | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$HOST 'cd / && tar xpf -'
-          echo "  Done: $name"
-        done
-        
-        echo "Deployment complete"
-      delegate_to: localhost
-      changed_when: true
+    - name: Purge any existing sysext/confext binaries to avoid stale binaries
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/bin/crio
+        - /usr/bin/crun
+        - /usr/bin/kubelet
+        - /usr/bin/etcd
+        - /usr/bin/etcdctl
+        - /usr/bin/kube-apiserver
+        - /usr/bin/kube-controller-manager
+        - /usr/bin/kube-scheduler
+        - /usr/bin/kubectl
+        - /usr/lib/systemd/system/crio.service
+        - /usr/lib/systemd/system/kubelet.service
+        - /usr/lib/systemd/system/etcd.service
+        - /usr/lib/systemd/system/kube-apiserver.service
+        - /usr/lib/systemd/system/kube-controller-manager.service
+        - /usr/lib/systemd/system/kube-scheduler.service
+
+    - name: Deploy sysexts to all nodes
+      ansible.posix.synchronize:
+        src: "{{ project_dir }}/sysext/{{ item }}/"
+        dest: /
+      loop: "{{ sysext_names }}"
+
+    - name: Deploy confexts to all nodes
+      ansible.posix.synchronize:
+        src: "{{ project_dir }}/confext/{{ item }}/"
+        dest: /
+      loop: "{{ confext_names }}"
 
     - name: Reload systemd daemon
-      ansible.builtin.raw: systemctl daemon-reload
-      changed_when: false
+      ansible.builtin.systemd:
+        daemon_reload: true
 
     - name: Disable swap check in kubelet config
       ansible.builtin.replace:
@@ -124,18 +152,28 @@
       failed_when: false
 
     - name: Start CRI-O container runtime
-      ansible.builtin.raw: systemctl start crio 2>/dev/null || true
-      changed_when: false
+      ansible.builtin.systemd:
+        name: crio
+        state: started
 
-    - name: Verify binaries
-      ansible.builtin.raw: |
-        for b in crio crun kubelet etcd etcdctl kube-apiserver kube-controller-manager kube-scheduler kubectl; do
-          path="/usr/bin/$b"
-          if [ -f "$path" ] && [ -x "$path" ]; then echo "OK: $path"; else echo "MISSING: $path"; fi
-        done
-      register: binary_check
-      changed_when: false
+    - name: Verify binaries exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/bin/crio
+        - /usr/bin/crun
+        - /usr/bin/kubelet
+        - /usr/bin/etcd
+        - /usr/bin/etcdctl
+        - /usr/bin/kube-apiserver
+        - /usr/bin/kube-controller-manager
+        - /usr/bin/kube-scheduler
+        - /usr/bin/kubectl
+      register: binary_stats
 
     - name: Display binary verification
       ansible.builtin.debug:
-        var: binary_check.stdout_lines
+        msg: |-
+          {% for r in binary_stats.results %}
+          {{ 'OK' if r.stat.exists and r.stat.executable else 'MISSING' }}: {{ r.item }}
+          {% endfor %}
