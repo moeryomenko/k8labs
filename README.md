@@ -32,7 +32,7 @@ The cluster environment is built in stages, each producing an artifact consumed 
 
 5. **Cluster bootstrapping** (Ansible) — Ansible playbooks orchestrate the full cluster bring-up: distributing system extensions, generating and deploying TLS certificates, bootstrapping etcd, initializing the Kubernetes control plane, configuring kubelet on workers, deploying Cilium CNI, and configuring Layer 2 load balancer IP pools. The bootstrap follows the KTHW service sequence (etcd -> API server -> controller manager -> scheduler -> kubelet -> kube-proxy -> CNI).
 
-6. **Load balancing pool** — Cilium L2 announcements provide LoadBalancer service IPs from a dedicated `10.0.10.0/24` pool. A host route on the management machine bridges traffic into the cluster's virtual network.
+6. **Load balancing pool** — Cilium L2 announcements provide LoadBalancer service IPs from a dedicated `10.0.10.0/24` pool. A declarative host route on the management machine (`10.0.10.0/24 dev k8sbr0`, declared in `network/k8sbr0.network` as `[Route] Destination=10.0.10.0/24`) bridges traffic into the cluster's virtual network.
 
 ## Technologies
 
@@ -87,7 +87,7 @@ Individual pipeline stages can be run separately:
 | Target | Description |
 |--------|-------------|
 | `sudo make network-up` | Create bridge `k8sbr0` + TAP devices + DHCP via systemd-networkd |
-| `sudo make network-down` | Tear down TAPs, bridge, and flush nftables |
+| `sudo make network-down` | Tear down TAPs, bridge, and remove k8slab nftables table |
 
 **VM provisioning:**
 
