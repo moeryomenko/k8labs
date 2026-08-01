@@ -39,3 +39,9 @@ MaxLeaseTimeSec=43200
 # Packer build VM
 MACAddress=de:ad:be:ef:00:01
 Address=192.168.124.10
+
+[Route]
+# LB pool reachable via the bridge (declarative replacement for the former
+# imperative `ip route add 10.0.10.0/24 dev k8sbr0` in the Makefile).
+Destination=10.0.10.0/24
+Scope=link

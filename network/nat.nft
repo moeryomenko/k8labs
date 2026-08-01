@@ -1,21 +1,30 @@
 #!/usr/sbin/nft -f
-# nat.nft — NAT and forwarding rules for cluster networking
+# nat.nft — NAT and forwarding rules for the k8slab bridge network
 #
-# Replaces the iptables rules in the Makefile:
-#   - MASQUERADE for traffic from 192.168.124.0/24
-#   - ACCEPT forward on iifname/oifname k8sbr0
+# Single dedicated table `inet k8slab` (replaces the legacy `inet nat` and
+# `inet filter` tables, which were non-idempotent and accumulated duplicates).
 #
-# Load: nft -f network/nat.nft
-# Auto-load: systemctl enable nftables && cp to /etc/nftables.conf
+# Model:
+#   - postrouting: MASQUERADE for VM traffic. The rule is deliberately NOT
+#     qualified on the output interface so VM egress can exit via enp8s0
+#     (direct) or via wg1 (VPN full-tunnel) — whichever is the active route.
+#   - forward: accept traffic to/from the lab bridge k8sbr0.
+#
+# Teardown: `sudo nft destroy table inet k8slab` (see `make network-down`).
+# We NEVER flush the ruleset: other tables (e.g. `ip wg-quick-wg1` from
+# wg-quick) are foreign and must survive every load/teardown cycle.
+#
+# Load: sudo nft -f network/nat.nft  (idempotent: destroy is a no-op when
+# the table is absent, so repeated loads never duplicate rules)
 
-table inet nat {
+destroy table inet k8slab
+
+table inet k8slab {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept
         ip saddr 192.168.124.0/24 masquerade
     }
-}
 
-table inet filter {
     chain forward {
         type filter hook forward priority filter; policy accept
         iifname "k8sbr0" accept
