@@ -310,9 +310,8 @@ vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backi
 	VDIR="$$(pwd)/build/vm-disks"; \
 	BASE="$$(pwd)/$(BASE_IMAGE_DEST)"; \
 	{ \
-		cp_line="$$(grep -A8 '^control_plane' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk '{print $$2}')"; \
-		echo "$$cp_line"; \
-		grep -A8 'name = "w' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk '{print $$2}'; \
+		grep -A8 '^control_plane' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk -F= '{print $$2}'; \
+		grep -A8 'name = "w' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk -F= '{print $$2}'; \
 	} | paste - - 2>/dev/null | while read -r node size; do \
 		disk="$${VDIR}/$${node}-root.qcow2"; \
 		if [ ! -f "$$disk" ]; then \
