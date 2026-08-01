@@ -22,6 +22,27 @@
   changed_when: false
   failed_when: false
 
+- name: Uninstall any existing Cilium release before fresh install
+  ansible.builtin.raw: >
+    cilium uninstall --kubeconfig {{ project_dir }}/kubeconfig --wait
+  delegate_to: localhost
+  run_once: true
+  when: cilium_status.rc != 0
+  register: cilium_uninstall
+  failed_when: false
+  changed_when: cilium_uninstall.rc == 0
+
+- name: Delete any remaining Cilium Helm release secrets
+  ansible.builtin.raw: >
+    kubectl delete secret -n kube-system -l app.kubernetes.io/managed-by=Helm
+    --field-selector metadata.name~='sh.helm.release.v1.cilium'
+    --kubeconfig {{ project_dir }}/kubeconfig --ignore-not-found=true
+  delegate_to: localhost
+  run_once: true
+  when: cilium_status.rc != 0
+  failed_when: false
+  changed_when: true
+
 - name: Install Cilium via cilium CLI (with --wait for CRDs + pods)
   ansible.builtin.raw: >
     cilium install
