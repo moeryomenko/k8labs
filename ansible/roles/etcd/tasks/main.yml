@@ -13,6 +13,8 @@
     regexp: "{{ '{{CP_IP}}' }}"
     replace: "{{ cp_ip }}"
   failed_when: false
+  register: etcd_config_replace
+  notify: restart etcd
 
 - name: Start etcd service
   ansible.builtin.systemd:

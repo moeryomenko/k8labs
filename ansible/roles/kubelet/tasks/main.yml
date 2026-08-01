@@ -21,30 +21,35 @@
     src: "{{ certs_dir }}/ca.pem"
     dest: /var/lib/kubelet/pki/ca.pem
     mode: "0644"
+  notify: restart kubelet
 
 - name: Copy kubelet certificate
   ansible.builtin.copy:
     src: "{{ certs_dir }}/kubelets/{{ inventory_hostname }}.pem"
     dest: /var/lib/kubelet/pki/{{ inventory_hostname }}.pem
     mode: "0644"
+  notify: restart kubelet
 
 - name: Copy kubelet key
   ansible.builtin.copy:
     src: "{{ certs_dir }}/kubelets/{{ inventory_hostname }}-key.pem"
     dest: /var/lib/kubelet/pki/{{ inventory_hostname }}-key.pem
     mode: "0600"
+  notify: restart kubelet
 
 - name: Copy kubelet kubeconfig
   ansible.builtin.copy:
     src: "{{ certs_dir }}/kubelets/{{ inventory_hostname }}.kubeconfig"
     dest: /var/lib/kubelet/kubeconfig
     mode: "0600"
+  notify: restart kubelet
 
 - name: Configure kubelet settings from template
   ansible.builtin.template:
     src: config.yaml.j2
     dest: /etc/kubernetes/kubelet/config.yaml
     mode: "0644"
+  notify: restart kubelet
 
 - name: Start kubelet
   ansible.builtin.systemd:

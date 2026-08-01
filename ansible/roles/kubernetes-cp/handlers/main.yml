@@ -1,0 +1,41 @@
+---
+# kubernetes-cp — handlers
+#
+# Restart control-plane services when their TLS material or kubeconfigs change
+# so a fresh CA / certificates are loaded by the running daemons.
+#
+# NOTE: handlers run at the end of the play that notified them. In
+# bootstrap.yml the cert-distribution tasks run in Stage 3 (before etcd in
+# Stage 4); the operative restart for a bootstrap run happens in Stage 5
+# (state: restarted) AFTER etcd is healthy.
+#
+# The `when:` guard makes each handler fire only when the service is ALREADY
+# running. bootstrap.yml Stage 3 sets apiserver_running /
+# controller_manager_running / scheduler_running before distributing certs, so
+# on a first-time bootstrap (services not yet started) these handlers are
+# no-ops instead of attempting to start CP services before etcd is up. On a
+# re-run (services already running) they restart with fresh TLS material.
+# Outside bootstrap.yml the facts are undefined and default to false, keeping
+# the handlers inert — consistent with "handlers must only fire when the
+# service is already running".
+
+- name: restart kube-apiserver
+  ansible.builtin.systemd:
+    name: kube-apiserver
+    state: restarted
+    daemon_reload: true
+  when: apiserver_running | default(false)
+
+- name: restart kube-controller-manager
+  ansible.builtin.systemd:
+    name: kube-controller-manager
+    state: restarted
+    daemon_reload: true
+  when: controller_manager_running | default(false)
+
+- name: restart kube-scheduler
+  ansible.builtin.systemd:
+    name: kube-scheduler
+    state: restarted
+    daemon_reload: true
+  when: scheduler_running | default(false)

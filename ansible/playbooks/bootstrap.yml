@@ -55,6 +55,22 @@
         dest: /etc/kubernetes/admin.kubeconfig
         mode: "0600"
 
+    - name: Check whether control-plane services are already running
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+      register: cp_services_state
+      loop:
+        - kube-apiserver
+        - kube-controller-manager
+        - kube-scheduler
+      changed_when: false
+
+    - name: Record which control-plane services are active
+      ansible.builtin.set_fact:
+        apiserver_running: "{{ (cp_services_state.results | selectattr('item', 'equalto', 'kube-apiserver') | first).status.ActiveState | default('inactive') == 'active' }}"
+        controller_manager_running: "{{ (cp_services_state.results | selectattr('item', 'equalto', 'kube-controller-manager') | first).status.ActiveState | default('inactive') == 'active' }}"
+        scheduler_running: "{{ (cp_services_state.results | selectattr('item', 'equalto', 'kube-scheduler') | first).status.ActiveState | default('inactive') == 'active' }}"
+
     - name: Include kubernetes-cp role (distribution only — services started after etcd)
       ansible.builtin.include_role:
         name: kubernetes-cp
@@ -89,7 +105,7 @@
     - name: Start kube-apiserver
       ansible.builtin.systemd:
         name: kube-apiserver
-        state: started
+        state: restarted
         enabled: true
       register: apiserver_start
 
@@ -130,13 +146,13 @@
     - name: Start kube-controller-manager
       ansible.builtin.systemd:
         name: kube-controller-manager
-        state: started
+        state: restarted
         enabled: true
 
     - name: Start kube-scheduler
       ansible.builtin.systemd:
         name: kube-scheduler
-        state: started
+        state: restarted
         enabled: true
 
 - name: Stage 5 — Apply kubelet RBAC rules
