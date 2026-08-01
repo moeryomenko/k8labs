@@ -143,18 +143,34 @@ network-up: ## Configure bridge+TAP networking + NAT/forwarding + DNS forwarder
 	sudo cp network/k8s-cp1.netdev network/k8s-cp1.network /etc/systemd/network/
 	sudo cp network/k8s-w1.netdev network/k8s-w1.network /etc/systemd/network/
 	sudo cp network/packer-tap.netdev network/packer-tap.network /etc/systemd/network/
+	sudo mkdir -p /etc/systemd/networkd.conf.d
+	sudo cp network/90-k8slab-foreign-rules.conf /etc/systemd/networkd.conf.d/
 	sudo systemctl reload-or-restart systemd-networkd
 	@echo '==> Loading nftables NAT/forwarding rules...'
 	sudo nft -f network/nat.nft
 	@echo '==> Enabling DNS forwarder on bridge (dnsmasq)...'
 	sudo mkdir -p /etc/dnsmasq.d
 	sudo cp network/dnsmasq-k8sbr0.conf /etc/dnsmasq.d/k8sbr0.conf
+	@echo '==> Activating dnsmasq conf-dir=/etc/dnsmasq.d/,*.conf...'
+	@set -euo pipefail; \
+	if sudo grep -qE '^conf-dir=.*/etc/dnsmasq\.d/' /etc/dnsmasq.conf; then \
+		echo '    conf-dir already active for /etc/dnsmasq.d/, skipping'; \
+	elif sudo grep -qE '^conf-dir=' /etc/dnsmasq.conf; then \
+		echo 'ERROR: active conf-dir= line points elsewhere; refusing to modify /etc/dnsmasq.conf' >&2; \
+		exit 1; \
+	elif sudo grep -qE '^#conf-dir=/etc/dnsmasq\.d/,.*\.conf' /etc/dnsmasq.conf; then \
+		sudo sed -i 's|^#conf-dir=/etc/dnsmasq\.d/,.*\.conf|conf-dir=/etc/dnsmasq.d/,*.conf|' /etc/dnsmasq.conf; \
+		echo '    uncommented existing conf-dir=/etc/dnsmasq.d/,*.conf line'; \
+	else \
+		echo 'conf-dir=/etc/dnsmasq.d/,*.conf' | sudo tee -a /etc/dnsmasq.conf >/dev/null; \
+		echo '    appended conf-dir=/etc/dnsmasq.d/,*.conf to /etc/dnsmasq.conf'; \
+	fi
 	sudo systemctl enable --now dnsmasq 2>/dev/null || true
 	sudo systemctl restart dnsmasq
 	@echo '==> Network ready (bridge k8sbr0, DHCP 192.168.124.20-200, DNS 192.168.124.1)'
 
 .PHONY: network-down
-network-down: ## Remove networking configs and flush nftables
+network-down: ## Remove networking configs and scoped k8slab nftables table
 	@echo '==> Removing network configs...'
 	sudo rm -f /etc/systemd/network/k8sbr0.netdev /etc/systemd/network/k8sbr0.network
 	sudo rm -f /etc/systemd/network/k8s-cp1.netdev /etc/systemd/network/k8s-cp1.network
@@ -162,8 +178,8 @@ network-down: ## Remove networking configs and flush nftables
 	sudo rm -f /etc/systemd/network/packer-tap.netdev /etc/systemd/network/packer-tap.network
 	sudo rm -f /etc/dnsmasq.d/k8sbr0.conf
 	sudo systemctl restart systemd-networkd
-	@echo '==> Flushing nftables...'
-	sudo nft flush ruleset
+	@echo '==> Removing k8slab nftables table...'
+	sudo nft destroy table inet k8slab
 	@echo '==> Network teardown complete'
 
 # --- System Extensions ---
@@ -419,14 +435,7 @@ bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
 	@echo '  Generating Ansible inventory from tofu state + dnsmasq leases...'
 	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json
 	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
-		ansible/playbooks/bootstrap.yml; \
-	echo '  Adding host route for LB pool...'; \
-	if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "k8sbr0"; then \
-		sudo ip route add 10.0.10.0/24 dev k8sbr0; \
-		echo "  Route 10.0.10.0/24 → k8sbr0 added"; \
-	else \
-		echo "  Route 10.0.10.0/24 → k8sbr0 already exists"; \
-	fi
+		ansible/playbooks/bootstrap.yml
 
 .PHONY: wait-ips
 wait-ips: ## Wait for ALL VMs to get DHCP leases (reads systemd-networkd lease file by MAC)
@@ -521,13 +530,6 @@ cluster: network-up base tfvars vm-disks sysexts confexts container ## Full pipe
 	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
 	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
 		$(ANSIBLE_DIR)/playbooks/bootstrap.yml; \
-	echo '  Step 6: Add host route for LB pool...'; \
-	if ! ip route show 10.0.10.0/24 2>/dev/null | grep -q "k8sbr0"; then \
-		sudo ip route add 10.0.10.0/24 dev k8sbr0; \
-		echo "  Route 10.0.10.0/24 added via k8sbr0"; \
-	else \
-		echo "  Route 10.0.10.0/24 already exists"; \
-	fi; \
 	echo '  Step 7: Fetch kubeconfig...'; \
 	$(MAKE) kubeconfig; \
 	echo '  Step 8: Wait for control plane node Ready (up to 10m)...'; \
