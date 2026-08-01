@@ -1,4 +1,4 @@
-# VM IPs are obtained from the dnsmasq DHCP lease file:
+# VM IPs are obtained from the systemd-networkd DHCP server lease file:
 #   ${var.dnsmasq_leases}
 #
 # The Ansible inventory script (ansible/inventory/inventory.py) reads this

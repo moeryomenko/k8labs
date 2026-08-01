@@ -15,6 +15,6 @@ output "nodes" {
 }
 
 output "dnsmasq_lease_file" {
-  description = "Path to the dnsmasq DHCP lease file for IP discovery"
+  description = "Path to the systemd-networkd DHCP server lease file for IP discovery"
   value       = var.dnsmasq_leases
 }

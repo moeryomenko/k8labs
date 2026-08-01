@@ -1,5 +1,6 @@
 # k8sbr0.network — systemd-networkd network configuration for the cluster bridge
-# dnsmasq handles DHCP, not systemd-networkd
+# DHCP is provided by systemd-networkd's built-in DHCP server.
+# dnsmasq is DNS-only.
 [Match]
 Name=k8sbr0
 

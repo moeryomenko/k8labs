@@ -55,7 +55,7 @@ variable "network_bridge" {
 }
 
 variable "dnsmasq_leases" {
-  description = "Path to the dnsmasq lease file for IP discovery"
+  description = "Path to the systemd-networkd DHCP server lease file for IP discovery"
   type        = string
   default     = "/var/lib/misc/dnsmasq/k8sbr0.leases"
 }

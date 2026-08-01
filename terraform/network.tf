@@ -4,8 +4,9 @@
 # The external bridge 'k8sbr0' is created and managed by systemd-networkd
 # (see network/k8sbr0.netdev, network/k8sbr0.network).
 #
-# Each VM gets a TAP device connected to k8sbr0. DHCP is provided by dnsmasq
-# running on the bridge host.
+# Each VM gets a TAP device connected to k8sbr0. DHCP is provided by
+# systemd-networkd's built-in DHCP server.
+# dnsmasq runs as a DNS forwarder only.
 #
 # Key networking properties:
 #   Bridge:     k8sbr0 (192.168.124.1/24)

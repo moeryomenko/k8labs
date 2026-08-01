@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # VM definitions for the Kubernetes cluster
 # Uses cloudhypervisor provider (not libvirt)
-# Networking: TAP devices on k8sbr0 bridge, DHCP via dnsmasq
+# Networking: TAP devices on k8sbr0 bridge, DHCP via systemd-networkd
 # ---------------------------------------------------------------------------
 
 locals {
