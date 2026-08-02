@@ -1,0 +1,60 @@
+# CoreDNS Deployment — pod labels k8s-app: kube-dns so the kube-dns Service selects them
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coredns
+  namespace: kube-system
+  labels:
+    k8s-app: kube-dns
+    kubernetes.io/name: CoreDNS
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
+  template:
+    metadata:
+      labels:
+        k8s-app: kube-dns
+    spec:
+      serviceAccountName: coredns
+      # node upstream DNS via dnsPolicy Default so forward . /etc/resolv.conf works
+      dnsPolicy: Default
+      containers:
+        - name: coredns
+          image: registry.k8s.io/coredns/coredns:v1.14.6
+          args:
+            - -conf
+            - /etc/coredns/Corefile
+          ports:
+            - name: dns
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+            - name: metrics
+              containerPort: 9153
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8181
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 70Mi
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/coredns
+      volumes:
+        - name: config-volume
+          configMap:
+            name: coredns
+            items:
+              - key: Corefile
+                path: Corefile

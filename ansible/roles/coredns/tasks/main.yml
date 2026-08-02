@@ -1,0 +1,51 @@
+---
+# coredns — Install CoreDNS cluster DNS (kube-dns Service at 10.96.0.10)
+# Uses raw + delegate_to to avoid Python dependency on the controller.
+
+- name: Check if CoreDNS deployment already exists
+  ansible.builtin.raw: >
+    kubectl get deployment -n kube-system coredns
+    --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: coredns_deployment_check
+  changed_when: false
+  failed_when: false
+
+- name: Apply CoreDNS manifests
+  ansible.builtin.raw: >
+    kubectl apply -f {{ project_dir }}/coredns/
+    --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: coredns_apply
+  changed_when: '"created" in coredns_apply.stdout or "configured" in coredns_apply.stdout'
+
+- name: Wait for CoreDNS rollout to complete
+  ansible.builtin.raw: >
+    kubectl -n kube-system rollout status deployment/coredns
+    --timeout=5m --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: coredns_rollout
+  retries: 3
+  delay: 10
+  until: coredns_rollout is succeeded
+  changed_when: false
+
+- name: Verify kube-dns Service clusterIP
+  ansible.builtin.raw: >
+    kubectl -n kube-system get svc kube-dns
+    -o jsonpath='{.spec.clusterIP}'
+    --kubeconfig {{ project_dir }}/kubeconfig
+  delegate_to: localhost
+  run_once: true
+  register: kube_dns_clusterip
+  changed_when: false
+
+- name: Fail if kube-dns clusterIP is not 10.96.0.10
+  ansible.builtin.fail:
+    msg: "kube-dns Service clusterIP is '{{ kube_dns_clusterip.stdout }}', expected 10.96.0.10"
+  delegate_to: localhost
+  run_once: true
+  when: kube_dns_clusterip.stdout != "10.96.0.10"

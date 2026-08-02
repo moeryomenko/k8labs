@@ -3,6 +3,12 @@ kind: KubeletConfiguration
 containerRuntimeEndpoint: unix:///var/run/crio/crio.sock
 cgroupDriver: systemd
 failSwapOn: false
+# clusterDNS: pods resolve via the CoreDNS kube-dns Service (10.96.0.10).
+# Keep in sync with twin template: ansible/roles/kubelet/templates/config.yaml.j2
+clusterDNS:
+  - 10.96.0.10
+# clusterDomain must match the kube-dns Service search domain (see plan assumption log)
+clusterDomain: cluster.local
 authentication:
   anonymous:
     enabled: false

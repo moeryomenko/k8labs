@@ -576,14 +576,17 @@ update-kubeconfig: kubeconfig ## Alias for kubeconfig — explicitly signals ref
 # --- Smoke Test ---
 
 # smoke-test validates cluster health after 'make cluster'.
-# Checks: nodes Ready, kube-system pods Running, Cilium health, test pod scheduling.
+# Checks: nodes Ready, kube-system pods Running, Cilium health, test pod scheduling,
+# and CoreDNS DNS regression (deployment Available, kube-dns clusterIP, in-cluster
+# FQDN resolution, negative NXDOMAIN, external forward).
 KUBECONFIG := kubeconfig
 
 .PHONY: smoke-test
 smoke-test:
 	@set -euo pipefail; \
 	POD_NAME="smoke-test-$$(date +%s)"; \
-	trap 'kubectl --kubeconfig $(KUBECONFIG) delete pod "$$POD_NAME" --ignore-not-found --now 2>/dev/null || true' EXIT; \
+	DNS_NS=""; \
+	trap 'kubectl --kubeconfig $(KUBECONFIG) delete pod "$$POD_NAME" --ignore-not-found --now 2>/dev/null || true; if [ -n "$$DNS_NS" ]; then kubectl --kubeconfig $(KUBECONFIG) delete namespace "$$DNS_NS" --ignore-not-found --wait=false >/dev/null 2>&1 || true; fi' EXIT; \
 	fail=0; \
 	echo "=== smoke-test: validating cluster health ==="; \
 	echo "--- check 1: nodes Ready ---"; \
@@ -681,6 +684,76 @@ smoke-test:
 		fail=1; \
 	fi; \
 	kubectl --kubeconfig $(KUBECONFIG) delete pod "$$POD_NAME" --now --ignore-not-found 2>/dev/null || true; \
+	echo "--- check 6a: CoreDNS deployment Available ---"; \
+	if kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout status deployment/coredns --timeout=60s >/dev/null 2>&1; then \
+		echo "  PASS: coredns deployment Available"; \
+	else \
+		echo "  FAIL: coredns deployment not Available"; \
+		kubectl --kubeconfig $(KUBECONFIG) -n kube-system get deployment coredns; \
+		fail=1; \
+	fi; \
+	echo "--- check 6b: kube-dns Service clusterIP ---"; \
+	DNS_IP=$$(kubectl --kubeconfig $(KUBECONFIG) -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true); \
+	if [ "$$DNS_IP" = "10.96.0.10" ]; then \
+		echo "  PASS: kube-dns Service clusterIP is 10.96.0.10"; \
+	else \
+		echo "  FAIL: kube-dns Service clusterIP is $${DNS_IP:-unknown}, expected 10.96.0.10"; \
+		fail=1; \
+	fi; \
+	echo "--- check 6c: in-cluster FQDN resolution (kubernetes.default.svc.cluster.local -> 10.96.0.1) ---"; \
+	DNS_NS="dns-check-$$(date +%s)"; \
+	kubectl --kubeconfig $(KUBECONFIG) create namespace "$$DNS_NS" >/dev/null 2>&1 || true; \
+	probe_ready=0; \
+	if kubectl --kubeconfig $(KUBECONFIG) -n "$$DNS_NS" run dns-probe --image=nginx --restart=Never -- sleep 3600 >/dev/null 2>&1 \
+		&& kubectl --kubeconfig $(KUBECONFIG) -n "$$DNS_NS" run dns-neg --image=busybox:1.36 --restart=Never -- sleep 3600 >/dev/null 2>&1; then \
+		for i in $$(seq 1 30); do \
+			p1=$$(kubectl --kubeconfig $(KUBECONFIG) -n "$$DNS_NS" get pod dns-probe -o jsonpath='{.status.phase}' 2>/dev/null || true); \
+			p2=$$(kubectl --kubeconfig $(KUBECONFIG) -n "$$DNS_NS" get pod dns-neg -o jsonpath='{.status.phase}' 2>/dev/null || true); \
+			if [ "$$p1" = "Running" ] && [ "$$p2" = "Running" ]; then probe_ready=1; break; fi; \
+			sleep 2; \
+		done; \
+	fi; \
+	if [ "$$probe_ready" -eq 1 ]; then \
+		RESOLVED=$$(kubectl --kubeconfig $(KUBECONFIG) -n "$$DNS_NS" exec dns-probe -- getent hosts kubernetes.default.svc.cluster.local 2>/dev/null | awk '{print $$1}' | head -1 || true); \
+		if [ "$$RESOLVED" = "10.96.0.1" ]; then \
+			echo "  PASS: kubernetes.default.svc.cluster.local -> $$RESOLVED"; \
+		else \
+			echo "  FAIL: kubernetes.default.svc.cluster.local resolved to $${RESOLVED:-<none>}, expected 10.96.0.1"; \
+			fail=1; \
+		fi; \
+	else \
+		echo "  FAIL: DNS probe pods did not reach Running (dns-probe=$${p1:-unknown} dns-neg=$${p2:-unknown})"; \
+		fail=1; \
+	fi; \
+	echo "--- check 6d: negative lookup returns NXDOMAIN from 10.96.0.10 ---"; \
+	if [ "$$probe_ready" -eq 1 ]; then \
+		NEG_NAME="does-not-exist-$$(date +%s).cluster.local"; \
+		NEG_OUT=$$(kubectl --kubeconfig $(KUBECONFIG) -n "$$DNS_NS" exec dns-neg -- nslookup "$$NEG_NAME" 2>&1 || true); \
+		if echo "$$NEG_OUT" | grep -q NXDOMAIN && echo "$$NEG_OUT" | grep -q '10.96.0.10'; then \
+			echo "  PASS: $$NEG_NAME -> NXDOMAIN (server 10.96.0.10)"; \
+		else \
+			echo "  FAIL: negative lookup did not return NXDOMAIN from 10.96.0.10"; \
+			echo "$$NEG_OUT" | awk '{print "    " $$0}' || true; \
+			fail=1; \
+		fi; \
+	else \
+		echo "  FAIL: cannot run negative lookup (DNS probe pods not ready)"; \
+		fail=1; \
+	fi; \
+	echo "--- check 6e: external forward (example.com via CoreDNS) ---"; \
+	if [ "$$probe_ready" -eq 1 ]; then \
+		EXT_IP=$$(kubectl --kubeconfig $(KUBECONFIG) -n "$$DNS_NS" exec dns-probe -- getent hosts example.com 2>/dev/null | awk '{print $$1}' | head -1 || true); \
+		if [ -n "$$EXT_IP" ]; then \
+			echo "  PASS: example.com resolved via CoreDNS forward -> $$EXT_IP"; \
+		else \
+			echo "  FAIL: example.com did not resolve via CoreDNS forward"; \
+			fail=1; \
+		fi; \
+	else \
+		echo "  FAIL: cannot run external forward check (DNS probe pods not ready)"; \
+		fail=1; \
+	fi; \
+	kubectl --kubeconfig $(KUBECONFIG) delete namespace "$$DNS_NS" --ignore-not-found --timeout=60s >/dev/null 2>&1 || true; \
 	echo "=== smoke-test complete ==="; \
 	if [ "$$fail" -eq 0 ]; then \
 		echo "PASS: all checks passed"; \
@@ -698,6 +771,24 @@ metrics-server: ## Deploy metrics-server for kubectl top
 	@echo 'Waiting for metrics-server to be ready...'
 	kubectl --kubeconfig $(KUBECONFIG) -n kube-system wait --for=condition=Available deployment/metrics-server --timeout=60s
 	@echo 'metrics-server ready. Run: kubectl top nodes'
+
+# --- CoreDNS ---
+
+.PHONY: coredns
+coredns: ## Deploy CoreDNS cluster DNS (kube-dns Service at 10.96.0.10)
+	@echo 'Deploying CoreDNS...'
+	kubectl --kubeconfig $(KUBECONFIG) apply -f coredns/
+	@echo 'Waiting for CoreDNS deployment to be Available...'
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system wait --for=condition=Available deployment/coredns --timeout=5m
+	@echo 'Verifying kube-dns Service clusterIP...'
+	@set -euo pipefail; \
+	clusterip="$$(kubectl --kubeconfig $(KUBECONFIG) -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')"; \
+	if [ "$$clusterip" != "10.96.0.10" ]; then \
+		echo "FAIL: kube-dns clusterIP is $$clusterip, expected 10.96.0.10"; \
+		exit 1; \
+	fi; \
+	echo "PASS: kube-dns clusterIP is 10.96.0.10"
+	@echo 'CoreDNS ready.'
 
 # --- Cleanup ---
 

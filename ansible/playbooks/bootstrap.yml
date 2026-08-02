@@ -11,8 +11,9 @@
 #   7. start-kubelet   — Start kubelet on all nodes
 #   8. kubelet-rbac    — Apply RBAC rules for kubelet self-registration
 #   9. install-cilium  — Install Cilium CNI + L2 manifests
-#   10. host-route     — Add host route for LB pool
-#   11. health-check   — Verify cluster health
+#   10. install-coredns — Deploy CoreDNS cluster DNS (kube-dns at 10.96.0.10)
+#   11. host-route     — Add host route for LB pool
+#   12. health-check   — Verify cluster health
 #
 # Usage:
 #   cd ansible && ansible-playbook playbooks/bootstrap.yml
@@ -270,6 +271,12 @@
   gather_facts: false
   roles:
     - role: cilium
+
+- name: Stage 7b — Deploy CoreDNS
+  hosts: control_plane
+  gather_facts: false
+  roles:
+    - role: coredns
 
 - name: Stage 8 — Cluster health check
   hosts: localhost

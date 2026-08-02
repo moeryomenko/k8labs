@@ -104,7 +104,8 @@ Individual pipeline stages can be run separately:
 | Target | Description |
 |--------|-------------|
 | `make bootstrap` | Run the full Ansible cluster bootstrap |
-| `make smoke-test` | Validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling) |
+| `make smoke-test` | Validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling, CoreDNS DNS regression) |
+| `make coredns` | Deploy CoreDNS cluster DNS (kube-dns Service at 10.96.0.10) |
 | `make start` / `make stop` | Start/stop VMs via ch-remote API (ACPI shutdown) |
 | `make kubeconfig` | Fetch DHCP-resistant kubeconfig from control-plane |
 | `make update-kubeconfig` | Refresh kubeconfig after DHCP IP change |
@@ -124,6 +125,7 @@ The repository is organized by concern, not by lifecycle stage:
 - `confext/` — Raw configuration extension directory structures (config files, sysctl, sysfs params)
 - `certs/` — Generated TLS certificates (output artifact, gitignored except `.gitkeep`)
 - `cilium/` — Cilium manifest templates (L2 announcement policy, LB IP pool, Gateway API manifests)
+- `coredns/` — CoreDNS cluster DNS manifests (Corefile ConfigMap, RBAC, Deployment, kube-dns Service)
 - `scripts/` — Standalone helper scripts
 - `build/` — Build artifacts (base image, extensions, temporary files)
 
@@ -174,3 +176,49 @@ kubectl apply -f cilium/http-route.yaml
 The example Gateway exposes an HTTP listener on port 80 using the L2 LoadBalancer IP pool (10.0.10.0/24). Gateway API resources are verified during `make smoke-test`.
 
 For more details, see the [Cilium Gateway API documentation](https://docs.cilium.io/en/latest/network/servicemesh/gateway-api/gateway-api/).
+
+## Cluster DNS (CoreDNS)
+
+CoreDNS provides in-cluster DNS resolution for the cluster. Pods resolve Kubernetes
+Service names through the conventional `kube-dns` Service (clusterIP `10.96.0.10`,
+matching `cluster_dns_ip`), with cluster domain `cluster.local`. The kubelet
+`clusterDNS: ["10.96.0.10"]` setting on every node injects that nameserver into each
+pod's `/etc/resolv.conf` together with the `cluster.local` search domains, so Service
+names like `kubernetes.default.svc.cluster.local` resolve from any pod.
+
+The Corefile (`coredns/corefile-configmap.yaml`) serves the `kubernetes cluster.local`
+zone authoritatively and forwards everything else to the lab DNS forwarder — the host
+dnsmasq on the bridge at `192.168.124.1` (`forward . 192.168.124.1`), which forwards
+upstream to 1.1.1.1/8.8.8.8.
+
+### Deployment
+
+CoreDNS is deployed during `make cluster`/`make bootstrap` by the Ansible `coredns`
+role, which applies the `coredns/` manifests. To deploy or re-deploy on an
+already-running cluster (idempotent):
+
+```
+make coredns
+```
+
+The target applies the manifests, waits for `deployment/coredns` to be `Available`,
+and verifies the `kube-dns` Service clusterIP is `10.96.0.10`.
+
+### Verification
+
+```
+# Service and deployment
+kubectl -n kube-system get svc kube-dns
+kubectl -n kube-system rollout status deployment/coredns
+
+# In-cluster resolution (from any pod)
+kubectl exec -it <pod> -- getent hosts kubernetes.default.svc.cluster.local   # -> 10.96.0.1
+
+# Negative and external checks
+kubectl exec -it <pod> -- nslookup does-not-exist.cluster.local              # NXDOMAIN from 10.96.0.10
+kubectl exec -it <pod> -- getent hosts example.com                           # external forward
+```
+
+`make smoke-test` includes these DNS regression checks (coredns deployment
+`Available`, `kube-dns` clusterIP `10.96.0.10`, in-cluster FQDN resolution, NXDOMAIN
+negative, external forward) alongside the existing cluster health checks.

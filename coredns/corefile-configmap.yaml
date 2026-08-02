@@ -1,0 +1,34 @@
+# CoreDNS Corefile — kube-dns plugin set for the lab cluster (cluster.local)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns
+  namespace: kube-system
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health {
+            lameduck 5s
+        }
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+            ttl 30
+        }
+        prometheus :9153
+        # Explicit lab upstream (host dnsmasq on k8sbr0), not /etc/resolv.conf:
+        # the nodes run systemd-resolved in stub mode, so node resolv.conf is
+        # "nameserver 127.0.0.53" — inside the CoreDNS pod netns that loopback
+        # is CoreDNS's own :53 listener, so forward . /etc/resolv.conf would
+        # self-loop and trip the loop plugin. The host dnsmasq at 192.168.124.1
+        # forwards to 1.1.1.1/8.8.8.8 and is reachable from pods via the bridge.
+        forward . 192.168.124.1 {
+            max_concurrent 1000
+        }
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
