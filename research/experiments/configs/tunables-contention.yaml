@@ -1,0 +1,57 @@
+experiment:
+  name: tunables-contention
+  description: "Scheduler tunable sweep under contention — api-server LS pod (500m/500m) + stress-ng batch (1000m/2000m), base_slice_ns low/high vs default, with latency_load. Run without --eevdf by default."
+replicates: 3
+pre_warm: 15
+duration: 120
+cooldown: 20
+# Family F (tunables-contention): an api-server latency-sensitive pod
+# (image 192.168.124.1:5000/k8labs/api-server:v1) co-located with a stress-ng
+# batch pod. The LS pod is FIXED at request=500m limit=500m (Guaranteed); the
+# batch pod is FIXED at 1000m/2000m. The matrix sweeps a `tunables` key naming
+# the scheduler tunable set to apply for the cell, so the tunable sweep is the
+# only variable across cells.
+#
+# Pod names are deliberately NOT latency-sensitive/batch (TASK-010 contract
+# T-LEGACY-TRAP: those exact names trigger the runner's legacy 2-pod path and
+# suppress the generic N-pod deployment lines that CV-04d asserts).
+#
+# MATRIX KEY: `tunables` is passed through by the runner as an unknown key
+# (resolve_cell_params collects every key=value pair; validation only checks
+# request/limit), so the cell carries the tunable-set label for the analysis
+# and for TASK-020's helper.
+#
+# TASK-020 / HELPER CONTRACT (manual, per cell): before each cell, apply the
+# named tunable set on the workers and restore it after the cell:
+#   research/scripts/tunable-sweep.sh apply <tunables>    # e.g. base-slice-low
+#   ... run the cell ...
+#   research/scripts/tunable-sweep.sh restore
+# The sweep drives /sys/kernel/debug/sched/base_slice_ns (and friends) via
+# tunable-sets.json. The runner does NOT apply or restore tunables itself.
+#
+# The TOP-LEVEL latency_load block (NOT per-pod; per-pod latency_load is not
+# parsed) drives the latency-recording generator. The runner resolves the
+# api-server pod as the latency target (REQ-4/TASK-013), so latency.csv is
+# captured against ls-api in real runs.
+#
+# RUN MODE: default Makefile target runs WITHOUT --eevdf (lighter). For
+# scheduler metrics add --eevdf; for kernel tracing use
+#   --perfetto --perfetto-config eevdf-deep
+workloads:
+  ls-api:
+    type: api-server
+  batch-stress:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+latency_load:
+  rate: 50
+  duration: 120
+  endpoints: "users:30,orders:30,search:20,reports:20"
+measurement:
+  cgroup_interval: 5
+matrix:
+  - ls-api_request: "500m"; ls-api_limit: "500m"; batch-stress_request: "1000m"; batch-stress_limit: "2000m"; tunables: "default"
+  - ls-api_request: "500m"; ls-api_limit: "500m"; batch-stress_request: "1000m"; batch-stress_limit: "2000m"; tunables: "base-slice-low"
+  - ls-api_request: "500m"; ls-api_limit: "500m"; batch-stress_request: "1000m"; batch-stress_limit: "2000m"; tunables: "base-slice-high"

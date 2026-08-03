@@ -1,0 +1,51 @@
+experiment:
+  name: qos-hierarchy
+  description: "QoS hierarchy competition — guaranteed/burstable/besteffort stress-ng pods co-located, CPU share vs request/limit. Must be run with --eevdf."
+replicates: 3
+pre_warm: 10
+duration: 120
+cooldown: 15
+# Family C (qos-hierarchy): three stress-ng pods, one per QoS class, sharing
+# one node. The QoS class comes from the request/limit VALUES, not from the
+# workload type (TASK-010 contract T-TYPES), so all three use type stress-ng.
+#   guaranteed  -> request == limit
+#   burstable   -> request < limit
+#   besteffort  -> no request, no limit
+#
+# Matrix keys follow the runner's generic N-pod mapping
+# <podname>_request / <podname>_limit. Pod names are deliberately
+# hyphen-free (guaranteed/burstable/besteffort) so the summary cell labels
+# come out as <qos>-<cell> (runner pattern <wpod>-<cell>), which is exactly
+# what qos-analyze.py (TASK-016) expects for the per-QoS rows.
+#
+# NOTE: run with --eevdf — this family measures EEVDF weight-share metrics
+# (per-pod vruntime/deadline/slice), so the Makefile target passes --eevdf.
+#
+# MANUAL STEP (TASK-016 contract): the runner does not yet capture the cgroup
+# hierarchy snapshot. After each cell, capture it per node manually:
+#   research/bin/cgroup-hierarchy-snapshot.sh <node-ip> \
+#     > <data-dir>/<cell>/cgroup-hierarchy-<node>.json
+# qos-analyze.py globs <data-dir>/**/<cell>/cgroup-hierarchy-*.json. The
+# runner is NOT modified for this; the manual capture is documented here until
+# the runner grows a capture hook.
+workloads:
+  guaranteed:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+  burstable:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+  besteffort:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - guaranteed_request: "500m"; guaranteed_limit: "500m"; burstable_request: "500m"; burstable_limit: "2000m"; besteffort_request: ""; besteffort_limit: ""
+  - guaranteed_request: "1000m"; guaranteed_limit: "1000m"; burstable_request: "250m"; burstable_limit: "1000m"; besteffort_request: ""; besteffort_limit: ""

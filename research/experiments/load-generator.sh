@@ -311,25 +311,29 @@ if [[ -n "$OUTPUT_FILE" && -f "$OUTPUT_FILE" ]]; then
 	LATENCIES=$(tail -n +2 "$OUTPUT_FILE" | cut -d',' -f3 | sort -n)
 	COUNT=$(echo "$LATENCIES" | wc -l)
 	if [[ "$COUNT" -gt 0 ]]; then
-		p50=$(echo "$LATENCIES" | sed -n "$(printf '%.0f' "$(echo "$COUNT * 0.50" | bc -l | cut -d. -f1)")p" 2>/dev/null || echo 0)
+		# bc may be absent on nodes; fall back to line 1 (the minimum) so the
+		# summary still prints instead of aborting after the CSV was written.
+		p50=$(echo "$LATENCIES" | sed -n "$(printf '%.0f' "$(echo "$COUNT * 0.50" | bc -l 2>/dev/null | cut -d. -f1 || echo 1)")p" 2>/dev/null || echo 0)
 		# If sed doesn't capture it, try head/tail.
 		if [[ -z "$p50" || "$p50" -eq 0 ]]; then
 			half=$((COUNT / 2))
 			[[ "$half" -lt 1 ]] && half=1
 			p50=$(echo "$LATENCIES" | head -n "$half" | tail -n 1)
 		fi
-		p95_line=$(printf '%.0f' "$(echo "$COUNT * 0.95" | bc -l | cut -d. -f1)")
+		p95_line=$(printf '%.0f' "$(echo "$COUNT * 0.95" | bc -l 2>/dev/null | cut -d. -f1 || echo 1)")
 		[[ "$p95_line" -lt 1 ]] && p95_line=1
 		p95=$(echo "$LATENCIES" | sed -n "${p95_line}p" 2>/dev/null || echo 0)
-		p99_line=$(printf '%.0f' "$(echo "$COUNT * 0.99" | bc -l | cut -d. -f1)")
+		p99_line=$(printf '%.0f' "$(echo "$COUNT * 0.99" | bc -l 2>/dev/null | cut -d. -f1 || echo 1)")
 		[[ "$p99_line" -lt 1 ]] && p99_line=1
 		p99=$(echo "$LATENCIES" | sed -n "${p99_line}p" 2>/dev/null || echo 0)
 	fi
 fi
 
-# Compute actual rate.
+# Compute actual rate. bc may be absent on some nodes (e.g. the experiment
+# VMs); every other bc call has a fallback, so this one degrades to 0 too
+# rather than aborting the run after the CSV was already written.
 if [[ "$TOTAL_DURATION" -gt 0 ]]; then
-	ACTUAL_RATE=$(echo "scale=1; $TOTAL_REQS / $TOTAL_DURATION" | bc)
+	ACTUAL_RATE=$(echo "scale=1; $TOTAL_REQS / $TOTAL_DURATION" | bc 2>/dev/null || echo "0")
 else
 	ACTUAL_RATE="0"
 fi

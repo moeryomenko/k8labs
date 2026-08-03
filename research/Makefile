@@ -169,6 +169,49 @@ experiment-eevdf-db-baseline: ## Run EEVDF database baseline experiment
 	@echo "Running EEVDF database baseline..."
 	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/eevdf-db-baseline.yaml
 
+.PHONY: experiment-weight-share
+experiment-weight-share: ## Run weight-share experiment (3 stress-ng pods, request-only weight matrix, EEVDF metrics)
+	@echo "Running weight-share experiment..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/weight-share.yaml --eevdf
+
+.PHONY: experiment-request-limit-matrix
+experiment-request-limit-matrix: ## Run request-limit-matrix experiment (15 request x limit cells, EEVDF metrics)
+	@echo "Running request-limit-matrix experiment..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/request-limit-matrix.yaml --eevdf
+
+.PHONY: experiment-qos-hierarchy
+experiment-qos-hierarchy: ## Run qos-hierarchy experiment (3 QoS-class pods: guaranteed/burstable/besteffort, EEVDF metrics)
+	@echo "Running qos-hierarchy experiment..."
+	# Family C: QoS hierarchy competition. Requires --eevdf (EEVDF weight-share
+	# metrics). Remember the manual cgroup-hierarchy-snapshot.sh capture per
+	# cell documented in the config comment (analyzer contract, TASK-016).
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/qos-hierarchy.yaml --eevdf
+
+.PHONY: experiment-latency-interference
+experiment-latency-interference: ## Run latency-interference experiment (api-server LS + stress-ng batch, latency_load, no EEVDF by default)
+	@echo "Running latency-interference experiment..."
+	# Family D: latency interference. Default is lighter (no --eevdf). For
+	# scheduler tracing, run instead:
+	#   $(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/latency-interference.yaml --perfetto --perfetto-config eevdf-deep
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/latency-interference.yaml
+
+.PHONY: experiment-cpu-burst
+experiment-cpu-burst: ## Run cpu-burst experiment (db-simulator 250m limit, with/without cpu.max.burst, no EEVDF by default)
+	@echo "Running cpu-burst experiment..."
+	# Family E: CPU burst at a low limit. Default is lighter (no --eevdf). Burst
+	# application is MANUAL via helper (TASK-020): after the pod starts, write
+	# cpu.max.burst on the node via SSH (path pattern in the config comment:
+	# <container-cgroup>/cpu.max.burst) and restore to 0 after each burst cell.
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/cpu-burst.yaml
+
+.PHONY: experiment-tunables-contention
+experiment-tunables-contention: ## Run tunables-contention experiment (api-server LS + stress-ng batch, scheduler tunable sweep, no EEVDF by default)
+	@echo "Running tunables-contention experiment..."
+	# Family F: scheduler tunable sweep under contention. Default is lighter
+	# (no --eevdf). Apply tunable sets manually per cell (TASK-020):
+	#   research/scripts/tunable-sweep.sh apply <tunables> && ... cell ... && research/scripts/tunable-sweep.sh restore
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/tunables-contention.yaml
+
 .PHONY: eevdf-analyze
 eevdf-analyze: ## Run EEVDF analysis pipeline on experiment data
 	@echo "Running EEVDF analysis..."

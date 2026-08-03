@@ -1,0 +1,37 @@
+experiment:
+  name: request-limit-matrix
+  description: "Request x limit matrix — single stress-ng pod, 15 request/limit combinations. Must be run with --eevdf."
+replicates: 3
+pre_warm: 10
+duration: 90
+cooldown: 15
+# Family B (request-limit-matrix): sweep the request/limit ratio for a single
+# stress-ng pod. The 2000m limit is exactly 2 CPUs — valid as a LIMIT. Requests
+# stay <= 1000m because the node has only ~1800m allocatable after system pods
+# (a 2000m request would not schedule). Do NOT add request=2000m.
+#
+# NOTE: run with --eevdf — this family measures EEVDF metrics across the
+# request/limit ratio sweep, so the Makefile target passes --eevdf.
+workload:
+  type: stress-ng
+  params:
+    cores: 2
+    load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: ""
+  - request: ""; limit: "250m"
+  - request: ""; limit: "500m"
+  - request: ""; limit: "1000m"
+  - request: ""; limit: "2000m"
+  - request: "100m"; limit: "100m"
+  - request: "100m"; limit: "250m"
+  - request: "100m"; limit: "500m"
+  - request: "100m"; limit: "1000m"
+  - request: "100m"; limit: "2000m"
+  - request: "500m"; limit: "500m"
+  - request: "500m"; limit: "1000m"
+  - request: "500m"; limit: "2000m"
+  - request: "1000m"; limit: "1000m"
+  - request: "1000m"; limit: "2000m"

@@ -159,6 +159,40 @@ substitute_cpu_params() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# substitute_pod_manifest — Render a workload template into a pod manifest
+# with a unique pod name and per-pod CPU request/limit values.
+#
+# Wraps substitute_cpu_params ({{CPU_REQUEST}}/{{CPU_LIMIT}} and the LS_/
+# BATCH_ markers) and additionally rewrites metadata.name to the requested
+# pod name so N co-located pods rendered from the same template get distinct
+# names. Fails if any {{...CPU_...}} marker survives substitution.
+#
+# Arguments:
+#   $1 — template file path
+#   $2 — pod name (rewrites metadata.name; must be DNS-1123 safe)
+#   $3 — CPU request value (e.g., "100m" or "" for none)
+#   $4 — CPU limit value (e.g., "200m" or "" for none)
+#   $5 — output path
+# ---------------------------------------------------------------------------
+substitute_pod_manifest() {
+    local template="$1"
+    local pod_name="$2"
+    local cpu_request="$3"
+    local cpu_limit="$4"
+    local output_path="$5"
+
+    substitute_cpu_params "$template" "$cpu_request" "$cpu_limit" "$output_path"
+
+    if grep -qE '\{\{[A-Za-z_]*CPU_[A-Za-z_]*\}\}' "$output_path"; then
+        die "Unresolved CPU template marker in rendered manifest '${output_path}' (template: ${template})"
+    fi
+
+    # Rewrite only the first "name:" line (metadata.name). GNU sed "0,/re/"
+    # addresses the first occurrence; container names appear later in the file.
+    sed -i "0,/^\([[:space:]]*\)name:[[:space:]]*.*/s//\1name: ${pod_name}/" "$output_path"
+}
+
 # ---- Pod Lifecycle ----
 
 # ---------------------------------------------------------------------------
@@ -322,6 +356,153 @@ start_load_generation() {
              done" || true
     ) &
     echo "$!"
+}
+
+# ---------------------------------------------------------------------------
+# start_latency_load_generation — Run the latency-recording load generator on
+# the pod's node and save the per-request latency CSV into the cell dir.
+#
+# REQ-2: the host has no route to the pod CIDR, so generation runs on the node
+# that hosts the pod (SSH), mirroring start_load_generation. latency-loadgen.sh
+# streams load-generator.sh to the node and captures the CSV rows
+# (timestamp,endpoint,latency_ms,status) back into the local output file.
+# Any failure (script missing, pod/node resolution, SSH, generator error)
+# returns non-zero so the caller can log a warning and continue (REQ-5) —
+# never fatal.
+#
+# Arguments:
+#   $1 — pod name
+#   $2 — rate (requests per second)
+#   $3 — duration in seconds
+#   $4 — endpoint mix (e.g. "users:30,orders:30,search:20,reports:20")
+#   $5 — output file path for the latency CSV (e.g. <cell-dir>/latency.csv)
+# Returns: 0 on success, non-zero on failure
+# ---------------------------------------------------------------------------
+start_latency_load_generation() {
+    local pod_name="$1"
+    local rate="$2"
+    local duration="$3"
+    local endpoints="$4"
+    local output_file="$5"
+
+    local latency_helper="${_EXPERIMENTS_SCRIPT_DIR}/latency-loadgen.sh"
+    if [[ ! -f "$latency_helper" ]]; then
+        log_error "latency-loadgen.sh not found at: ${latency_helper}"
+        return 1
+    fi
+
+    local pod_ip
+    pod_ip="$(kubectl --kubeconfig "$KUBECONFIG" get pod "$pod_name" \
+        -o jsonpath='{.status.podIP}' 2>/dev/null || true)"
+    if [[ -z "$pod_ip" ]]; then
+        log_error "Cannot resolve pod IP for '$pod_name' — skipping latency load generation"
+        return 1
+    fi
+
+    local node_ip
+    node_ip="$(get_pod_node_ip "$pod_name" 2>/dev/null || true)"
+    if [[ -z "$node_ip" ]]; then
+        log_error "Cannot resolve node IP for '$pod_name' — skipping latency load generation"
+        return 1
+    fi
+
+    local url="http://${pod_ip}:8080"
+    log "Starting latency load generation on node ${node_ip} against ${url} (rate: ${rate} req/s, duration: ${duration}s, endpoints: ${endpoints})"
+
+    bash "$latency_helper" "$node_ip" "$url" "$rate" "$duration" "$endpoints" "$output_file"
+}
+
+# ---------------------------------------------------------------------------
+# _is_http_capable_type — True when a workload type exposes an HTTP endpoint
+# on :8080 that latency-loadgen.sh can drive.
+#
+# Arguments:
+#   $1 — workload type (api-server, cpu-burner, db-simulator, latency-sensitive, ...)
+# Returns: 0 if the type is HTTP-capable, 1 otherwise
+# ---------------------------------------------------------------------------
+_is_http_capable_type() {
+    case "$1" in
+        api-server|cpu-burner|db-simulator|latency-sensitive) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# resolve_latency_load_target — Choose the pod that should receive the
+# top-level latency_load generation in a co-located (N-pod) experiment.
+#
+# The top-level latency_load block drives latency-loadgen.sh, which needs an
+# HTTP endpoint on the target pod's :8080. The target is resolved by type
+# priority:
+#   1. the first pod whose type is api-server
+#   2. else the first pod whose type is cpu-burner
+#   3. else the first pod whose type is latency-sensitive
+#   4. else the first pod whose type is HTTP-capable (db-simulator, or any of
+#      the priority types appearing later in the mapping)
+#
+# Args are "<pod-name>:<type>" pairs in workloads: mapping order, so the
+# result is deterministic regardless of IFS. Returns the pod name on stdout,
+# or non-zero when no HTTP-capable pod exists (the caller logs a warning and
+# skips generation, non-fatal).
+#
+# Arguments:
+#   $@ — "<pod-name>:<type>" pairs, one per pod in the workloads: mapping
+# Returns: pod name on stdout, or exit 1 when no HTTP-capable pod exists
+# ---------------------------------------------------------------------------
+resolve_latency_load_target() {
+    local entry pod type priority
+    for priority in api-server cpu-burner latency-sensitive; do
+        for entry in "$@"; do
+            pod="${entry%%:*}"
+            type="${entry#*:}"
+            if [[ "$type" == "$priority" ]]; then
+                printf '%s\n' "$pod"
+                return 0
+            fi
+        done
+    done
+    for entry in "$@"; do
+        pod="${entry%%:*}"
+        type="${entry#*:}"
+        if _is_http_capable_type "$type"; then
+            printf '%s\n' "$pod"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# wait_latency_generation — Wait for a background latency generation job and
+# report whether latency.csv landed in the cell dir.
+#
+# REQ-5: the cell continues regardless. A completed job with a usable CSV is
+# logged as saved; a failed job or missing CSV is logged as a WARNING. The
+# runner never hard-fails because of latency load generation.
+#
+# Arguments:
+#   $1 — background PID of the latency generation job (may be empty)
+#   $2 — cell directory where latency.csv should have been written
+# Returns: always 0
+# ---------------------------------------------------------------------------
+wait_latency_generation() {
+    local pid="$1"
+    local cell_dir="$2"
+    [[ -n "$pid" ]] || return 0
+
+    local rc=0
+    wait "$pid" 2>/dev/null || rc=$?
+
+    if [[ -f "${cell_dir}/latency.csv" ]]; then
+        local rows=0
+        rows="$(tail -n +2 "${cell_dir}/latency.csv" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+        log "Latency CSV saved: ${cell_dir}/latency.csv (${rows} data rows)"
+        if [[ "$rc" -ne 0 ]]; then
+            log "WARNING: latency load generation exited with code ${rc} — continuing with the partial CSV (non-fatal)"
+        fi
+    else
+        log "WARNING: latency.csv missing — latency load generation failed; continuing without it (non-fatal)"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -594,6 +775,82 @@ parse_yaml_subkey() {
 }
 
 # ---------------------------------------------------------------------------
+# parse_workload_entries — Extract pod names and types from a top-level
+# "workloads:" mapping (N-pod co-located configs).
+#
+# Supports the 2-space-indented YAML shape used by the repo configs:
+#     workloads:
+#       pod-a:
+#         type: stress-ng
+#         params:
+#           cores: 2
+#       pod-b:
+#         type: stress-ng
+#
+# Each pod is printed as "pod-name<TAB>type" on stdout (one line per pod).
+# A pod entry without a "type:" key is printed with an empty type so the
+# runner can reject it during validation.
+#
+# Arguments:
+#   $1 — config file path
+# Returns: "pod-name<TAB>type" lines on stdout
+# ---------------------------------------------------------------------------
+parse_workload_entries() {
+    local config_file="$1"
+    [[ -f "$config_file" ]] || die "Config file not found: $config_file"
+
+    local in_workloads=false
+    local current_pod=""
+    local current_type=""
+
+    # Flush the pod currently being collected. Uses bash dynamic scoping to
+    # read/write current_pod/current_type from the enclosing function.
+    _flush_workload_entry() {
+        [[ -n "$current_pod" ]] || return 0
+        printf '%s\t%s\n' "$current_pod" "$current_type"
+        current_pod=""
+        current_type=""
+    }
+
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        if [[ "$line" =~ ^"workloads:" ]]; then
+            in_workloads=true
+            continue
+        fi
+
+        if [[ "$in_workloads" == false ]]; then
+            continue
+        fi
+
+        local trimmed
+        trimmed="$(printf '%s' "$line" | sed 's/^[[:space:]]*//')"
+        [[ -z "$trimmed" ]] && continue
+
+        # A top-level (indent 0) key ends the workloads block
+        if [[ ! "$line" =~ ^[[:space:]] ]]; then
+            _flush_workload_entry
+            break
+        fi
+
+        local leading="${line%%[! ]*}"
+        local line_indent=${#leading}
+
+        if [[ $line_indent -eq 2 && "$line" =~ ^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*$ ]]; then
+            # Pod name key at indent 2 — flush the previous pod, start a new one
+            _flush_workload_entry
+            current_pod="$(printf '%s' "${line%%:*}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        elif [[ $line_indent -eq 4 && -n "$current_pod" && "$line" =~ ^[[:space:]]*"type:"[[:space:]] ]]; then
+            current_type="$(printf '%s' "${line#*:}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/"//g')"
+        fi
+    done < "$config_file"
+
+    # Flush any remaining pod at EOF
+    _flush_workload_entry
+}
+
+# ---------------------------------------------------------------------------
 # parse_matrix_entries — Extract matrix entries from config
 #
 # Supports two formats:
@@ -721,17 +978,20 @@ parse_matrix_entries() {
 #   $2 — cell label (e.g., "request=100m-limit=200m")
 #   $3 — replicate number
 #   $4 — pod name
+#   $5 — optional filename suffix (e.g., "-pod-a"); defaults to "" which
+#        keeps the historical metadata.json name
 # ---------------------------------------------------------------------------
 save_cell_metadata() {
     local output_dir="$1"
     local cell_label="$2"
     local replicate="$3"
     local pod_name="$4"
+    local pod_suffix="${5:-}"
 
     local node_name=""
     node_name="$(get_pod_node "$pod_name" 2>/dev/null || echo "unknown")"
 
-    local metadata_file="${output_dir}/${cell_label}/replicate-${replicate}/metadata.json"
+    local metadata_file="${output_dir}/${cell_label}/replicate-${replicate}/metadata${pod_suffix}.json"
 
     mkdir -p "$(dirname "$metadata_file")"
 
@@ -810,4 +1070,182 @@ stop_perfetto_trace() {
 
     bash "$perfetto_stop" "$node_ip" "$trace_pid" \
         --output-dir "$output_dir" --remote-path "$remote_path"
+}
+
+# ---- EEVDF Integration ----
+
+# ---------------------------------------------------------------------------
+# check_eevdf_available — Verify EEVDF collection tooling is present
+#
+# Local availability guard mirroring check_tracebox_available (perfetto) and
+# check_sched_debug_available (eevdf-common.sh). With a node IP it also probes
+# that /proc/<pid>/sched is readable on the node; without one it only checks
+# the local tool scripts exist. Failure is non-fatal — callers log a warning
+# and continue.
+#
+# Arguments:
+#   $1 — optional node IP to probe /proc/<pid>/sched readability
+# Returns: 0 if available, 1 if not
+# ---------------------------------------------------------------------------
+check_eevdf_available() {
+    local node_ip="${1:-}"
+    local eevdf_observe="${RESEARCH_DIR}/bin/eevdf-observe.sh"
+    local pid_watch="${RESEARCH_DIR}/bin/cgroup-pid-watch.sh"
+
+    [[ -f "$eevdf_observe" ]] || return 1
+    [[ -f "$pid_watch" ]] || return 1
+
+    if [[ -n "$node_ip" ]]; then
+        ssh_node "$node_ip" "test -r /proc/1/sched" 2>/dev/null || return 1
+    fi
+
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# get_manifest_pod_name — Extract the pod name from a workload manifest
+#
+# Reads the first metadata.name line from a manifest/template so the runner
+# can pin per-pod artifact names (e.g. eevdf-<pod>.json) before deployment.
+#
+# Arguments:
+#   $1 — manifest or template file path
+# Returns: pod name on stdout
+# ---------------------------------------------------------------------------
+get_manifest_pod_name() {
+    local template="$1"
+    [[ -f "$template" ]] || return 1
+    grep -E '^\s*name:' "$template" | head -1 | awk '{print $2}'
+}
+
+# ---------------------------------------------------------------------------
+# collect_eevdf_snapshot — Capture a one-shot EEVDF JSON snapshot for a pod
+#
+# Runs eevdf-observe.sh <pod> and saves its JSON to the output file. Any
+# failure (missing tool, unreachable cluster, timeout) returns non-zero so
+# the caller can log a warning and continue — never fatal.
+#
+# Arguments:
+#   $1 — pod name
+#   $2 — output file path (e.g. <cell-dir>/eevdf-<pod>.json)
+# Returns: 0 on success, 1 on collection failure
+# ---------------------------------------------------------------------------
+collect_eevdf_snapshot() {
+    local pod_name="$1"
+    local output_file="$2"
+    local eevdf_observe="${RESEARCH_DIR}/bin/eevdf-observe.sh"
+
+    [[ -f "$eevdf_observe" ]] || {
+        log "WARNING: eevdf-observe.sh not found at: ${eevdf_observe}"
+        return 1
+    }
+
+    log "Capturing EEVDF snapshot for pod '$pod_name'"
+
+    if timeout 30 bash "$eevdf_observe" "$pod_name" > "$output_file" 2>>"${output_file}.warnings"; then
+        log "EEVDF snapshot saved: $output_file"
+        return 0
+    else
+        # A failed snapshot leaves an empty file behind; drop it so the cell
+        # dir only contains real artifacts.
+        rm -f "$output_file"
+        log "WARNING: EEVDF snapshot failed for pod '$pod_name' — continuing without snapshot"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# collect_eevdf_pids — Run the per-task EEVDF time series for a pod
+#
+# Runs cgroup-pid-watch.sh <pod> --interval <interval> --count <n> writing
+# CSV to the output file. Mirrors collect_cgroup_data: failures are logged
+# (and, in the expected timeout/SIGINT cases, treated as normal completion)
+# instead of aborting the experiment.
+#
+# Arguments:
+#   $1 — pod name
+#   $2 — duration in seconds
+#   $3 — interval in seconds
+#   $4 — output file path (e.g. <cell-dir>/eevdf-<pod>-pids.csv)
+# ---------------------------------------------------------------------------
+collect_eevdf_pids() {
+    local pod_name="$1"
+    local duration="$2"
+    local interval="$3"
+    local output_file="$4"
+    local pid_watch="${RESEARCH_DIR}/bin/cgroup-pid-watch.sh"
+
+    [[ -f "$pid_watch" ]] || {
+        log "WARNING: cgroup-pid-watch.sh not found at: ${pid_watch}"
+        return 1
+    }
+
+    log "Starting EEVDF per-task time series for pod '$pod_name' (duration: ${duration}s, interval: ${interval}s)"
+
+    # Calculate count from duration and interval
+    local count=$(( duration / interval ))
+
+    # stdout → CSV data file; stderr → console (includes [SUMMARY] line)
+    timeout "$duration" bash "$pid_watch" "$pod_name" \
+        --interval "$interval" \
+        --count "$count" \
+        > "$output_file" \
+        2>>"${output_file}.warnings" || {
+        local exit_code=$?
+        if [[ $exit_code -eq 124 ]]; then
+            log "cgroup-pid-watch.sh completed (timeout after ${duration}s)"
+        elif [[ $exit_code -eq 130 ]]; then
+            log "cgroup-pid-watch.sh interrupted"
+        else
+            log "WARNING: cgroup-pid-watch.sh exited with code $exit_code — continuing without EEVDF time series"
+        fi
+    }
+}
+
+# ---------------------------------------------------------------------------
+# add_eevdf_metadata — Record EEVDF artifact bookkeeping in a cell metadata file
+#
+# Appends eevdf_* fields (eevdf_enabled, eevdf_artifacts) to the given JSON
+# metadata file. Artifact presence is checked on disk so a failed collection
+# records a null entry rather than a stale path. Never fatal — failures are
+# logged as warnings.
+#
+# Arguments:
+#   $1 — metadata file path (e.g. <cell-dir>/metadata.json)
+#   $2 — cell directory (absolute path where artifacts live)
+#   $3..N — pod names that had EEVDF collection attempted
+# ---------------------------------------------------------------------------
+add_eevdf_metadata() {
+    local metadata_file="$1"
+    local cell_dir="$2"
+    shift 2
+
+    local rc=0
+    python3 - "$metadata_file" "$cell_dir" "$@" <<'PYEOF' 2>/dev/null || rc=1
+import json
+import os
+import sys
+
+metadata_file, cell_dir = sys.argv[1], sys.argv[2]
+pods = sys.argv[3:]
+
+with open(metadata_file, "r") as f:
+    metadata = json.load(f)
+
+metadata["eevdf_enabled"] = True
+metadata["eevdf_artifacts"] = {}
+for pod in pods:
+    snapshot = os.path.join(cell_dir, "eevdf-{}.json".format(pod))
+    pids_csv = os.path.join(cell_dir, "eevdf-{}-pids.csv".format(pod))
+    metadata["eevdf_artifacts"][pod] = {
+        "snapshot": os.path.basename(snapshot) if os.path.getsize(snapshot) > 0 else None,
+        "pids_csv": os.path.basename(pids_csv) if os.path.getsize(pids_csv) > 0 else None,
+    }
+
+with open(metadata_file, "w") as f:
+    json.dump(metadata, f, indent=2)
+PYEOF
+    if [[ $rc -ne 0 ]]; then
+        log "WARNING: Failed to add EEVDF metadata to ${metadata_file}"
+    fi
 }

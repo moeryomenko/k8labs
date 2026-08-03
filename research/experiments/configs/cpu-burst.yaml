@@ -1,0 +1,48 @@
+experiment:
+  name: cpu-burst
+  description: "CPU burst — db-simulator at a 250m limit, with and without cpu.max.burst. Run without --eevdf by default (lighter); burst application is manual via helper (TASK-020)."
+replicates: 3
+pre_warm: 10
+duration: 90
+cooldown: 15
+# Family E (cpu-burst): a single db-simulator pod pinned to a LOW CPU limit
+# (250m) so CFS bandwidth throttling is visible. The probe (TASK-001) found
+# cpu.burst IS supported on this cluster (CONFIG_CFS_BANDWIDTH=y; cpu.max.burst
+# present at every cgroup level, default 0; writable from the node via SSH,
+# NOT from inside the pod — cgroupfs is RO in containers). burst is inert
+# until a CPU quota (limit) is set, hence limit=250m.
+#
+# MATRIX KEY: `burst` is a NEW cell key. The runner's resolve_cell_params
+# collects every key=value pair and ignores unknown keys (validation only
+# checks request/limit), so the cell carries `burst` purely as a label for
+# the analysis and for TASK-020's helper. Units are MICROSECONDS (same as the
+# quota field of cpu.max).
+#
+# BURST VALUE DECISION: burst=100000 (one full 100ms period). The quota for
+# 250m is 25000us per 100000us period. With burst=100000 the cgroup may run
+# up to 25000+100000 = 125000us in a period (~1.25 CPUs briefly), enough to
+# absorb the db-simulator checkpoint spike (every 30s), then it must repay
+# by throttling in the following periods. The analysis needs only the
+# with/without-burst distinction.
+#
+# TASK-020 / HELPER CONTRACT (manual, after pod start): for burst cells the
+# helper must write cpu.max.burst on the pod's node via SSH (host-root
+# writable per probe) and restore it to 0 after the cell. Write path pattern:
+#   ssh root@<node> "echo 100000 > <container-cgroup>/cpu.max.burst"
+# where <container-cgroup> is the pod container's cgroup v2 path, e.g.
+#   /sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/<pod-uid>/<container>/cpu.max.burst
+# (resolve it on the node from the pod's cgroup annotation or by matching the
+# container PID under the pod's cgroup). The no-burst cell writes 0 (the
+# kernel default) — explicit reset to 0 is the restore action after every
+# burst cell.
+#
+# RUN MODE: default Makefile target runs WITHOUT --eevdf (lighter). For
+# scheduler tracing use:
+#   --perfetto --perfetto-config eevdf-deep
+workload:
+  type: db-simulator
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: "250m"; burst: ""
+  - request: ""; limit: "250m"; burst: "100000"

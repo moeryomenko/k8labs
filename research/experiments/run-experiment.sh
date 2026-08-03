@@ -35,6 +35,7 @@ DRY_RUN=false
 OUTPUT_BASE_DIR="${EXPERIMENTS_DIR}/data"
 PERFETTO_ENABLED=false
 PERFETTO_CONFIG="scheduling"
+EEVDF_ENABLED=false
 
 # ---- Background Process Tracking ----
 declare -a _BG_PIDS=()
@@ -87,6 +88,8 @@ Options:
   --perfetto        Enable Perfetto tracing on workload nodes
   --perfetto-config CONFIG
                     Perfetto trace config name (default: scheduling)
+  --eevdf           Collect per-pod EEVDF scheduler metrics during the
+                    measurement window (JSON snapshots + per-task time series)
   -h, --help        Show this help and exit
 
 Config format: See research/experiments/configs/*.yaml for examples.
@@ -107,7 +110,14 @@ EOF
 # ---------------------------------------------------------------------------
 run_cmd() {
     if [[ "$DRY_RUN" == true ]]; then
-        printf '[DRY-RUN] %s\n' "$*" >&2
+        # Join arguments with spaces for the dry-run message. A plain "$*"
+        # would join on the first char of IFS ($'\n\t'), splitting the
+        # command across lines.
+        printf '[DRY-RUN]' >&2
+        for arg in "$@"; do
+            printf ' %s' "$arg" >&2
+        done
+        printf '\n' >&2
         return 0
     fi
     "$@"
@@ -202,6 +212,75 @@ resolve_cell_params() {
 }
 
 # ---------------------------------------------------------------------------
+# millicores_of — Normalize a CPU quantity to integer millicores
+#
+# Handles the repo's millicore format ("500m" -> 500), bare CPU counts
+# ("2" -> 2000), and the unset sentinel ("" or "max" -> 0). Any other value
+# is a config error and dies with a message naming the offending value.
+#
+# Arguments:
+#   $1 — CPU quantity string
+# Returns: integer millicores on stdout
+# ---------------------------------------------------------------------------
+millicores_of() {
+    local val="${1:-}"
+    if [[ -z "$val" || "$val" == "max" ]]; then
+        printf '0\n'
+        return 0
+    fi
+    case "$val" in
+        *m) val="${val%m}" ;;
+    esac
+    [[ "$val" =~ ^[0-9]+$ ]] \
+        || die "Invalid CPU quantity '${1}' (expected millicores like '500m')"
+    printf '%s\n' "$(( 10#$val ))"
+}
+
+# ---------------------------------------------------------------------------
+# validate_cell_cpu_params — Reject a matrix cell whose request exceeds limit
+#
+# Compares every request/limit pair in the cell as integer millicores (the
+# "m" suffix is stripped). Covers all key shapes used by the configs:
+#   single-pod        request/limit
+#   legacy 2-pod      ls_request/ls_limit, batch_request/batch_limit
+#   generic N-pod     <prefix>_request/<prefix>_limit (a_, b_, c_, ...)
+#
+# A pair is checked only when BOTH values are non-empty; empty request and/or
+# empty limit are valid (BestEffort / request-only cells) and are left alone.
+# An offending pair dies with a clear error naming the cell and the keys.
+#
+# Arguments:
+#   $1 — matrix cell string (semicolon-separated key=value pairs)
+# ---------------------------------------------------------------------------
+validate_cell_cpu_params() {
+    local cell="$1"
+    resolve_cell_params "$cell"
+
+    local key
+    for key in "${!CELL_PARAMS[@]}"; do
+        local req_key="" lim_key=""
+        case "$key" in
+            request)        req_key="request";       lim_key="limit" ;;
+            ls_request)     req_key="ls_request";    lim_key="ls_limit" ;;
+            batch_request)  req_key="batch_request"; lim_key="batch_limit" ;;
+            *_request)      req_key="$key";          lim_key="${key%_request}_limit" ;;
+            *)              continue ;;
+        esac
+
+        local req="${CELL_PARAMS[$req_key]:-}"
+        local lim="${CELL_PARAMS[$lim_key]:-}"
+        [[ -n "$req" && -n "$lim" ]] || continue
+
+        local req_m lim_m
+        req_m="$(millicores_of "$req")"
+        lim_m="$(millicores_of "$lim")"
+        if (( req_m > lim_m )); then
+            die "Invalid cell: ${req_key}=${req} exceeds ${lim_key}=${lim} (cell: ${cell})"
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
 # get_workload_template — Get workload template path from config type
 # ---------------------------------------------------------------------------
 get_workload_template() {
@@ -259,6 +338,10 @@ main() {
                 PERFETTO_CONFIG="${2:?--perfetto-config requires a value}"
                 shift 2
                 ;;
+            --eevdf)
+                EEVDF_ENABLED=true
+                shift
+                ;;
             -*)
                 printf 'ERROR: Unknown option: %s\n' "$1" >&2
                 usage 1
@@ -303,6 +386,18 @@ main() {
         log "Perfetto tracing enabled (config: ${PERFETTO_CONFIG})"
     fi
 
+    # ---- EEVDF initialization ----
+    # Availability is only gateable in real runs (dry-run always advertises the
+    # plan); missing tooling degrades gracefully to no EEVDF collection.
+    if [[ "$EEVDF_ENABLED" == true && "$DRY_RUN" == false ]]; then
+        if check_eevdf_available; then
+            log "EEVDF scheduler metric collection enabled"
+        else
+            log "WARNING: EEVDF tooling unavailable (eevdf-observe.sh/cgroup-pid-watch.sh) — continuing without EEVDF metrics"
+            EEVDF_ENABLED=false
+        fi
+    fi
+
     # ---- Resolve project root before anything else ----
     resolve_project_root
 
@@ -339,18 +434,89 @@ main() {
 
     # Detect if this is a co-located experiment (key: "workloads:" at top level)
     local is_colocated=false
+    local legacy_colocated=false
     local ls_workload_type="" batch_workload_type=""
     if grep -qE '^workloads:' "$config_file" 2>/dev/null; then
         is_colocated=true
         log "Detected co-located experiment configuration"
     fi
 
+    # ---- Parse the workloads: mapping (N-pod co-located configs) ----
+    local -a workload_pods=()
+    local -a workload_types=()
+    if [[ "$is_colocated" == true ]]; then
+        while IFS=$'\t' read -r pod_name pod_type; do
+            [[ -n "$pod_name" ]] || continue
+            workload_pods+=("$pod_name")
+            workload_types+=("$pod_type")
+        done < <(parse_workload_entries "$config_file")
+
+        [[ ${#workload_pods[@]} -gt 0 ]] || die "Config has 'workloads:' but no workload entries found"
+
+        # Legacy special case: exactly latency-sensitive + batch keeps the
+        # original 2-pod co-located path (old configs and old matrix keys).
+        if [[ ${#workload_pods[@]} -eq 2 \
+            && "${workload_pods[0]}" == "latency-sensitive" \
+            && "${workload_pods[1]}" == "batch" ]]; then
+            legacy_colocated=true
+        fi
+
+        # Generic N-pod validation: every pod needs a known workload type
+        if [[ "$legacy_colocated" == false ]]; then
+            for i in "${!workload_pods[@]}"; do
+                local wpod="${workload_pods[$i]}"
+                local wtype="${workload_types[$i]}"
+                if [[ -z "$wtype" ]]; then
+                    die "Pod '${wpod}' under 'workloads:' is missing a 'type' key"
+                fi
+                get_workload_template "$wtype" >/dev/null
+            done
+            log "N-pod co-located configuration: ${#workload_pods[@]} workloads"
+        fi
+    fi
+
+    # REQ-2: co-located configs may declare a top-level latency_load block
+    # (same sub-keys as workload.params.latency_load). It targets the
+    # latency-sensitive pod: the "latency-sensitive" pod in the legacy 2-pod
+    # layout, or the first pod whose type is latency-sensitive in the generic
+    # N-pod layout. Absent block keeps the legacy behaviour unchanged.
+    local colocated_latency_load=""
+    local colocated_latency_rate=""
+    local colocated_latency_duration=""
+    local colocated_latency_endpoints=""
+    if [[ "$is_colocated" == true ]]; then
+        colocated_latency_rate="$(parse_yaml_subkey "$config_file" "latency_load.rate" 2>/dev/null || true)"
+        if [[ -n "$colocated_latency_rate" ]]; then
+            colocated_latency_load="true"
+            colocated_latency_duration="$(parse_yaml_subkey "$config_file" "latency_load.duration" 2>/dev/null || true)"
+            colocated_latency_endpoints="$(parse_yaml_subkey "$config_file" "latency_load.endpoints" 2>/dev/null || true)"
+            [[ -n "$colocated_latency_duration" ]] || colocated_latency_duration="$duration"
+            [[ -n "$colocated_latency_endpoints" ]] || colocated_latency_endpoints="users:30,orders:30,search:20,reports:20"
+        fi
+    fi
+
     local single_workload_type=""
     local single_workload_params_endpoint=""
+    local single_workload_latency_load=""
+    local single_workload_latency_rate=""
+    local single_workload_latency_duration=""
+    local single_workload_latency_endpoints=""
     if [[ "$is_colocated" == false ]]; then
         single_workload_type="$(parse_yaml_value "$config_file" "workload.type")" \
             || die "Config missing 'workload.type'"
         single_workload_params_endpoint="$(parse_yaml_subkey "$config_file" "workload.params.endpoint" 2>/dev/null || true)"
+
+        # REQ-2: optional latency-recording load generation block. The rate is
+        # the presence probe; duration defaults to the experiment duration and
+        # the endpoint mix to the generator's default when not declared.
+        single_workload_latency_rate="$(parse_yaml_subkey "$config_file" "workload.params.latency_load.rate" 2>/dev/null || true)"
+        if [[ -n "$single_workload_latency_rate" ]]; then
+            single_workload_latency_load="true"
+            single_workload_latency_duration="$(parse_yaml_subkey "$config_file" "workload.params.latency_load.duration" 2>/dev/null || true)"
+            single_workload_latency_endpoints="$(parse_yaml_subkey "$config_file" "workload.params.latency_load.endpoints" 2>/dev/null || true)"
+            [[ -n "$single_workload_latency_duration" ]] || single_workload_latency_duration="$duration"
+            [[ -n "$single_workload_latency_endpoints" ]] || single_workload_latency_endpoints="users:30,orders:30,search:20,reports:20"
+        fi
     fi
 
     # ---- Parse matrix entries ----
@@ -360,6 +526,15 @@ main() {
     done < <(parse_matrix_entries "$config_file")
 
     [[ ${#matrix_entries[@]} -gt 0 ]] || die "No matrix entries found in config"
+
+    # REQ-6 (TASK-011): reject any cell whose request exceeds its limit before
+    # anything runs. Applied to every matrix entry up front so --dry-run and
+    # real runs fail identically, across single-pod, legacy 2-pod, and generic
+    # N-pod key shapes.
+    local entry
+    for entry in "${matrix_entries[@]}"; do
+        validate_cell_cpu_params "$entry"
+    done
 
     # ---- Log experiment info ----
     log "============================================================"
@@ -381,6 +556,79 @@ main() {
         for entry in "${matrix_entries[@]}"; do
             log "  - ${entry}"
         done
+
+        # REQ-2: latency load generation plan (single-pod workload.params.latency_load)
+        if [[ "$is_colocated" == false && -n "$single_workload_latency_load" ]]; then
+            local dry_cell_dir="${OUTPUT_BASE_DIR}/${experiment_name}/<cell>/replicate-<n>"
+            log ""
+            log "Latency load generation (workload.params.latency_load):"
+            log "  Target: <pod> at http://<pod-ip>:8080 (runs on the pod's node via SSH)"
+            log "  Rate: ${single_workload_latency_rate} req/s"
+            log "  Duration: ${single_workload_latency_duration}s"
+            log "  Endpoints: ${single_workload_latency_endpoints}"
+            log "  CSV: ${dry_cell_dir}/latency.csv"
+            log "  Degradation: generator failure is non-fatal — the cell continues with a warning and latency.csv may be absent"
+        fi
+
+        # REQ-2: latency load generation plan (co-located top-level latency_load)
+        if [[ "$is_colocated" == true && -n "$colocated_latency_load" ]]; then
+            local dry_cell_dir="${OUTPUT_BASE_DIR}/${experiment_name}/<cell>/replicate-<n>"
+            local dry_latency_target="latency-sensitive"
+            if [[ "$legacy_colocated" == false ]]; then
+                local -a latency_args=()
+                for i in "${!workload_pods[@]}"; do
+                    latency_args+=("${workload_pods[$i]}:${workload_types[$i]}")
+                done
+                # REQ-4 (TASK-013): target api-server/cpu-burner/latency-sensitive
+                # (in that order) or the first HTTP-capable pod, not just
+                # latency-sensitive — Family D uses an api-server LS pod.
+                dry_latency_target="$(resolve_latency_load_target "${latency_args[@]}")" \
+                    || dry_latency_target="<http-capable pod>"
+            fi
+            log ""
+            log "Latency load generation (top-level latency_load):"
+            log "  Target pod: ${dry_latency_target}"
+            log "  Rate: ${colocated_latency_rate} req/s"
+            log "  Duration: ${colocated_latency_duration}s"
+            log "  Endpoints: ${colocated_latency_endpoints}"
+            log "  CSV: ${dry_cell_dir}/latency.csv"
+            log "  Degradation: generator failure is non-fatal — the cell continues with a warning and latency.csv may be absent"
+        fi
+
+        if [[ "$is_colocated" == true && "$legacy_colocated" == false ]]; then
+            # Generic N-pod plan: enumerate every deployment and
+            # data-collection stream. Resolve the first matrix cell so the
+            # shown request/limit values are the real ones.
+            if [[ ${#matrix_entries[@]} -gt 0 ]]; then
+                resolve_cell_params "${matrix_entries[0]}"
+            fi
+            local dry_cell_dir="${OUTPUT_BASE_DIR}/${experiment_name}/<cell>/replicate-<n>"
+            log ""
+            log "N-pod co-located workloads:"
+            for i in "${!workload_pods[@]}"; do
+                local wpod="${workload_pods[$i]}"
+                local wtype="${workload_types[$i]}"
+                local wreq_key="${wpod#pod-}_request"
+                local wlim_key="${wpod#pod-}_limit"
+                if [[ -n "${CELL_PARAMS[${wpod}_request]+x}" ]]; then
+                    wreq_key="${wpod}_request"
+                    wlim_key="${wpod}_limit"
+                fi
+                local wtemplate
+                wtemplate="$(get_workload_template "$wtype")"
+                log "  Deployment $((i + 1))/${#workload_pods[@]}: ${wpod} (type: ${wtype}, request=${CELL_PARAMS[$wreq_key]:-}, limit=${CELL_PARAMS[$wlim_key]:-})"
+                run_cmd substitute_pod_manifest "$wtemplate" "$wpod" \
+                    "${CELL_PARAMS[$wreq_key]:-}" "${CELL_PARAMS[$wlim_key]:-}" \
+                    "${dry_cell_dir}/${wpod}.yaml"
+            done
+            log ""
+            log "Data collection per pod:"
+            for pod in "${workload_pods[@]}"; do
+                run_cmd collect_cgroup_data "$pod" "$duration" "$cgroup_interval" "${dry_cell_dir}/cgroup-${pod}.csv"
+                run_cmd collect_kubectl_top "$pod" "$duration" "$cgroup_interval" "${dry_cell_dir}/kubectl-top-${pod}.csv"
+            done
+        fi
+
         if [[ "$PERFETTO_ENABLED" == true ]]; then
             log ""
             log "Perfetto tracing enabled:"
@@ -389,6 +637,38 @@ main() {
             log "  Trace capture: start -> measurement -> stop -> download"
             log "  Trace file: <cell-dir>/perfetto-trace.perfetto-trace"
             log "  Metadata: perfetto_trace_file, perfetto_config in metadata.json"
+        fi
+
+        if [[ "$EEVDF_ENABLED" == true ]]; then
+            local dry_cell_dir="${OUTPUT_BASE_DIR}/${experiment_name}/<cell>/replicate-<n>"
+            log ""
+            log "EEVDF scheduler metric collection enabled:"
+            if [[ "$is_colocated" == true && "$legacy_colocated" == true ]]; then
+                # Legacy 2-pod co-located: one EEVDF stream per pod
+                for pod in latency-sensitive batch-burner; do
+                    log "  Snapshot: ${dry_cell_dir}/eevdf-${pod}.json (eevdf-observe.sh)"
+                    run_cmd collect_eevdf_snapshot "$pod" "${dry_cell_dir}/eevdf-${pod}.json"
+                    log "  Time series: ${dry_cell_dir}/eevdf-${pod}-pids.csv (cgroup-pid-watch.sh)"
+                    run_cmd collect_eevdf_pids "$pod" "$duration" "$cgroup_interval" "${dry_cell_dir}/eevdf-${pod}-pids.csv"
+                done
+            elif [[ "$is_colocated" == true ]]; then
+                # Generic N-pod co-located: one EEVDF stream per pod
+                for pod in "${workload_pods[@]}"; do
+                    log "  Snapshot: ${dry_cell_dir}/eevdf-${pod}.json (eevdf-observe.sh)"
+                    run_cmd collect_eevdf_snapshot "$pod" "${dry_cell_dir}/eevdf-${pod}.json"
+                    log "  Time series: ${dry_cell_dir}/eevdf-${pod}-pids.csv (cgroup-pid-watch.sh)"
+                    run_cmd collect_eevdf_pids "$pod" "$duration" "$cgroup_interval" "${dry_cell_dir}/eevdf-${pod}-pids.csv"
+                done
+            else
+                # Single-pod: artifact name pinned to the manifest pod name
+                local single_pod_name
+                single_pod_name="$(get_manifest_pod_name "$(get_workload_template "$single_workload_type")" 2>/dev/null || true)"
+                log "  Snapshot: ${dry_cell_dir}/eevdf-${single_pod_name}.json (eevdf-observe.sh)"
+                run_cmd collect_eevdf_snapshot "$single_pod_name" "${dry_cell_dir}/eevdf-${single_pod_name}.json"
+                log "  Time series: ${dry_cell_dir}/eevdf-${single_pod_name}-pids.csv (cgroup-pid-watch.sh)"
+                run_cmd collect_eevdf_pids "$single_pod_name" "$duration" "$cgroup_interval" "${dry_cell_dir}/eevdf-${single_pod_name}-pids.csv"
+            fi
+            log "  Metadata: eevdf_* fields (eevdf_enabled, eevdf_artifacts) in cell metadata.json"
         fi
         log ""
         log "Prerequisites check passed — cluster reachable, tools found"
@@ -429,8 +709,8 @@ main() {
             local cell_dir="${base_data_dir}/${cell_label}/replicate-${rep}"
             mkdir -p "$cell_dir"
 
-            if [[ "$is_colocated" == true ]]; then
-                # ---- Co-located experiment ----
+            if [[ "$is_colocated" == true && "$legacy_colocated" == true ]]; then
+                # ---- Co-located experiment (legacy 2-pod special case) ----
                 local ls_request="${CELL_PARAMS[ls_request]:-}"
                 local ls_limit="${CELL_PARAMS[ls_limit]:-}"
                 local batch_request="${CELL_PARAMS[batch_request]:-}"
@@ -464,6 +744,24 @@ main() {
                 # Wait for both pods
                 wait_for_pod_running "$ls_pod_name" || die "Latency-sensitive pod did not start"
                 wait_for_pod_running "$batch_pod_name" || die "Batch pod did not start"
+
+                # ---- Latency load generation (top-level latency_load → latency-sensitive pod) ----
+                local latency_pid=""
+                if [[ -n "$colocated_latency_load" && "$DRY_RUN" == false ]]; then
+                    log "Starting latency load generation against latency-sensitive pod (rate: ${colocated_latency_rate} req/s, duration: ${colocated_latency_duration}s, endpoints: ${colocated_latency_endpoints})"
+                    start_latency_load_generation "$ls_pod_name" \
+                        "$colocated_latency_rate" \
+                        "$colocated_latency_duration" \
+                        "$colocated_latency_endpoints" \
+                        "${cell_dir}/latency.csv" &
+                    latency_pid=$!
+                fi
+
+                # ---- EEVDF snapshots (start of measurement window) ----
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    collect_eevdf_snapshot "$ls_pod_name" "${cell_dir}/eevdf-${ls_pod_name}.json" || true
+                    collect_eevdf_snapshot "$batch_pod_name" "${cell_dir}/eevdf-${batch_pod_name}.json" || true
+                fi
 
                 # ---- Perfetto trace setup (uses first pod for node resolution) ----
                 local perfetto_node_ip=""
@@ -503,9 +801,20 @@ main() {
                 collect_kubectl_top "$batch_pod_name" "$duration" "$cgroup_interval" "${cell_dir}/kubectl-top-batch.csv" &
                 bg_start
 
+                # Collect EEVDF per-task time series for both (in background)
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    collect_eevdf_pids "$ls_pod_name" "$duration" "$cgroup_interval" "${cell_dir}/eevdf-${ls_pod_name}-pids.csv" &
+                    bg_start
+                    collect_eevdf_pids "$batch_pod_name" "$duration" "$cgroup_interval" "${cell_dir}/eevdf-${batch_pod_name}-pids.csv" &
+                    bg_start
+                fi
+
                 # Wait for duration
                 log "Measurement period: ${duration}s"
                 run_cmd sleep "$duration"
+
+                # Wait for latency generation to finish and report the CSV
+                wait_latency_generation "$latency_pid" "$cell_dir"
 
                 # Stop background processes
                 log "Stopping data collection..."
@@ -541,6 +850,11 @@ m['perfetto_config'] = '${PERFETTO_CONFIG}'
 with open('${mdf}', 'w') as f:
     json.dump(m, f, indent=2)
 " 2>/dev/null || log "WARNING: Failed to add perfetto metadata to ${mdf}"
+                fi
+
+                # ---- Add EEVDF metadata to existing metadata.json ----
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    add_eevdf_metadata "${cell_dir}/metadata.json" "$cell_dir" "$ls_pod_name" "$batch_pod_name"
                 fi
 
                 # For co-located, we need a combined summary entry
@@ -584,6 +898,193 @@ with open('${mdf}', 'w') as f:
                 delete_pod "$ls_pod_name"
                 delete_pod "$batch_pod_name"
 
+            elif [[ "$is_colocated" == true ]]; then
+                # ---- Generic N-pod co-located experiment ----
+                local -a pod_manifests=()
+                local -a pod_names=()
+                local i
+                for ((i = 0; i < ${#workload_pods[@]}; i++)); do
+                    local wpod="${workload_pods[$i]}"
+                    local wtype="${workload_types[$i]}"
+                    local wreq_key="${wpod#pod-}_request"
+                    local wlim_key="${wpod#pod-}_limit"
+                    if [[ -n "${CELL_PARAMS[${wpod}_request]+x}" ]]; then
+                        wreq_key="${wpod}_request"
+                        wlim_key="${wpod}_limit"
+                    fi
+                    local wpod_request="${CELL_PARAMS[$wreq_key]:-}"
+                    local wpod_limit="${CELL_PARAMS[$wlim_key]:-}"
+
+                    local wtemplate
+                    wtemplate="$(get_workload_template "$wtype")"
+                    local wmanifest="${cell_dir}/${wpod}.yaml"
+                    substitute_pod_manifest "$wtemplate" "$wpod" "$wpod_request" "$wpod_limit" "$wmanifest"
+                    pod_manifests+=("$wmanifest")
+                    pod_names+=("$wpod")
+                    log "Pod '${wpod}' (${wtype}): req=${wpod_request} lim=${wpod_limit} manifest=${wmanifest}"
+                done
+
+                # Deploy all pods
+                for wm in "${pod_manifests[@]}"; do
+                    kubectl --kubeconfig "$KUBECONFIG" delete -f "$wm" --ignore-not-found --now 2>/dev/null || true
+                    kubectl --kubeconfig "$KUBECONFIG" apply -f "$wm" >/dev/null
+                done
+
+                # Wait for every pod to reach Running
+                for wpod in "${pod_names[@]}"; do
+                    wait_for_pod_running "$wpod" || die "Pod '${wpod}' did not start"
+                done
+
+                # ---- Latency load generation (top-level latency_load → resolved HTTP-capable target) ----
+                local latency_pid=""
+                if [[ -n "$colocated_latency_load" && "$DRY_RUN" == false ]]; then
+                    local -a latency_args=()
+                    for i in "${!workload_pods[@]}"; do
+                        latency_args+=("${workload_pods[$i]}:${workload_types[$i]}")
+                    done
+                    # REQ-4 (TASK-013): resolve the pod that should receive the
+                    # latency load — api-server/cpu-burner/latency-sensitive (in
+                    # that order) or the first HTTP-capable pod. Family D uses an
+                    # api-server LS pod, which the old latency-sensitive-only
+                    # lookup skipped.
+                    local latency_target_pod=""
+                    latency_target_pod="$(resolve_latency_load_target "${latency_args[@]}")" || latency_target_pod=""
+                    if [[ -n "$latency_target_pod" ]]; then
+                        log "Starting latency load generation against ${latency_target_pod} (rate: ${colocated_latency_rate} req/s, duration: ${colocated_latency_duration}s, endpoints: ${colocated_latency_endpoints})"
+                        start_latency_load_generation "$latency_target_pod" \
+                            "$colocated_latency_rate" \
+                            "$colocated_latency_duration" \
+                            "$colocated_latency_endpoints" \
+                            "${cell_dir}/latency.csv" &
+                        latency_pid=$!
+                    else
+                        log "WARNING: latency_load declared but no HTTP-capable pod found in workloads: — skipping latency load generation (non-fatal)"
+                    fi
+                fi
+
+                # ---- EEVDF snapshots (start of measurement window) ----
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    for wpod in "${pod_names[@]}"; do
+                        collect_eevdf_snapshot "$wpod" "${cell_dir}/eevdf-${wpod}.json" || true
+                    done
+                fi
+
+                # ---- Perfetto trace setup (uses first pod for node resolution) ----
+                local perfetto_node_ip=""
+                local perfetto_trace_pid=""
+                local perfetto_remote_path=""
+                local perfetto_trace_file=""
+                if [[ "$PERFETTO_ENABLED" == true ]]; then
+                    perfetto_node_ip="$(get_pod_node_ip "${pod_names[0]}" 2>/dev/null || true)"
+                    if [[ -n "$perfetto_node_ip" ]] && ssh_node "$perfetto_node_ip" "test -x /usr/bin/tracebox" >/dev/null 2>&1; then
+                        log "Starting Perfetto trace on node ${perfetto_node_ip} (config: ${PERFETTO_CONFIG})"
+                        local po
+                        po="$("${SCRIPT_DIR}/../perfetto/bin/perfetto-start.sh" "$perfetto_node_ip" "$PERFETTO_CONFIG" --duration "$duration")"
+                        perfetto_trace_pid="$(printf '%s\n' "$po" | awk '{print $1}')"
+                        perfetto_remote_path="$(printf '%s\n' "$po" | awk '{$1=""; print $0}' | sed 's/^ //')"
+                    else
+                        log "WARNING: tracebox not available on node ${perfetto_node_ip:-unknown}, skipping Perfetto tracing"
+                    fi
+                fi
+
+                # Pre-warm
+                log "Pre-warm period: ${pre_warm}s"
+                run_cmd sleep "$pre_warm"
+
+                # Collect cgroup + kubectl top data per pod (in background)
+                for wpod in "${pod_names[@]}"; do
+                    collect_cgroup_data "$wpod" "$duration" "$cgroup_interval" "${cell_dir}/cgroup-${wpod}.csv" &
+                    bg_start
+                    collect_kubectl_top "$wpod" "$duration" "$cgroup_interval" "${cell_dir}/kubectl-top-${wpod}.csv" &
+                    bg_start
+                done
+
+                # Collect EEVDF per-task time series per pod (in background)
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    for wpod in "${pod_names[@]}"; do
+                        collect_eevdf_pids "$wpod" "$duration" "$cgroup_interval" "${cell_dir}/eevdf-${wpod}-pids.csv" &
+                        bg_start
+                    done
+                fi
+
+                # Wait for duration
+                log "Measurement period: ${duration}s"
+                run_cmd sleep "$duration"
+
+                # Wait for latency generation to finish and report the CSV
+                wait_latency_generation "$latency_pid" "$cell_dir"
+
+                # Stop background processes
+                log "Stopping data collection..."
+                bg_stop_all
+
+                # ---- Stop perfetto trace ----
+                if [[ "$PERFETTO_ENABLED" == true && -n "${perfetto_trace_pid:-}" ]]; then
+                    log "Stopping Perfetto trace on node ${perfetto_node_ip}"
+                    local trace_dl
+                    trace_dl="$("${SCRIPT_DIR}/../perfetto/bin/perfetto-stop.sh" "$perfetto_node_ip" "$perfetto_trace_pid" \
+                        --output-dir "$cell_dir" --remote-path "$perfetto_remote_path")" || {
+                        log "WARNING: Failed to stop/download Perfetto trace"
+                        trace_dl=""
+                    }
+                    if [[ -n "$trace_dl" ]]; then
+                        perfetto_trace_file="$trace_dl"
+                        log "Perfetto trace saved: ${perfetto_trace_file}"
+                    fi
+                fi
+
+                # Save metadata per pod (distinct metadata-<pod>.json files)
+                for wpod in "${pod_names[@]}"; do
+                    save_cell_metadata "$base_data_dir" "$cell_label" "$rep" "$wpod" "-${wpod}"
+                done
+
+                # ---- Add perfetto metadata to the first pod's metadata.json ----
+                if [[ "$PERFETTO_ENABLED" == true && -n "${perfetto_trace_file:-}" ]]; then
+                    local mdf="${cell_dir}/metadata-${pod_names[0]}.json"
+                    python3 -c "
+import json
+with open('${mdf}', 'r') as f:
+    m = json.load(f)
+m['perfetto_trace_file'] = '$(basename "$perfetto_trace_file" 2>/dev/null || echo "")'
+m['perfetto_config'] = '${PERFETTO_CONFIG}'
+with open('${mdf}', 'w') as f:
+    json.dump(m, f, indent=2)
+" 2>/dev/null || log "WARNING: Failed to add perfetto metadata to ${mdf}"
+                fi
+
+                # ---- Add EEVDF metadata to each pod's metadata file ----
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    for wpod in "${pod_names[@]}"; do
+                        add_eevdf_metadata "${cell_dir}/metadata-${wpod}.json" "$cell_dir" "$wpod"
+                    done
+                fi
+
+                # One summary row per pod
+                # (CSV: timestamp,pod,container,nr_periods,nr_throttled,throttled_usec,usage_usec,cpu_weight,cpu_max_quota,cpu_max_period)
+                for wpod in "${pod_names[@]}"; do
+                    local wlast_stats=""
+                    wlast_stats="$(tail -1 "${cell_dir}/cgroup-${wpod}.csv" 2>/dev/null || true)"
+                    if [[ -n "$wlast_stats" ]]; then
+                        local wnr_periods wnr_throttled wthrottled_usec wusage_usec wcpu_weight wcpu_max
+                        wnr_periods="$(printf '%s' "$wlast_stats" | cut -d',' -f4)"
+                        wnr_throttled="$(printf '%s' "$wlast_stats" | cut -d',' -f5)"
+                        wthrottled_usec="$(printf '%s' "$wlast_stats" | cut -d',' -f6)"
+                        wusage_usec="$(printf '%s' "$wlast_stats" | cut -d',' -f7)"
+                        wcpu_weight="$(printf '%s' "$wlast_stats" | cut -d',' -f8)"
+                        wcpu_max="$(printf '%s' "$wlast_stats" | cut -d',' -f9)"
+                        printf '%s-%s,%d,%s,%s,%s,%s,%s,%s\n' \
+                            "$wpod" "$cell_label" "$rep" \
+                            "$wnr_periods" "$wnr_throttled" "$wthrottled_usec" \
+                            "$wusage_usec" "$wcpu_weight" "$wcpu_max" \
+                            >> "$summary_file"
+                    fi
+                done
+
+                # Delete all pods
+                for wpod in "${pod_names[@]}"; do
+                    delete_pod "$wpod"
+                done
+
             else
                 # ---- Single workload experiment ----
                 local cpu_request="${CELL_PARAMS[request]:-}"
@@ -609,6 +1110,25 @@ with open('${mdf}', 'w') as f:
                         _BG_PIDS+=("$load_pid")
                         log "Load generator started (PID ${load_pid})"
                     fi
+                fi
+
+                # Start latency-recording load generation (REQ-2:
+                # workload.params.latency_load). Runs in background; the CSV is
+                # checked after the measurement window (REQ-5: non-fatal).
+                local latency_pid=""
+                if [[ -n "$single_workload_latency_load" && "$DRY_RUN" == false ]]; then
+                    log "Starting latency load generation (rate: ${single_workload_latency_rate} req/s, duration: ${single_workload_latency_duration}s, endpoints: ${single_workload_latency_endpoints})"
+                    start_latency_load_generation "$pod_name" \
+                        "$single_workload_latency_rate" \
+                        "$single_workload_latency_duration" \
+                        "$single_workload_latency_endpoints" \
+                        "${cell_dir}/latency.csv" &
+                    latency_pid=$!
+                fi
+
+                # ---- EEVDF snapshot (start of measurement window) ----
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    collect_eevdf_snapshot "$pod_name" "${cell_dir}/eevdf-${pod_name}.json" || true
                 fi
 
                 # ---- Perfetto trace setup ----
@@ -643,9 +1163,18 @@ with open('${mdf}', 'w') as f:
                 run_cmd collect_kubectl_top "$pod_name" "$duration" "$cgroup_interval" "$top_file" &
                 bg_start
 
+                # Start EEVDF per-task time series in background
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    run_cmd collect_eevdf_pids "$pod_name" "$duration" "$cgroup_interval" "${cell_dir}/eevdf-${pod_name}-pids.csv" &
+                    bg_start
+                fi
+
                 # Wait for measurement duration
                 log "Measurement period: ${duration}s"
                 run_cmd sleep "$duration"
+
+                # Wait for latency generation to finish and report the CSV
+                wait_latency_generation "$latency_pid" "$cell_dir"
 
                 # Stop background processes
                 log "Stopping data collection..."
@@ -681,6 +1210,11 @@ m['perfetto_config'] = '${PERFETTO_CONFIG}'
 with open('${mdf}', 'w') as f:
     json.dump(m, f, indent=2)
 " 2>/dev/null || log "WARNING: Failed to add perfetto metadata to ${mdf}"
+                fi
+
+                # ---- Add EEVDF metadata to existing metadata.json ----
+                if [[ "$EEVDF_ENABLED" == true ]]; then
+                    add_eevdf_metadata "${cell_dir}/metadata.json" "$cell_dir" "$pod_name"
                 fi
 
                 # Parse last data line of cgroup CSV for summary
