@@ -16,6 +16,13 @@ workers = [
     ram  = 4096
     disk = 40960
     mac  = "c6:e5:50:1c:ec:02"
+  },
+  {
+    name = "w2"
+    cpu  = 4
+    ram  = 4096
+    disk = 40960
+    mac  = "c6:e5:50:1c:ec:03"
   }
 ]
 

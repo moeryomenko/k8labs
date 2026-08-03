@@ -1,0 +1,10 @@
+# k8s-w2.network — Enslave worker TAP device to k8sbr0 bridge
+#
+# This file must be copied alongside k8s-w2.netdev so the TAP device
+# is automatically attached to the bridge when systemd-networkd starts.
+
+[Match]
+Name=k8s-w2
+
+[Network]
+Bridge=k8sbr0

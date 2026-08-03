@@ -142,6 +142,7 @@ network-up: ## Configure bridge+TAP networking + NAT/forwarding + DNS forwarder
 	sudo cp network/k8sbr0.netdev network/k8sbr0.network /etc/systemd/network/
 	sudo cp network/k8s-cp1.netdev network/k8s-cp1.network /etc/systemd/network/
 	sudo cp network/k8s-w1.netdev network/k8s-w1.network /etc/systemd/network/
+	sudo cp network/k8s-w2.netdev network/k8s-w2.network /etc/systemd/network/
 	sudo cp network/packer-tap.netdev network/packer-tap.network /etc/systemd/network/
 	sudo mkdir -p /etc/systemd/networkd.conf.d
 	sudo cp network/90-k8slab-foreign-rules.conf /etc/systemd/networkd.conf.d/
@@ -175,6 +176,7 @@ network-down: ## Remove networking configs and scoped k8slab nftables table
 	sudo rm -f /etc/systemd/network/k8sbr0.netdev /etc/systemd/network/k8sbr0.network
 	sudo rm -f /etc/systemd/network/k8s-cp1.netdev /etc/systemd/network/k8s-cp1.network
 	sudo rm -f /etc/systemd/network/k8s-w1.netdev /etc/systemd/network/k8s-w1.network
+	sudo rm -f /etc/systemd/network/k8s-w2.netdev /etc/systemd/network/k8s-w2.network
 	sudo rm -f /etc/systemd/network/packer-tap.netdev /etc/systemd/network/packer-tap.network
 	sudo rm -f /etc/dnsmasq.d/k8sbr0.conf
 	sudo systemctl restart systemd-networkd
