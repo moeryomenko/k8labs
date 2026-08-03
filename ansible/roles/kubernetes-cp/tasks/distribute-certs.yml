@@ -174,3 +174,24 @@
     dest: /etc/kubernetes/encryption-config.yaml
     mode: "0644"
   notify: restart kube-apiserver
+
+- name: Copy front-proxy CA cert
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/front-proxy-ca.pem"
+    dest: /etc/kubernetes/pki/front-proxy-ca.pem
+    mode: "0644"
+  notify: restart kube-apiserver
+
+- name: Copy front-proxy client cert
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/front-proxy-client.pem"
+    dest: /etc/kubernetes/pki/front-proxy-client.pem
+    mode: "0644"
+  notify: restart kube-apiserver
+
+- name: Copy front-proxy client key
+  ansible.builtin.copy:
+    src: "{{ certs_dir }}/front-proxy-client-key.pem"
+    dest: /etc/kubernetes/pki/front-proxy-client-key.pem
+    mode: "0600"
+  notify: restart kube-apiserver

@@ -95,7 +95,6 @@ spec:
             - --kubelet-preferred-address-types=InternalIP
             - --cert-dir=/tmp
             - --secure-port=4443
-            - --authentication-skip-lookup
           ports:
             - containerPort: 4443
           volumeMounts:

@@ -224,7 +224,67 @@
     ownca_not_after: "+{{ cert_validity_days }}d"
 
 # ---------------------------------------------------------------------------
-# 7. Etcd Certificate
+# 7. Front Proxy CA and Proxy Client Certificate
+# ---------------------------------------------------------------------------
+- name: Generate front-proxy CA private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/front-proxy-ca-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate front-proxy CA CSR
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/front-proxy-ca.csr"
+    privatekey_path: "{{ certs_dir }}/front-proxy-ca-key.pem"
+    common_name: "front-proxy-ca"
+    basic_constraints:
+      - CA:TRUE
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+    state: present
+
+- name: Generate front-proxy CA certificate (self-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/front-proxy-ca.pem"
+    csr_path: "{{ certs_dir }}/front-proxy-ca.csr"
+    privatekey_path: "{{ certs_dir }}/front-proxy-ca-key.pem"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ cert_validity_days }}d"
+
+- name: Generate front-proxy client private key
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_dir }}/front-proxy-client-key.pem"
+    type: RSA
+    size: 2048
+    state: present
+
+- name: Generate front-proxy client CSR
+  community.crypto.openssl_csr:
+    path: "{{ certs_dir }}/front-proxy-client.csr"
+    privatekey_path: "{{ certs_dir }}/front-proxy-client-key.pem"
+    common_name: "front-proxy-client"
+    key_usage:
+      - keyEncipherment
+      - digitalSignature
+    extended_key_usage:
+      - clientAuth
+    state: present
+
+- name: Generate front-proxy client certificate (front-proxy-CA-signed)
+  community.crypto.x509_certificate:
+    path: "{{ certs_dir }}/front-proxy-client.pem"
+    csr_path: "{{ certs_dir }}/front-proxy-client.csr"
+    ownca_path: "{{ certs_dir }}/front-proxy-ca.pem"
+    ownca_privatekey_path: "{{ certs_dir }}/front-proxy-ca-key.pem"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+
+# ---------------------------------------------------------------------------
+# 8. Etcd Certificate
 # ---------------------------------------------------------------------------
 - name: Generate etcd private key
   community.crypto.openssl_privatekey:
@@ -261,7 +321,7 @@
     ownca_not_after: "+{{ cert_validity_days }}d"
 
 # ---------------------------------------------------------------------------
-# 8. Kubeconfigs
+# 9. Kubeconfigs
 # ---------------------------------------------------------------------------
 - name: Set kubernetes API server endpoint
   ansible.builtin.set_fact:
@@ -298,7 +358,7 @@
     kubeconfig_client_key: "{{ certs_dir }}/kube-scheduler-key.pem"
 
 # ---------------------------------------------------------------------------
-# 9. Per-node kubelet certificates and kubeconfigs
+# 10. Per-node kubelet certificates and kubeconfigs
 # ---------------------------------------------------------------------------
 - name: Generate per-node kubelet private keys
   community.crypto.openssl_privatekey:
@@ -349,7 +409,7 @@
     kubeconfig_client_key: "{{ certs_dir }}/kubelets/{{ item }}-key.pem"
 
 # ---------------------------------------------------------------------------
-# 10. Encryption Configuration
+# 11. Encryption Configuration
 # ---------------------------------------------------------------------------
 - name: Generate random encryption key
   ansible.builtin.set_fact:
@@ -373,7 +433,7 @@
     mode: "0644"
 
 # ---------------------------------------------------------------------------
-# 11. Cleanup — remove intermediate CSR files
+# 12. Cleanup — remove intermediate CSR files
 # ---------------------------------------------------------------------------
 - name: Remove intermediate CSR files
   ansible.builtin.file:
@@ -387,6 +447,8 @@
     - "kube-scheduler.csr"
     - "service-account.csr"
     - "etcd.csr"
+    - "front-proxy-ca.csr"
+    - "front-proxy-client.csr"
 
 - name: Remove kubelet CSR files
   ansible.builtin.file:
