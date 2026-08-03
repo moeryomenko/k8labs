@@ -40,6 +40,10 @@ DEFAULT_DATA_DIR="${PROJECT_ROOT}/data"
 DEFAULT_SETS_FILE="${DEFAULT_DATA_DIR}/tunable-sets.json"
 DEFAULT_BASELINE_FILE="${DEFAULT_DATA_DIR}/tunable-baseline.json"
 
+# Source the shared DHCP lease helper for worker IP discovery
+# shellcheck source=../bin/lease-common.sh
+source "${SCRIPT_DIR}/../bin/lease-common.sh"
+
 # Tunable range limits (inclusive)
 # These map to files under /sys/kernel/debug/sched/ on Fedora 44+
 declare -A TUNABLE_RANGES=(
@@ -165,29 +169,12 @@ resolve_project_root() {
 }
 
 # ---- Worker IP Discovery ----
-get_worker_ips() {
-    local dnsmasq_leases="${DNSMASQ_LEASES:-/var/lib/misc/dnsmasq/k8sbr0.leases}"
-    local macs="${WORKER_MACS:-c6:e5:50:1c:ec:02}"
-    local ips=()
-    local mac ip
+# get_worker_ips comes from lease-common.sh (sourced above): it resolves
+# worker IPs from the systemd-networkd DHCP server lease (authoritative) with
+# a dnsmasq fallback, ordered by WORKER_MACS.
 
-    if [[ ! -f "$dnsmasq_leases" ]]; then
-        log_error "DHCP lease file not found: $dnsmasq_leases"
-        return 1
-    fi
-
-    for mac in $macs; do
-        ip=$(awk -v m="$mac" 'BEGIN{IGNORECASE=1} $2 == m {print $3; exit}' "$dnsmasq_leases" 2>/dev/null || true)
-        [[ -n "$ip" ]] && ips+=("$ip")
-    done
-
-    if [[ ${#ips[@]} -eq 0 ]]; then
-        log_error "No worker IPs found in DHCP leases"
-        return 1
-    fi
-
-    echo "${ips[*]}"
-}
+# Worker MACs for node resolution (must match terraform.tfvars)
+: "${WORKER_MACS:=c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03}"
 
 # ---- SSH Helper ----
 ssh_node() {

@@ -28,6 +28,12 @@ readonly _EXPERIMENTS_SCRIPT_DIR
 # shellcheck source=../bin/cgroup-common.sh
 source "${_EXPERIMENTS_SCRIPT_DIR}/../bin/cgroup-common.sh"
 
+# Source the shared DHCP lease helper directly (get_worker_ips / get_node_ip).
+# Guarded inside lease-common.sh, so this is a no-op when cgroup-common.sh
+# already loaded it.
+# shellcheck source=../bin/lease-common.sh
+source "${_EXPERIMENTS_SCRIPT_DIR}/../bin/lease-common.sh"
+
 # ---- Constants ----
 : "${KUBECONFIG:=}"
 EXPERIMENTS_DIR="${_EXPERIMENTS_SCRIPT_DIR}"
@@ -84,32 +90,12 @@ require_cluster() {
 }
 
 # ---- Worker IPs ----
+# get_worker_ips / get_node_ip come from lease-common.sh (sourced above): they
+# resolve node IPs from the systemd-networkd DHCP server lease (authoritative)
+# with a dnsmasq fallback, ordered by WORKER_MACS.
 
-# ---------------------------------------------------------------------------
-# get_worker_ips — Return worker IPs from DHCP leases (by MAC address)
-# Returns space-separated IP addresses to stdout
-# ---------------------------------------------------------------------------
-get_worker_ips() {
-    local dnsmasq_leases="${DNSMASQ_LEASES:-/var/lib/misc/dnsmasq/k8sbr0.leases}"
-    local macs="${WORKER_MACS:-c6:e5:50:1c:ec:02}"
-    local ips=()
-    local mac ip
-
-    if [[ ! -f "$dnsmasq_leases" ]]; then
-        die "DHCP lease file not found: $dnsmasq_leases"
-    fi
-
-    for mac in $macs; do
-        ip=$(awk -v m="$mac" 'BEGIN{IGNORECASE=1} $2 == m {print $3; exit}' "$dnsmasq_leases" 2>/dev/null || true)
-        [[ -n "$ip" ]] && ips+=("$ip")
-    done
-
-    if [[ ${#ips[@]} -eq 0 ]]; then
-        die "No worker IPs found in DHCP leases"
-    fi
-
-    echo "${ips[*]}"
-}
+# Worker MACs for node resolution (must match terraform.tfvars)
+: "${WORKER_MACS:=c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03}"
 
 # ---- Template Substitution ----
 

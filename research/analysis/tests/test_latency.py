@@ -50,7 +50,6 @@ from tests.conftest import (
     LAT_CELL_250,
     LAT_CELL_500,
     write_latency_csv,
-    write_summary_csv,
 )
 
 ANALYSIS_DIR = pathlib.Path(__file__).resolve().parent.parent

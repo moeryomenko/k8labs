@@ -2,6 +2,8 @@
 experiments/data/
 *.csv
 *.json
+!data/tunable-sets.json
+!data/tunable-baseline.json
 *.png
 *.pyc
 __pycache__/

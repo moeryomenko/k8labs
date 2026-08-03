@@ -1,0 +1,47 @@
+{
+  "default": {
+    "base_slice_ns": "1400000",
+    "migration_cost_ns": "500000",
+    "nr_migrate": "32"
+  },
+  "base-slice-low": {
+    "base_slice_ns": "1000000",
+    "migration_cost_ns": "500000",
+    "nr_migrate": "32"
+  },
+  "base-slice-high": {
+    "base_slice_ns": "10000000",
+    "migration_cost_ns": "500000",
+    "nr_migrate": "32"
+  },
+  "migration-cost-zero": {
+    "base_slice_ns": "1400000",
+    "migration_cost_ns": "0",
+    "nr_migrate": "32"
+  },
+  "migration-cost-high": {
+    "base_slice_ns": "1400000",
+    "migration_cost_ns": "2000000",
+    "nr_migrate": "32"
+  },
+  "nr-migrate-low": {
+    "base_slice_ns": "1400000",
+    "migration_cost_ns": "500000",
+    "nr_migrate": "8"
+  },
+  "nr-migrate-high": {
+    "base_slice_ns": "1400000",
+    "migration_cost_ns": "500000",
+    "nr_migrate": "64"
+  },
+  "all-low": {
+    "base_slice_ns": "1000000",
+    "migration_cost_ns": "0",
+    "nr_migrate": "8"
+  },
+  "all-high": {
+    "base_slice_ns": "10000000",
+    "migration_cost_ns": "2000000",
+    "nr_migrate": "64"
+  }
+}

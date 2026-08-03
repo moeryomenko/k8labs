@@ -28,13 +28,6 @@ cooldown: 20
 #   --perfetto --perfetto-config eevdf-deep
 # The latency analysis (TASK-016 latency-analyze.py) needs latency.csv plus
 # optional eevdf/perfetto data.
-#
-# KNOWN RUNNER LIMITATION: the generic N-pod latency targeting only auto-fires
-# for a pod of type latency-sensitive. With an api-server LS pod the real run
-# logs "no latency-sensitive pod found" and skips auto-generation (non-fatal).
-# Until the runner targets api-server too, capture latency manually with:
-#   research/experiments/latency-loadgen.sh <node-ip> http://<ls-pod-ip>:8080 \
-#     50 120 "users:30,orders:30,search:20,reports:20" <cell>/latency.csv
 workloads:
   ls-api:
     type: api-server

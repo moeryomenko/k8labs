@@ -26,11 +26,16 @@ IFS=$'\n\t'
 
 # ---- Constants ----
 SCRIPT_NAME="$(basename -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 KUBELET_CONFIG_PATHS=(
     "/etc/kubernetes/kubelet-config.yaml"
     "/var/lib/kubelet/kubelet-config.yaml"
     "/etc/kubernetes/kubelet.conf"
 )
+
+# Source the shared DHCP lease helper for worker IP discovery
+# shellcheck source=../bin/lease-common.sh
+source "${SCRIPT_DIR}/../bin/lease-common.sh"
 
 # ---- Logging ----
 log_info()  { printf '[%s] INFO:  %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
@@ -168,29 +173,12 @@ resolve_project_root() {
 }
 
 # ---- Worker IP Discovery ----
-get_worker_ips() {
-    local dnsmasq_leases="${DNSMASQ_LEASES:-/var/lib/misc/dnsmasq/k8sbr0.leases}"
-    local macs="${WORKER_MACS:-c6:e5:50:1c:ec:02}"
-    local ips=()
-    local mac ip
+# get_worker_ips comes from lease-common.sh (sourced above): it resolves
+# worker IPs from the systemd-networkd DHCP server lease (authoritative) with
+# a dnsmasq fallback, ordered by WORKER_MACS.
 
-    if [[ ! -f "$dnsmasq_leases" ]]; then
-        log_error "DHCP lease file not found: $dnsmasq_leases"
-        return 1
-    fi
-
-    for mac in $macs; do
-        ip=$(awk -v m="$mac" 'BEGIN{IGNORECASE=1} $2 == m {print $3; exit}' "$dnsmasq_leases" 2>/dev/null || true)
-        [[ -n "$ip" ]] && ips+=("$ip")
-    done
-
-    if [[ ${#ips[@]} -eq 0 ]]; then
-        log_error "No worker IPs found in DHCP leases"
-        return 1
-    fi
-
-    echo "${ips[*]}"
-}
+# Worker MACs for node resolution (must match terraform.tfvars)
+: "${WORKER_MACS:=c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03}"
 
 # ---- SSH Helper ----
 ssh_node() {

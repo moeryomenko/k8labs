@@ -16,11 +16,15 @@ import pathlib
 import re
 import sys
 import subprocess
-from unittest import mock
 
 import pytest
 
-from tests.conftest import THREADS_CSV, CPU_UTIL_CSV, PROCESS_SUMMARY_CSV, SCHED_LATENCY_CSV
+from tests.conftest import (
+    THREADS_CSV,
+    CPU_UTIL_CSV,
+    PROCESS_SUMMARY_CSV,
+    SCHED_LATENCY_CSV,
+)
 
 
 # =========================================================================
@@ -122,11 +126,16 @@ class TestErrorHandling:
         """Nonexistent trace path prints error and exits non-zero."""
         rc, out, err = run_analyze(["/nonexistent/path/trace.perfetto-trace"])
         assert rc != 0
-        assert "error" in err.lower() or "not found" in err.lower() or "exist" in err.lower()
+        assert (
+            "error" in err.lower()
+            or "not found" in err.lower()
+            or "exist" in err.lower()
+        )
 
     def test_empty_directory(self):
         """Empty directory with no .perfetto-trace files prints warning."""
         import tempfile
+
         with tempfile.TemporaryDirectory() as empty_dir:
             rc, out, err = run_analyze([empty_dir])
         # Should exit 0 with a warning — no data but not an error
@@ -142,6 +151,7 @@ class TestErrorHandling:
     def test_trace_path_is_directory_without_traces(self):
         """Directory existing but containing no .perfetto-trace files prints warning."""
         import tempfile
+
         with tempfile.TemporaryDirectory() as dirpath:
             # Put a non-trace file in it
             pathlib.Path(dirpath, "readme.txt").write_text("hello")
@@ -183,39 +193,57 @@ class TestSqlQueries:
         queries = extract_sql_queries()
         # Find the threads query — has sched_slice and GROUP BY cpu, tid
         thread_query = next(
-            (q for q in queries if "sched_slice" in q.lower()
-             and "group by" in q.lower()
-             and "tid" in q.lower()),
+            (
+                q
+                for q in queries
+                if "sched_slice" in q.lower()
+                and "group by" in q.lower()
+                and "tid" in q.lower()
+            ),
             None,
         )
         assert thread_query is not None, "No thread-level query found"
         for frag in self.QUERY_MARKERS["threads"]:
-            assert frag.lower() in thread_query.lower(), f"Missing '{frag}' in thread query"
+            assert frag.lower() in thread_query.lower(), (
+                f"Missing '{frag}' in thread query"
+            )
 
     def test_cpu_util_query_has_required_fragments(self):
         """CPU utilization query has sched_slice, GROUP BY cpu, COUNT."""
         queries = extract_sql_queries()
         cpu_query = next(
-            (q for q in queries if "sched_slice" in q.lower()
-             and "group by" in q.lower()
-             and "cpu" in q.lower()
-             and "utilization" in q.lower()),
+            (
+                q
+                for q in queries
+                if "sched_slice" in q.lower()
+                and "group by" in q.lower()
+                and "cpu" in q.lower()
+                and "utilization" in q.lower()
+            ),
             None,
         )
         assert cpu_query is not None, "No CPU utilization query found"
         for frag in self.QUERY_MARKERS["cpu_util"]:
-            assert frag.lower() in cpu_query.lower(), f"Missing '{frag}' in cpu_util query"
+            assert frag.lower() in cpu_query.lower(), (
+                f"Missing '{frag}' in cpu_util query"
+            )
 
     def test_sched_latency_query_has_required_fragments(self):
         """Scheduling latency query references sched_waking."""
         queries = extract_sql_queries()
         lat_query = next(
-            (q for q in queries if "wakeup" in q.lower() or "sched_waking" in q.lower()),
+            (
+                q
+                for q in queries
+                if "wakeup" in q.lower() or "sched_waking" in q.lower()
+            ),
             None,
         )
         assert lat_query is not None, "No sched_latency query found"
         for frag in self.QUERY_MARKERS["sched_latency"]:
-            assert frag.lower() in lat_query.lower(), f"Missing '{frag}' in latency query"
+            assert frag.lower() in lat_query.lower(), (
+                f"Missing '{frag}' in latency query"
+            )
 
 
 # =========================================================================
@@ -243,7 +271,9 @@ class TestCsvOutput:
             reader = csv.reader(f)
             headers = next(reader)
         expected = {"cpu", "thread_name", "pid", "tid", "exec_time_ms", "exec_time_pct"}
-        assert expected.issubset(set(headers)), f"Missing columns: {expected - set(headers)}"
+        assert expected.issubset(set(headers)), (
+            f"Missing columns: {expected - set(headers)}"
+        )
 
     def test_cpu_util_csv_has_expected_columns(self):
         """perfetto-cpu-util.csv has core, utilization, nr_switches columns."""
@@ -252,7 +282,9 @@ class TestCsvOutput:
             reader = csv.reader(f)
             headers = next(reader)
         expected = {"core", "utilization_pct", "nr_switches"}
-        assert expected.issubset(set(headers)), f"Missing columns: {expected - set(headers)}"
+        assert expected.issubset(set(headers)), (
+            f"Missing columns: {expected - set(headers)}"
+        )
 
     def test_process_summary_csv_has_expected_columns(self):
         """perfetto-process-summary.csv has pid, name, cpu_time, thread_count columns."""
@@ -260,8 +292,17 @@ class TestCsvOutput:
         with open(path, newline="") as f:
             reader = csv.reader(f)
             headers = next(reader)
-        expected = {"pid", "name", "cpu_time_ms", "cpu_time_pct", "thread_count", "nr_ctx_switches"}
-        assert expected.issubset(set(headers)), f"Missing columns: {expected - set(headers)}"
+        expected = {
+            "pid",
+            "name",
+            "cpu_time_ms",
+            "cpu_time_pct",
+            "thread_count",
+            "nr_ctx_switches",
+        }
+        assert expected.issubset(set(headers)), (
+            f"Missing columns: {expected - set(headers)}"
+        )
 
     def test_sched_latency_csv_has_expected_columns(self):
         """perfetto-sched-latency.csv has pid, tid, thread_name, wakeup_latency, count."""
@@ -270,7 +311,9 @@ class TestCsvOutput:
             reader = csv.reader(f)
             headers = next(reader)
         expected = {"pid", "tid", "thread_name", "wakeup_latency_ms", "count"}
-        assert expected.issubset(set(headers)), f"Missing columns: {expected - set(headers)}"
+        assert expected.issubset(set(headers)), (
+            f"Missing columns: {expected - set(headers)}"
+        )
 
 
 # =========================================================================
@@ -288,13 +331,23 @@ class TestEdgeCases:
         os.makedirs(str(out_dir), exist_ok=True)
         assert out_dir.exists()
 
-    def test_trace_with_no_sched_data_handled_gracefully(self, mock_trace_file, tmp_path):
+    def test_trace_with_no_sched_data_handled_gracefully(
+        self, mock_trace_file, tmp_path
+    ):
         """Trace with no scheduling data produces empty CSVs, not crashes."""
         import pandas as pd
+
         # Simulate what the script would do with empty results
-        df = pd.DataFrame(columns=[
-            "cpu", "thread_name", "pid", "tid", "exec_time_ms", "exec_time_pct"
-        ])
+        df = pd.DataFrame(
+            columns=[
+                "cpu",
+                "thread_name",
+                "pid",
+                "tid",
+                "exec_time_ms",
+                "exec_time_pct",
+            ]
+        )
         out_path = tmp_path / "output"
         out_path.mkdir()
         csv_path = out_path / "perfetto-threads.csv"
@@ -312,10 +365,16 @@ class TestEdgeCases:
         import pandas as pd
 
         # Use the factory to build a mock with query_log
-        df = pd.DataFrame({
-            "cpu": [0], "thread_name": ["test"], "pid": [1], "tid": [2],
-            "exec_time_ms": [10.0], "exec_time_pct": [100.0],
-        })
+        df = pd.DataFrame(
+            {
+                "cpu": [0],
+                "thread_name": ["test"],
+                "pid": [1],
+                "tid": [2],
+                "exec_time_ms": [10.0],
+                "exec_time_pct": [100.0],
+            }
+        )
         MockTP = mock_trace_processor_factory(
             threads_df=df,
             query_log=query_log,

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """generate-report.py — markdown practical guide from analysis outputs.
 
-Consumes the seven analysis-output CSVs written by the TASK-014/016 analyzers
+Consumes the eight analysis-output CSVs written by the TASK-014/016 analyzers
 (weight-share-analyze.py, interaction-heatmap.py, qos-analyze.py,
-latency-analyze.py, tunables-analyze.py) and renders ``interaction-report.md``,
-a practical guide on the request/limit scheduler interaction.
+latency-analyze.py, tunables-analyze.py) plus the TASK-D01 burst summary, and
+renders ``interaction-report.md``, a practical guide on the request/limit
+scheduler interaction.
 
 Usage:
     generate-report.py --input-dir <dir> --output-dir <dir>
@@ -22,10 +23,13 @@ Report structure (pinned by the TASK-018 contract, TEST-DESIGN.md section 5):
 
 Section-presence rule (REQ-2, pinned): the six data-driven sections are never
 omitted; when their CSV is missing or has zero data rows they render the exact
-marker line ``_no data_`` under the header. The burst verdict section is always
-present and always renders the burst-disabled note (``cpu.max.burst`` defaults
-to 0 in this cluster per TASK-001; no burst analysis CSV exists in the
-pipeline).
+marker line ``_no data_`` under the header. The burst verdict section is
+two-branch (TASK-D01): when ``burst-summary.csv`` exists with at least one
+data row and at least one row whose ``cpu_max_burst`` is > 0 it renders the
+measured verdict (applied burst value, per-cell mean nr_throttled /
+throttled_usec, kernel constraint note); otherwise it renders the static
+fallback note ("No burst experiment data. Burst is disabled: cpu.max.burst
+defaults to 0...").
 
 Determinism (REQ-4, pinned): no timestamps, no absolute paths, no
 env-dependent content; rows are sorted as pinned in section 5; floats render
@@ -66,6 +70,7 @@ LATENCY_CSV = "latency-summary.csv"
 CORRELATION_CSV = "latency-correlation.csv"
 TUN_COMPARISON_CSV = "tunables-comparison.csv"
 TUN_SIGNIFICANCE_CSV = "tunables-significance.csv"
+BURST_CSV = "burst-summary.csv"
 
 _REGION_SAFE = 0.25
 _REGION_CAUTION = 0.75
@@ -220,11 +225,19 @@ def _region_section(heatmap: pd.DataFrame | None) -> str:
 def _qos_priority(slice_name: str) -> int:
     """Map a kubepods slice name to its QoS ordering key.
 
+    A slice named ``kubepods-pod<uid>.slice`` is a direct TRUE Guaranteed pod
+    slice (systemd cgroup driver: a Guaranteed pod has no
+    ``kubepods-guaranteed.slice`` wrapper) and ranks as guaranteed, mirroring
+    ``qos-analyze.py::_slice_by_qos``. The rule is a prefix check, so
+    ``kubepods-burstable-pod<uid>.slice`` still ranks as burstable.
+
     Returns:
-        ``0`` for guaranteed, ``1`` for burstable, ``2`` for besteffort, and
-        ``3`` for anything unrecognized.
+        ``0`` for guaranteed (wrapper or direct pod slice), ``1`` for
+        burstable, ``2`` for besteffort, and ``3`` for anything unrecognized.
     """
     lowered = slice_name.lower()
+    if lowered.startswith("kubepods-pod"):
+        return 0
     if "guaranteed" in lowered:
         return 0
     if "burstable" in lowered:
@@ -300,13 +313,91 @@ def _tunables_section(
     return _markdown_table(value_cols + ["verdict"], rows)
 
 
-def _burst_section() -> str:
-    """Static burst verdict note (cpu.max.burst defaults to 0 on this cluster)."""
+def _format_burst_mean(value: object) -> str:
+    """Render a burst mean deterministically (whole numbers without decimals).
+
+    The pinned contract renders means via ``format(v, "g")`` (105.0 ->
+    ``105``, 5280000.0 -> ``5280000``); plain ``"g"`` switches to scientific
+    notation above 99999 (``5.28e+06``), so integral means are emitted as
+    integers. Non-integral means fall back to ``format(v, "g")``.
+    """
+    if isinstance(value, float) and float(value).is_integer():
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    return format(value, "g")
+
+
+def _burst_fallback_note() -> str:
+    """The static no-data fallback note for the burst verdict section."""
     return (
-        "Burst is disabled: `cpu.max.burst` defaults to 0 on this cluster, "
-        "so no burst credit is available and throttled workloads cannot "
-        "absorb latency spikes with burst capacity."
+        "No burst experiment data. Burst is disabled: `cpu.max.burst` "
+        "defaults to 0 on this cluster, so no burst credit is available "
+        "and throttled workloads cannot absorb latency spikes with burst "
+        "capacity."
     )
+
+
+def _burst_section(input_dir: pathlib.Path) -> str:
+    """Burst verdict: data-driven measured verdict or the static fallback note.
+
+    Branch A (data present): ``burst-summary.csv`` exists with at least one
+    data row and at least one row whose ``cpu_max_burst`` is > 0. Renders the
+    measured verdict: the applied burst value (``max(cpu_max_burst)``, never
+    parsed from the cell label), the baseline -> burst mean nr_throttled and
+    throttled_usec, a per-cell mean table sorted by cell, and the pinned
+    kernel-constraint note (burst=100000 was rejected EINVAL because burst >
+    quota).
+
+    Branch B (data absent): the file is missing, header-only, or has no row
+    with ``cpu_max_burst > 0``. Renders the static fallback note.
+    """
+    burst = load_table(input_dir, BURST_CSV)
+    if burst is None or burst.empty or not (burst["cpu_max_burst"] > 0).any():
+        return _burst_fallback_note()
+
+    applied = int(burst["cpu_max_burst"].max())
+    baseline = burst[burst["cpu_max_burst"] == 0]
+    applied_rows = burst[burst["cpu_max_burst"] > 0]
+    nr_throttled = (
+        baseline["nr_throttled"].mean(),
+        applied_rows["nr_throttled"].mean(),
+    )
+    throttled_usec = (
+        baseline["throttled_usec"].mean(),
+        applied_rows["throttled_usec"].mean(),
+    )
+
+    verdict = (
+        f"Measured verdict: `cpu.max.burst={applied}` eliminated CFS "
+        f"throttling (mean nr_throttled {_format_burst_mean(nr_throttled[0])} -> "
+        f"{_format_burst_mean(nr_throttled[1])}, mean throttled_usec "
+        f"{_format_burst_mean(throttled_usec[0])} -> "
+        f"{_format_burst_mean(throttled_usec[1])})."
+    )
+
+    per_cell = (
+        burst.groupby("cell", sort=True)[["nr_throttled", "throttled_usec"]]
+        .mean()
+        .reset_index()
+    )
+    table = _markdown_table(
+        ["cell", "mean_nr_throttled", "mean_throttled_usec"],
+        [
+            [
+                _format_cell(row["cell"]),
+                _format_burst_mean(row["nr_throttled"]),
+                _format_burst_mean(row["throttled_usec"]),
+            ]
+            for _, row in per_cell.iterrows()
+        ],
+    )
+
+    kernel_note = (
+        "Kernel constraint: `cpu.max.burst` cannot exceed the CPU quota "
+        "(burst <= quota); burst=100000 was rejected EINVAL."
+    )
+    return verdict + "\n\n" + table + "\n\n" + kernel_note
 
 
 def build_report(input_dir: pathlib.Path) -> str:
@@ -315,7 +406,9 @@ def build_report(input_dir: pathlib.Path) -> str:
     Pure and deterministic: the same input dir always yields byte-identical
     output. All seven pinned sections are present in order; the six
     data-driven sections render ``_no data_`` when their CSV is missing or
-    empty, and the burst verdict is always the static disabled note.
+    empty, and the burst verdict renders the measured verdict when
+    ``burst-summary.csv`` carries applied burst data, else the static
+    fallback note.
 
     Args:
         input_dir: Directory containing the analysis-output CSVs.
@@ -338,7 +431,7 @@ def build_report(input_dir: pathlib.Path) -> str:
         _qos_section(qos),
         _latency_section(latency, correlation),
         _tunables_section(significance, comparison),
-        _burst_section(),
+        _burst_section(input_dir),
     ]
     sections = "\n\n".join(
         f"## {title}\n\n{body}"

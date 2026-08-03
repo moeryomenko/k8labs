@@ -18,17 +18,20 @@ cooldown: 15
 # the analysis and for TASK-020's helper. Units are MICROSECONDS (same as the
 # quota field of cpu.max).
 #
-# BURST VALUE DECISION: burst=100000 (one full 100ms period). The quota for
-# 250m is 25000us per 100000us period. With burst=100000 the cgroup may run
-# up to 25000+100000 = 125000us in a period (~1.25 CPUs briefly), enough to
-# absorb the db-simulator checkpoint spike (every 30s), then it must repay
-# by throttling in the following periods. The analysis needs only the
-# with/without-burst distinction.
+# BURST VALUE DECISION: the kernel enforces burst <= quota (EINVAL otherwise).
+# burst=100000 was tried first (one full 100ms period; 25000+100000 = 125000us
+# in a period, ~1.25 CPUs briefly) but the kernel REJECTED it with EINVAL —
+# verified live during the probe: for the 250m limit the quota is 25000us per
+# 100000us period, and burst=100000 exceeds it. burst=25000 (== quota) is the
+# kernel maximum for this limit and is the APPLIED value; it eliminated
+# throttling in the live experiment (nr_throttled 105 -> 0). The analysis
+# needs only the with/without-burst distinction, so the exact value does not
+# change the comparison.
 #
 # TASK-020 / HELPER CONTRACT (manual, after pod start): for burst cells the
 # helper must write cpu.max.burst on the pod's node via SSH (host-root
 # writable per probe) and restore it to 0 after the cell. Write path pattern:
-#   ssh root@<node> "echo 100000 > <container-cgroup>/cpu.max.burst"
+#   ssh root@<node> "echo 25000 > <container-cgroup>/cpu.max.burst"
 # where <container-cgroup> is the pod container's cgroup v2 path, e.g.
 #   /sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/<pod-uid>/<container>/cpu.max.burst
 # (resolve it on the node from the pod's cgroup annotation or by matching the
@@ -45,4 +48,4 @@ measurement:
   cgroup_interval: 5
 matrix:
   - request: ""; limit: "250m"; burst: ""
-  - request: ""; limit: "250m"; burst: "100000"
+  - request: ""; limit: "250m"; burst: "25000"

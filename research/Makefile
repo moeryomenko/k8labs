@@ -42,10 +42,21 @@ help: ## Prints this help message
 # ---- Config Validation ----
 
 .PHONY: validate-configs
+# eevdf-metrics-db.yaml is REFERENCE ONLY (see the config header comment): the
+# combined api-server + db-simulator deployment requires a manual setup that
+# run-experiment.sh's single-workload loop cannot express, so the file has no
+# workload block and cannot dry-run. It is skipped below on purpose; every
+# other config must dry-run cleanly.
 validate-configs: ## Validate all experiment config files
 	@echo "Validating experiment configs..."
 	@for cfg in $(CONFIGS_DIR)/*.yaml; do \
-		echo "  Checking: $$(basename $$cfg)"; \
+		base=$$(basename "$$cfg"); \
+		if [ "$$base" = "eevdf-metrics-db.yaml" ]; then \
+			echo "  SKIP: $$base (reference-only, no workload block)"; \
+			echo "  ---"; \
+			continue; \
+		fi; \
+		echo "  Checking: $$base"; \
 		$(RUNNER) "$$cfg" --dry-run 2>&1 | head -20; \
 		echo "  ---"; \
 	done
@@ -211,6 +222,25 @@ experiment-tunables-contention: ## Run tunables-contention experiment (api-serve
 	# (no --eevdf). Apply tunable sets manually per cell (TASK-020):
 	#   research/scripts/tunable-sweep.sh apply <tunables> && ... cell ... && research/scripts/tunable-sweep.sh restore
 	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/tunables-contention.yaml
+
+# ---- Interaction Report (TASK-022 rerun pipeline) ----
+
+# Regenerates interaction-report.md from staged CSVs under experiments/data/
+# (one dir per family). No cluster, no network, no timestamps: rerunning with
+# the same staged data produces byte-identical output (REQ-5).
+INTERACTION_REPORT_OUTPUT_DIR := $(PERFETTO_ANALYSIS_DIR)/output/interaction-report
+
+.PHONY: interaction-report
+interaction-report: ## Regenerate interaction-report.md from staged data (5 analyzers + report generator; no cluster, no network)
+	@echo "Regenerating interaction-report from staged experiment data..."
+	@mkdir -p $(INTERACTION_REPORT_OUTPUT_DIR)
+	python3 $(PERFETTO_ANALYSIS_DIR)/weight-share-analyze.py --data-dir $(EXPERIMENTS_DIR)/data/weight-share --output-dir $(INTERACTION_REPORT_OUTPUT_DIR)
+	python3 $(PERFETTO_ANALYSIS_DIR)/interaction-heatmap.py --data-dir $(EXPERIMENTS_DIR)/data/request-limit-matrix --output-dir $(INTERACTION_REPORT_OUTPUT_DIR)
+	python3 $(PERFETTO_ANALYSIS_DIR)/qos-analyze.py --data-dir $(EXPERIMENTS_DIR)/data/qos-hierarchy --output-dir $(INTERACTION_REPORT_OUTPUT_DIR)
+	python3 $(PERFETTO_ANALYSIS_DIR)/latency-analyze.py --data-dir $(EXPERIMENTS_DIR)/data/latency-interference --output-dir $(INTERACTION_REPORT_OUTPUT_DIR)
+	python3 $(PERFETTO_ANALYSIS_DIR)/tunables-analyze.py --data-dir $(EXPERIMENTS_DIR)/data/tunables-contention --output-dir $(INTERACTION_REPORT_OUTPUT_DIR)
+	python3 $(PERFETTO_ANALYSIS_DIR)/generate-report.py --input-dir $(INTERACTION_REPORT_OUTPUT_DIR) --output-dir $(INTERACTION_REPORT_OUTPUT_DIR)
+	@echo "interaction-report.md written to $(INTERACTION_REPORT_OUTPUT_DIR)"
 
 .PHONY: eevdf-analyze
 eevdf-analyze: ## Run EEVDF analysis pipeline on experiment data

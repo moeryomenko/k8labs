@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-01-01T00:00:00Z",
+  "captured_by": "tunable-defaults.sh",
+  "workers": {
+    "w1": {
+      "base_slice_ns": "1400000",
+      "migration_cost_ns": "500000",
+      "nr_migrate": "32"
+    }
+  }
+}

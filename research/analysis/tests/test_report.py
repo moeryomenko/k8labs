@@ -1,11 +1,13 @@
 """Tests for generate-report.py — markdown practical guide from analysis outputs.
 
-TASK-018 test-first design, red until TASK-019 implements the script.
+TASK-018 test-first design, extended by debt tasks TASK-D01 (data-driven
+burst verdict) and TASK-D08 (QoS ordering for direct guaranteed pod slices).
 The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract TASK-019 must build:
+used here are the contract the engineer must build:
 
     research/analysis/generate-report.py  (module: generate_report)
       REPORT_FILENAME = "interaction-report.md"
+      BURST_CSV = "burst-summary.csv"      (TASK-D01 pinned input)
       load_table(input_dir: Path, filename: str) -> pd.DataFrame | None
       build_report(input_dir: Path) -> str
       main(argv: list[str] | None = None) -> int
@@ -22,6 +24,8 @@ from the analyzer outputs):
     latency-correlation.csv  metric,correlation
     tunables-comparison.csv  tunable,mean_p99,std_p99,mean_slice_us,std_slice_us,n
     tunables-significance.csv  tunable,mean_p99,default_mean_p99,diff_p99,noise_threshold,significant
+    burst-summary.csv (TASK-D01 pinned)  cell,replicate,nr_periods,nr_throttled,
+      throttled_usec,usage_usec,cpu_max_burst,cpu_max_quota
 
 Report structure (pinned section headers, in order):
     # Request/limit scheduler interaction
@@ -34,23 +38,35 @@ Report structure (pinned section headers, in order):
     ## Burst verdict
 
 Section-presence rule (REQ-2, pinned): the six data-driven sections are NEVER
-omitted; when their CSV is missing or has zero data rows they render the
-exact marker line ``_no data_`` under the header. The burst verdict section is
-always present and always renders the burst-disabled note (no burst analysis
-CSV exists in the pipeline; cpu.max.burst defaults to 0 in this cluster per
-TASK-001). Empty input still produces a valid markdown file.
+omitted; when their CSV is missing or has zero data rows they render the exact
+marker line ``_no data_`` under the header. The burst verdict section is
+two-branch (TASK-D01): when burst-summary.csv exists with data and at least
+one row has cpu_max_burst > 0 it renders the measured verdict (the applied
+burst value, per-cell mean nr_throttled / throttled_usec, and the kernel
+constraint note); otherwise it renders the fallback static note ("No burst
+experiment data. Burst is disabled: cpu.max.burst defaults to 0..."). Empty
+input still produces a valid markdown file.
 
 Number formatting (pinned, REQ-4): integers render as ints; floats render via
 ``format(v, "g")`` (deterministic, round-trippable); NaN renders as ``n/a``.
 Tables are standard pipe tables with a ``---`` separator row.
 
-Covered requirements:
+TASK-018 covered requirements:
   REQ-1 (VC-REP-01) all sections present, in pinned order
   REQ-2 (VC-REP-02) missing/empty input -> "_no data_" marker, valid markdown
   REQ-3 (VC-REP-03) exact fixture values in the right sections
   REQ-4 (VC-REP-04) deterministic output (byte-identical, sorted rows)
   REQ-5 (VC-CLI-01) --input-dir/--output-dir contract and exit codes
   REQ-6 (VC-REP-05) string-contains / table parsing assertions, no network
+
+TASK-D01/D08 debt requirements (the reason this file changes):
+  REQ-1 (D01) burst data-present case renders measured numbers (nr_throttled
+        105 -> 0, burst=25000, kernel constraint note)
+  REQ-2 (D01) burst no-data fallback still renders the static note
+  REQ-3 (D08) QoS ordering: kubepods-pod*.slice sorts as guaranteed (before
+        burstable/besteffort); kubepods-guaranteed.slice still works
+  REQ-4 (D01/D08) existing determinism/CLI/no-data tests unaffected
+  REQ-5 (D01) burst input filename + schema pinned in TEST-DESIGN.md
 
 Run from research/analysis:
     python3 -m pytest tests/test_report.py -q
@@ -64,18 +80,16 @@ import re
 import subprocess
 import sys
 
-import pandas as pd
 import pytest
 
 from tests.conftest import (
-    CORRELATION_COLUMNS,
+    BURST_COLUMNS,
     HEATMAP_COLUMNS,
     LATENCY_COLUMNS,
     QOS_COLUMNS,
     REPORT_INPUT_FILES,
-    TUN_COMPARISON_COLUMNS,
-    TUN_SIGNIFICANCE_COLUMNS,
     WEIGHT_SHARE_COLUMNS,
+    write_analysis_csv,
 )
 
 ANALYSIS_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -92,7 +106,7 @@ SECTION_HEADERS = [
     "## Tunables verdict",
     "## Burst verdict",
 ]
-DATA_SECTIONS = SECTION_HEADERS[:-1]  # burst verdict is static, not data-driven
+DATA_SECTIONS = SECTION_HEADERS[:-1]  # burst is two-branch, not `_no data_`-driven
 NO_DATA_MARKER = "_no data_"
 
 # Expected rendered values (fixture numbers from conftest, formatted via "g").
@@ -116,6 +130,21 @@ LAT_ROW_CELL2 = [
     "16000000",
     "0.1",
 ]
+
+# TASK-D01 burst contract — fixture values from conftest BURST_ROWS.
+# The applied burst value (25000) comes from cpu_max_burst, NEVER from the
+# cell label (the burst cell label is burst=100000, the matrix value the
+# kernel rejected EINVAL).
+BURST_CELL_NO_BURST = "request=-limit=250m-burst="
+BURST_CELL_APPLIED = "request=-limit=250m-burst=100000"
+BURST_ROW_NO_BURST = [BURST_CELL_NO_BURST, "105", "5280000"]
+BURST_ROW_APPLIED = [BURST_CELL_APPLIED, "0", "0"]
+BURST_VERDICT_MARKER = "Measured verdict"
+BURST_FALLBACK_MARKER = "No burst experiment data"
+BURST_KERNEL_CONSTRAINT = "burst <= quota"
+
+# TASK-D08: the direct TRUE-Guaranteed pod slice qos-analyze.py emits.
+DIRECT_GUARANTEED_SLICE = "kubepods-podg1.slice"
 
 
 # =========================================================================
@@ -202,6 +231,11 @@ class TestModuleContract:
                 f"missing pinned function: {name}"
             )
 
+    def test_module_exposes_burst_csv_name(self):
+        """TASK-D01: the script pins the burst input filename."""
+        module = load_report_module()
+        assert module.BURST_CSV == "burst-summary.csv"
+
 
 # =========================================================================
 # load_table
@@ -229,6 +263,13 @@ class TestLoadTable:
         """A CSV that does not exist yields None (section -> '_no data_')."""
         module = load_report_module()
         assert module.load_table(analysis_output_dir, "does-not-exist.csv") is None
+
+    def test_reads_burst_csv(self, analysis_output_dir: pathlib.Path):
+        """TASK-D01: load_table reads burst-summary.csv with the pinned schema."""
+        module = load_report_module()
+        df = module.load_table(analysis_output_dir, "burst-summary.csv")
+        assert list(df.columns) == BURST_COLUMNS
+        assert len(df) == 6  # 2 cells x 3 replicates
 
 
 # =========================================================================
@@ -379,6 +420,51 @@ class TestQosSection:
         assert rows[3][1] == "kubepods-besteffort.slice"
         assert rows[3][3] == "1"
 
+    def test_direct_pod_slice_sorts_as_guaranteed(
+        self, qos_direct_guaranteed_output_dir: pathlib.Path
+    ):
+        """TASK-D08: kubepods-podg1.slice sorts before burstable/besteffort.
+
+        The direct TRUE-Guaranteed pod slice (qos-analyze.py output for a
+        systemd layout without the kubepods-guaranteed.slice wrapper) must
+        rank with guaranteed priority, not fall to the end of the table.
+        """
+        module = load_report_module()
+        body = section_text(
+            module.build_report(qos_direct_guaranteed_output_dir), SECTION_HEADERS[3]
+        )
+        rows = parse_markdown_table(body)
+        assert rows[0] == QOS_COLUMNS
+        assert [r[1] for r in rows[1:]] == [
+            DIRECT_GUARANTEED_SLICE,
+            "kubepods-burstable.slice",
+            "kubepods-besteffort.slice",
+        ]
+
+
+class TestQosPriority:
+    """_qos_priority mapping (TASK-D08): direct pod slice ranks as guaranteed."""
+
+    def test_direct_pod_slice_is_guaranteed(self):
+        """kubepods-pod*.slice (TRUE Guaranteed) ranks with guaranteed (0)."""
+        module = load_report_module()
+        assert module._qos_priority(DIRECT_GUARANTEED_SLICE) == 0
+
+    @pytest.mark.parametrize(
+        ("slice_name", "expected"),
+        [
+            ("kubepods-guaranteed.slice", 0),
+            ("kubepods-burstable.slice", 1),
+            ("kubepods-besteffort.slice", 2),
+            ("kubepods-other.slice", 3),
+        ],
+        ids=["guaranteed", "burstable", "besteffort", "unknown"],
+    )
+    def test_class_slices_keep_priorities(self, slice_name: str, expected: int):
+        """The existing QoS-class mapping is unchanged (REQ-4/REQ-3)."""
+        module = load_report_module()
+        assert module._qos_priority(slice_name) == expected
+
 
 class TestLatencySection:
     """Latency table carries exact percentiles and throttling ratios."""
@@ -443,16 +529,68 @@ class TestTunablesSection:
 
 
 class TestBurstSection:
-    """Burst verdict is the static burst-disabled note (REQ-3)."""
+    """Burst verdict (TASK-D01): data-driven measured verdict vs fallback note."""
 
-    def test_burst_disabled_note(self, analysis_output_dir: pathlib.Path):
-        """The section says burst is disabled (cpu.max.burst defaults to 0)."""
+    def test_data_present_renders_measured_verdict(
+        self, analysis_output_dir: pathlib.Path
+    ):
+        """burst-summary.csv present -> measured numbers, burst value, kernel note.
+
+        REQ-1: the applied burst value (cpu.max.burst=25000), the per-cell
+        mean nr_throttled / throttled_usec (105 -> 0, 5280000 -> 0) and the
+        kernel constraint note (burst <= quota; 100000 EINVAL) all appear.
+        """
         module = load_report_module()
         body = section_text(
-            module.build_report(analysis_output_dir), SECTION_HEADERS[6]
+            module.build_report(analysis_output_dir), SECTION_HEADERS[-1]
         )
+        # Measured verdict line names the applied burst value and the means.
+        assert BURST_VERDICT_MARKER in body
+        assert "`cpu.max.burst=25000`" in body
+        assert "mean nr_throttled 105 -> 0" in body
+        assert "mean throttled_usec 5280000 -> 0" in body
+        # The per-cell table carries the measured numbers, sorted by cell.
+        rows = parse_markdown_table(body)
+        assert rows[0] == ["cell", "mean_nr_throttled", "mean_throttled_usec"]
+        assert rows[1] == BURST_ROW_NO_BURST
+        assert rows[2] == BURST_ROW_APPLIED
+        # Kernel constraint note.
+        assert BURST_KERNEL_CONSTRAINT in body
+        assert "100000 was rejected EINVAL" in body
+        # The fallback note must NOT appear when measured data is present.
+        assert "Burst is disabled" not in body
+        assert BURST_FALLBACK_MARKER not in body
+
+    def test_no_data_renders_static_fallback(
+        self, empty_analysis_output_dir: pathlib.Path
+    ):
+        """No burst-summary.csv -> the static fallback note (REQ-2)."""
+        module = load_report_module()
+        body = section_text(
+            module.build_report(empty_analysis_output_dir), SECTION_HEADERS[-1]
+        )
+        assert BURST_FALLBACK_MARKER in body
         assert "Burst is disabled" in body
         assert "cpu.max.burst" in body
+        assert BURST_VERDICT_MARKER not in body
+
+    def test_no_burst_cell_renders_fallback(self, tmp_path: pathlib.Path):
+        """burst data with cpu_max_burst == 0 everywhere -> fallback note.
+
+        A burst-summary.csv whose rows never enabled burst (all
+        cpu_max_burst == 0) carries no measured burst verdict; the section
+        falls back to the static note instead of inventing one.
+        """
+        module = load_report_module()
+        d = tmp_path / "burst-zero"
+        write_analysis_csv(
+            d / "burst-summary.csv",
+            BURST_COLUMNS,
+            [("request=-limit=250m-burst=", 1, 124, 105, 5200000, 2750000, 0, 25000)],
+        )
+        body = section_text(module.build_report(d), SECTION_HEADERS[-1])
+        assert "Burst is disabled" in body
+        assert BURST_VERDICT_MARKER not in body
 
 
 # =========================================================================
@@ -475,9 +613,11 @@ class TestNoData:
             assert header in report
         for header in DATA_SECTIONS:
             assert NO_DATA_MARKER in section_text(report, header)
-        # Burst verdict is static: always the disabled note, never no-data.
-        assert NO_DATA_MARKER not in section_text(report, SECTION_HEADERS[-1])
-        assert "Burst is disabled" in section_text(report, SECTION_HEADERS[-1])
+        # Burst verdict (TASK-D01): no burst data -> the static fallback note,
+        # never the no-data marker (the fallback explains the absence).
+        burst_body = section_text(report, SECTION_HEADERS[-1])
+        assert NO_DATA_MARKER not in burst_body
+        assert "Burst is disabled" in burst_body
 
     def test_empty_input_cli_exit_zero(
         self, empty_analysis_output_dir: pathlib.Path, tmp_path: pathlib.Path
@@ -510,6 +650,16 @@ class TestNoData:
         )
         report = module.build_report(d)
         assert NO_DATA_MARKER in section_text(report, SECTION_HEADERS[0])
+
+    def test_header_only_burst_csv_renders_fallback(self, tmp_path: pathlib.Path):
+        """TASK-D01: header-only burst-summary.csv -> fallback note, not verdict."""
+        module = load_report_module()
+        d = tmp_path / "burst-header-only"
+        d.mkdir()
+        (d / "burst-summary.csv").write_text(",".join(BURST_COLUMNS) + "\n")
+        body = section_text(module.build_report(d), SECTION_HEADERS[-1])
+        assert "Burst is disabled" in body
+        assert BURST_VERDICT_MARKER not in body
 
 
 # =========================================================================
@@ -606,7 +756,7 @@ class TestEndToEnd:
         assert "0.00393082" in report
         assert "Max throttling ratio: 0.9" in report
         assert "19.81" in report
-        assert "Burst is disabled" in report
+        assert "`cpu.max.burst=25000`" in report  # TASK-D01 measured verdict
 
     def test_report_is_markdown_tables(
         self, analysis_output_dir: pathlib.Path, tmp_path: pathlib.Path

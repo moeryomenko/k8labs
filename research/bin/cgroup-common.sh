@@ -16,6 +16,13 @@ readonly _CGROUP_COMMON_SH
 # ---- Strict Mode ----
 set -Eeuo pipefail
 
+# ---- Shared DHCP lease helper ----
+# Source the lease resolution helper (authoritative systemd-networkd JSON with
+# dnsmasq fallback). get_worker_ips / get_node_ip are defined there.
+# shellcheck source=lease-common.sh
+_CGROUP_COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${_CGROUP_COMMON_DIR}/lease-common.sh"
+
 # ---- Paths ----
 # KUBECONFIG defaults to <project-root>/kubeconfig, overridable via env
 : "${KUBECONFIG:=}"
@@ -88,36 +95,16 @@ log_info()  { printf '[INFO]  %s\n' "$*" >&2; }
 log_error() { printf '[ERROR] %s\n' "$*" >&2; }
 
 # ---------------------------------------------------------------------------
-# get_worker_ips — Returns space-separated list of worker IPs from Terraform
+# get_worker_ips / get_node_ip — provided by lease-common.sh (sourced above)
 # ---------------------------------------------------------------------------
-# Resolve IPs from dnsmasq DHCP leases by MAC address.
-# VMs are configured with predictable MACs in terraform.tfvars.
-# The lease file is at /var/lib/misc/dnsmasq/k8sbr0.leases (configurable via DNSMASQ_LEASES).
-: "${DNSMASQ_LEASES:=/var/lib/misc/dnsmasq/k8sbr0.leases}"
+# Node IPs are resolved from the systemd-networkd DHCP server lease
+# (authoritative, $SYSTEMD_LEASES) with a dnsmasq lease fallback
+# ($DNSMASQ_LEASES) by MAC address. VMs are configured with predictable MACs
+# in terraform.tfvars. get_worker_ips prints IPs in WORKER_MACS order.
 
 # MAC addresses for node resolution (must match terraform.tfvars)
 : "${CP_MAC:=c6:e5:50:1c:ec:01}"
-: "${WORKER_MACS:=c6:e5:50:1c:ec:02}"
-
-get_node_ip() {
-    local mac="$1"
-    [ ! -f "$DNSMASQ_LEASES" ] && { log_error "DHCP lease file not found: $DNSMASQ_LEASES"; return 1; }
-    ip=$(awk -v m="$mac" 'BEGIN{IGNORECASE=1} $2 == m {print $3; exit}' "$DNSMASQ_LEASES" 2>/dev/null)
-    [ -z "$ip" ] && { log_error "No IP found for MAC $mac in $DNSMASQ_LEASES"; return 1; }
-    echo "$ip"
-}
-
-get_worker_ips() {
-    local ips=()
-    for mac in $WORKER_MACS; do
-        ip=$(get_node_ip "$mac" 2>/dev/null) && ips+=("$ip")
-    done
-    if [ ${#ips[@]} -eq 0 ]; then
-        log_error "Failed to get worker IPs from DHCP leases"
-        return 1
-    fi
-    echo "${ips[*]}"
-}
+: "${WORKER_MACS:=c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03}"
 
 get_cp_ip() {
     get_node_ip "$CP_MAC"
@@ -157,7 +144,7 @@ get_pod_node_ip() {
     local node_name
     node_name="$(get_pod_node "$pod_name")" || return 1
 
-    # Resolve IP by reading terraform nodes output and matching on MAC from dnsmasq leases
+    # Resolve IP by reading terraform nodes output and matching on MAC from DHCP leases
     local node_info
     node_info=$(tofu -chdir="$PROJECT_ROOT/terraform" output -json nodes 2>/dev/null \
         | python3 -c "

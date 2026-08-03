@@ -814,6 +814,12 @@ def family_f_no_default_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 #   latency-correlation.csv   : metric,correlation
 #   tunables-comparison.csv   : tunable,mean_p99,std_p99,mean_slice_us,std_slice_us,n
 #   tunables-significance.csv : tunable,mean_p99,default_mean_p99,diff_p99,noise_threshold,significant
+#   burst-summary.csv (TASK-D01 pinned contract): cell,replicate,nr_periods,
+#     nr_throttled,throttled_usec,usage_usec,cpu_max_burst,cpu_max_quota
+# qos-summary.csv rows can carry either the kubepods-guaranteed.slice wrapper
+# (QOS_ROWS) or the direct kubepods-pod<uid>.slice TRUE-Guaranteed row
+# (QOS_ROWS_DIRECT_GUARANTEED, TASK-D08) — the latter is what qos-analyze.py
+# emits when the snapshot has no wrapper slice.
 # ---------------------------------------------------------------------------
 
 REPORT_INPUT_FILES = [
@@ -824,6 +830,7 @@ REPORT_INPUT_FILES = [
     "latency-correlation.csv",
     "tunables-comparison.csv",
     "tunables-significance.csv",
+    "burst-summary.csv",
 ]
 
 WEIGHT_SHARE_COLUMNS = ["cell", "pod", "achieved_share", "weight_share", "ratio_error"]
@@ -854,6 +861,38 @@ QOS_ROWS = [
         "qos-compete",
         "kubepods-guaranteed.slice",
         "kubepods-guaranteed-podg1.slice",
+        59,
+        12 / 33,
+        0,
+    ),
+    (
+        "qos-compete",
+        "kubepods-burstable.slice",
+        "kubepods-burstable-podb1.slice",
+        100,
+        20 / 33,
+        50000,
+    ),
+    (
+        "qos-compete",
+        "kubepods-besteffort.slice",
+        "kubepods-besteffort-podbe1.slice",
+        1,
+        1 / 33,
+        0,
+    ),
+]
+
+# TASK-D08: qos-summary rows for a TRUE-Guaranteed pod (systemd cgroup driver).
+# qos-analyze.py emits the direct kubepods-pod<uid>.slice as the guaranteed row
+# (self-representing: qos_slice == pod) when the snapshot has NO
+# kubepods-guaranteed.slice wrapper. The report generator must sort this row
+# as guaranteed, before burstable/besteffort.
+QOS_ROWS_DIRECT_GUARANTEED = [
+    (
+        "qos-compete",
+        "kubepods-podg1.slice",
+        "kubepods-podg1.slice",
         59,
         12 / 33,
         0,
@@ -926,6 +965,36 @@ TUN_SIGNIFICANCE_ROWS = [
     ("base-slice-high", 18.0, 12.0, 6.0, 0.0, True),
 ]
 
+# TASK-D01 pinned burst contract (see TEST-DESIGN.md, REQ-5):
+#   burst-summary.csv — cell,replicate,nr_periods,nr_throttled,throttled_usec,
+#   usage_usec,cpu_max_burst,cpu_max_quota
+# cpu_max_burst is the value ACTUALLY written to cpu.max.burst during the cell
+# (kernel-validated: 0 for the no-burst baseline, 25000 for the burst cell).
+# cpu_max_quota is the CFS quota in microseconds (25000 = 250m). The `cell`
+# labels are the experiment matrix labels copied from the real
+# research/experiments/data/cpu-burst/summary.csv — the burst cell is labelled
+# burst=100000 (the value the matrix requested, rejected EINVAL by the kernel)
+# while the applied value is 25000; the generator MUST read the applied value
+# from cpu_max_burst and never parse the cell label.
+BURST_COLUMNS = [
+    "cell",
+    "replicate",
+    "nr_periods",
+    "nr_throttled",
+    "throttled_usec",
+    "usage_usec",
+    "cpu_max_burst",
+    "cpu_max_quota",
+]
+BURST_ROWS = [
+    ("request=-limit=250m-burst=", 1, 124, 105, 5200000, 2750000, 0, 25000),
+    ("request=-limit=250m-burst=", 2, 128, 105, 5300000, 2730000, 0, 25000),
+    ("request=-limit=250m-burst=", 3, 127, 105, 5340000, 2754000, 0, 25000),
+    ("request=-limit=250m-burst=100000", 1, 127, 0, 0, 2762704, 25000, 25000),
+    ("request=-limit=250m-burst=100000", 2, 129, 0, 0, 2750086, 25000, 25000),
+    ("request=-limit=250m-burst=100000", 3, 123, 0, 0, 2764686, 25000, 25000),
+]
+
 
 def write_analysis_csv(
     path: pathlib.Path,
@@ -950,23 +1019,31 @@ def build_analysis_output_dir(
     root: pathlib.Path,
     *,
     shuffled: bool = False,
+    qos_rows: list[tuple] | None = None,
 ) -> pathlib.Path:
-    """Write all seven analysis-output CSVs into *root* and return it.
+    """Write all eight analysis-output CSVs into *root* and return it.
 
     Values mirror the TASK-014/016 analyzer fixtures so report assertions
     reuse the same hand-computed numbers. With ``shuffled=True`` the data
     rows are reversed inside every CSV while the schema stays identical —
     the report must sort, so output must be byte-identical either way
-    (REQ-4 determinism).
+    (REQ-4 determinism). ``qos_rows`` overrides the qos-summary rows
+    (TASK-D08 passes QOS_ROWS_DIRECT_GUARANTEED for the TRUE-Guaranteed
+    layout; default is the wrapper layout QOS_ROWS).
     """
     specs = [
         ("weight-share-summary.csv", WEIGHT_SHARE_COLUMNS, WEIGHT_SHARE_ROWS),
         ("heatmap-throttling_ratio.csv", HEATMAP_COLUMNS, HEATMAP_ROWS),
-        ("qos-summary.csv", QOS_COLUMNS, QOS_ROWS),
+        (
+            "qos-summary.csv",
+            QOS_COLUMNS,
+            QOS_ROWS if qos_rows is None else qos_rows,
+        ),
         ("latency-summary.csv", LATENCY_COLUMNS, LATENCY_ROWS),
         ("latency-correlation.csv", CORRELATION_COLUMNS, CORRELATION_ROWS),
         ("tunables-comparison.csv", TUN_COMPARISON_COLUMNS, TUN_COMPARISON_ROWS),
         ("tunables-significance.csv", TUN_SIGNIFICANCE_COLUMNS, TUN_SIGNIFICANCE_ROWS),
+        ("burst-summary.csv", BURST_COLUMNS, BURST_ROWS),
     ]
     for filename, columns, rows in specs:
         data = list(reversed(rows)) if shuffled else rows
@@ -976,7 +1053,7 @@ def build_analysis_output_dir(
 
 @pytest.fixture
 def analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Complete analysis-output fixture: all seven CSVs with known values."""
+    """Complete analysis-output fixture: all eight CSVs with known values."""
     return build_analysis_output_dir(tmp_path / "analysis-output")
 
 
@@ -984,6 +1061,21 @@ def analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 def shuffled_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
     """Same CSVs as analysis_output_dir but with data rows reversed."""
     return build_analysis_output_dir(tmp_path / "analysis-shuffled", shuffled=True)
+
+
+@pytest.fixture
+def qos_direct_guaranteed_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """TASK-D08: qos-summary carries the direct kubepods-podg1.slice row.
+
+    Mirrors what qos-analyze.py emits for a TRUE-Guaranteed pod (systemd
+    cgroup driver: no kubepods-guaranteed.slice wrapper — the pod slice IS
+    the guaranteed row, self-representing). The report must sort that row as
+    guaranteed, before burstable/besteffort.
+    """
+    return build_analysis_output_dir(
+        tmp_path / "analysis-qos-direct-guaranteed",
+        qos_rows=QOS_ROWS_DIRECT_GUARANTEED,
+    )
 
 
 @pytest.fixture
