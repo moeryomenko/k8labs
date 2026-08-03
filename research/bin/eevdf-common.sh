@@ -46,7 +46,7 @@ resolve_container_pids() {
     local all_pids=()
     local container_name container_id pid
     for container_name in $container_names; do
-        container_id="$(get_container_id "$node_ip" "$container_name" 2>/dev/null)" || continue
+        container_id="$(get_container_id "$node_ip" "$pod_name" "$container_name" 2>/dev/null)" || continue
         pid="$(get_container_pid "$node_ip" "$container_id" 2>/dev/null)" || continue
         all_pids+=("$pid")
     done
@@ -257,7 +257,7 @@ get_container_cgroup_path() {
     pod_cgroup_path="$(pod_name_to_cgroup_path "$pod_name")" || return 1
 
     local container_id
-    container_id="$(get_container_id "$node_ip" "$container_name")" || return 1
+    container_id="$(get_container_id "$node_ip" "$pod_name" "$container_name")" || return 1
 
     # For systemd cgroup driver: <pod-path>/crio-<container_id>.scope/
     local container_cgroup_path="${pod_cgroup_path}/crio-${container_id}.scope"

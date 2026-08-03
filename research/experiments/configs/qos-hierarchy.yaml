@@ -7,8 +7,10 @@ duration: 120
 cooldown: 15
 # Family C (qos-hierarchy): three stress-ng pods, one per QoS class, sharing
 # one node. The QoS class comes from the request/limit VALUES, not from the
-# workload type (TASK-010 contract T-TYPES), so all three use type stress-ng.
-#   guaranteed  -> request == limit
+# workload type (TASK-010 contract T-TYPES). The guaranteed pod uses the
+# stress-ng-guaranteed template (memory request==limit 128Mi hardcoded) so the
+# pod is classified TRUE Guaranteed; burstable/besteffort use type stress-ng.
+#   guaranteed  -> request == limit (CPU matrix-driven equal values + 128Mi/128Mi)
 #   burstable   -> request < limit
 #   besteffort  -> no request, no limit
 #
@@ -30,7 +32,7 @@ cooldown: 15
 # the runner grows a capture hook.
 workloads:
   guaranteed:
-    type: stress-ng
+    type: stress-ng-guaranteed
     params:
       cores: 2
       load: 100

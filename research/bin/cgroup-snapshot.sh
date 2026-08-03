@@ -140,7 +140,7 @@ main() {
 
     # Get container ID
     local container_id
-    container_id="$(get_container_id "$node_ip" "$container_name")" || exit 1
+    container_id="$(get_container_id "$node_ip" "$pod_name" "$container_name")" || exit 1
 
     # Get PID
     local pid

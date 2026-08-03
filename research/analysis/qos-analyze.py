@@ -83,7 +83,13 @@ def _slice_by_qos(hierarchy: dict) -> dict[str, dict]:
     """Map QoS class name -> slice entry from a hierarchy snapshot.
 
     A slice entry qualifies when its name is exactly ``kubepods-<qos>.slice``;
-    the QoS class is the text between ``kubepods-`` and ``.slice``.
+    the QoS class is the text between ``kubepods-`` and ``.slice``. A slice
+    named ``kubepods-pod<uid>.slice`` is a direct TRUE Guaranteed pod slice
+    (systemd cgroup driver: a Guaranteed pod has no
+    ``kubepods-guaranteed.slice`` wrapper) and is attributed to QoS class
+    ``guaranteed``. When both the wrapper slice and a direct pod slice are
+    present, the later slice in the snapshot (find order) wins — the pinned
+    contract only fixes the direct-slice layout that actually occurs.
 
     Args:
         hierarchy: Parsed cgroup-hierarchy JSON.
@@ -94,8 +100,12 @@ def _slice_by_qos(hierarchy: dict) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for slice_ in hierarchy.get("slices", []):
         name = slice_.get("name", "")
-        if name.startswith("kubepods-") and name.endswith(".slice"):
-            result[name[len("kubepods-") : -len(".slice")]] = slice_
+        if not (name.startswith("kubepods-") and name.endswith(".slice")):
+            continue
+        qos = name[len("kubepods-") : -len(".slice")]
+        if qos.startswith("pod"):
+            qos = "guaranteed"
+        result[qos] = slice_
     return result
 
 

@@ -327,7 +327,7 @@ main() {
     # ---- Step 7: Get container ID via crictl ----
     print_header "Step 7: Container Discovery (CRI-O)"
     local container_id
-    container_id="$(get_container_id "$node_ip" "$container_name")" || exit 1
+    container_id="$(get_container_id "$node_ip" "$CREATED_POD_NAME" "$container_name")" || exit 1
     printf '  Container ID (CRI-O): %s\n' "$container_id"
 
     local pid

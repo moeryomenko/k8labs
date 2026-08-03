@@ -126,25 +126,41 @@ build_slices() {
         qos_name="$(basename -- "$qos_dir")"
         qos_weight="$(read_remote_file "$node_ip" "$qos_dir/cpu.weight")"
 
-        pod_dirs=()
-        mapfile -t pod_dirs < <(discover_dirs "$node_ip" "$qos_dir" "kubepods-*-pod*.slice") || return 1
-
-        pods=()
-        for pod_dir in "${pod_dirs[@]}"; do
-            pod_name="$(basename -- "$pod_dir")"
-            pod_weight="$(read_remote_file "$node_ip" "$pod_dir/cpu.weight")"
-            pod_max="$(read_remote_file "$node_ip" "$pod_dir/cpu.max")"
-            pods+=("$(jq -cn \
-                --arg name "$pod_name" \
-                --arg cpu_weight "$pod_weight" \
+        if [[ "$qos_name" == kubepods-pod*.slice ]]; then
+            # Direct guaranteed pod slice (systemd cgroup driver): a TRUE
+            # Guaranteed pod (memory request==limit) has NO
+            # kubepods-guaranteed.slice wrapper — its pod slice sits directly
+            # under kubepods.slice. Emit ONE self-representing pod entry
+            # mirroring the slice itself (name = slice name, cpu_weight = slice
+            # cpu.weight, cpu_max = slice cpu.max) so the weight is never lost.
+            pod_max="$(read_remote_file "$node_ip" "$qos_dir/cpu.max")"
+            pods_json="$(jq -cn \
+                --arg name "$qos_name" \
+                --arg cpu_weight "$qos_weight" \
                 --arg cpu_max "$pod_max" \
-                '{name: $name, cpu_weight: $cpu_weight, cpu_max: $cpu_max}')")
-        done
-
-        if [[ ${#pods[@]} -eq 0 ]]; then
-            pods_json='[]'
+                '{name: $name, cpu_weight: $cpu_weight, cpu_max: $cpu_max}' \
+                | jq -sc .)"
         else
-            pods_json="$(printf '%s\n' "${pods[@]}" | jq -sc .)"
+            pod_dirs=()
+            mapfile -t pod_dirs < <(discover_dirs "$node_ip" "$qos_dir" "kubepods-*-pod*.slice") || return 1
+
+            pods=()
+            for pod_dir in "${pod_dirs[@]}"; do
+                pod_name="$(basename -- "$pod_dir")"
+                pod_weight="$(read_remote_file "$node_ip" "$pod_dir/cpu.weight")"
+                pod_max="$(read_remote_file "$node_ip" "$pod_dir/cpu.max")"
+                pods+=("$(jq -cn \
+                    --arg name "$pod_name" \
+                    --arg cpu_weight "$pod_weight" \
+                    --arg cpu_max "$pod_max" \
+                    '{name: $name, cpu_weight: $cpu_weight, cpu_max: $cpu_max}')")
+            done
+
+            if [[ ${#pods[@]} -eq 0 ]]; then
+                pods_json='[]'
+            else
+                pods_json="$(printf '%s\n' "${pods[@]}" | jq -sc .)"
+            fi
         fi
 
         slices+=("$(jq -cn \

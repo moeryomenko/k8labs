@@ -199,25 +199,39 @@ print(-1)
 }
 
 # ---------------------------------------------------------------------------
-# get_container_id — Get CRI-O container ID for a container name on a node
-# Usage: get_container_id <node_ip> <container_name>
+# get_container_id — Resolve the runtime container ID for a specific pod
+#
+# Resolves the container ID from pod status via kubectl (host-side,
+# KUBECONFIG) instead of name-matching crictl output on the node. crictl
+# --name is a regex and -a includes stopped containers, so it is ambiguous
+# when multiple pods share a container name on the same node. The runtime
+# prefix (cri-o://, containerd://, docker://, ...) is stripped so the bare
+# ID works with crictl inspect on the node.
+#
+# Usage: get_container_id <node_ip> <pod_name> <container_name>
 # ---------------------------------------------------------------------------
 get_container_id() {
     local node_ip="$1"
-    local container_name="$2"
+    local pod_name="$2"
+    local container_name="$3"
+
+    resolve_project_root
 
     local cid
-    cid="$(ssh_node "$node_ip" "/usr/bin/crictl ps -a --name '$container_name' --quiet" 2>/dev/null)" || {
-        log_error "Container '$container_name' not found on node $node_ip"
+    cid="$(kubectl --kubeconfig "$KUBECONFIG" get pod "$pod_name" \
+        -o jsonpath="{.status.containerStatuses[?(@.name==\"${container_name}\")].containerID}" \
+        2>/dev/null)" || {
+        log_error "Failed to resolve container ID for pod '$pod_name' container '$container_name' via kubectl"
         return 1
     }
 
     if [[ -z "$cid" ]]; then
-        log_error "Container '$container_name' not found on node $node_ip (empty response)"
+        log_error "Container '$container_name' not found in pod '$pod_name' (empty containerID)"
         return 1
     fi
 
-    echo "$cid"
+    # Strip runtime prefix: cri-o://, containerd://, docker://, ...
+    printf '%s\n' "${cid#*://}"
 }
 
 # ---------------------------------------------------------------------------
@@ -368,7 +382,7 @@ get_cgroup_data() {
 
     # Get container ID
     local container_id
-    container_id="$(get_container_id "$node_ip" "$container_name")" || return 1
+    container_id="$(get_container_id "$node_ip" "$pod_name" "$container_name")" || return 1
 
     # Get PID
     local pid

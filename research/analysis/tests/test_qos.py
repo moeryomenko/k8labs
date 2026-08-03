@@ -25,6 +25,10 @@ Covered requirements:
   REQ-6 (VC-CLI-01) --data-dir/--output-dir contract and exit codes
   REQ-6 (VC-EMPTY-01) empty input -> header-only output, no crash
   REQ-7 (VC-MPL-01) matplotlib lazy import, headless/non-fatal
+  REQ-2 (FIX-3, VC-QOS-G-01) direct kubepods-pod*.slice (TRUE Guaranteed pod,
+      systemd driver) attributed to qos class 'guaranteed'; build_qos_table /
+      verify_hierarchy_weights use the self-representing entry's own weight
+      (TestGuaranteedDirectSlice)
 
 Run from research/analysis:
     python3 -m pytest tests/test_qos.py -q
@@ -546,3 +550,144 @@ class TestFixtureMath:
             ).read_text()
         )
         assert hierarchy["node"] == "cp1"
+
+
+# =========================================================================
+# FIX-3 (REQ-2): TRUE Guaranteed pod — direct kubepods-pod*.slice
+# =========================================================================
+
+
+def direct_guaranteed_hierarchy() -> dict:
+    """Family C hierarchy whose guaranteed pod is a DIRECT kubepods-pod*.slice.
+
+    With the systemd cgroup driver a TRUE Guaranteed pod (memory
+    request==limit) has NO kubepods-guaranteed.slice wrapper: the snapshot
+    emits kubepods-pod<uid>.slice directly under kubepods.slice as a slice
+    entry whose pods[] holds ONE self-representing entry mirroring the slice
+    itself. Slice weights stay 59/100/1 (matching the summary cpu_weight).
+    """
+    h = family_c_hierarchy()
+    h["slices"] = [
+        {
+            "name": "kubepods-podg1.slice",
+            "cpu_weight": "59",
+            "pods": [
+                {
+                    "name": "kubepods-podg1.slice",
+                    "cpu_weight": "59",
+                    "cpu_max": "50000 100000",
+                }
+            ],
+        },
+        next(s for s in h["slices"] if s["name"] == "kubepods-burstable.slice"),
+        next(s for s in h["slices"] if s["name"] == "kubepods-besteffort.slice"),
+    ]
+    return h
+
+
+def build_direct_guaranteed_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Family C fixture whose hierarchy JSON has the direct guaranteed slice.
+
+    Same summary numbers as ``family_c_data_dir`` (guaranteed 60000 weight 59,
+    burstable 100000 weight 100, besteffort 5000 weight 1, 2 replicates) but
+    the hierarchy JSON places the guaranteed pod at kubepods-podg1.slice
+    (self-representing) instead of kubepods-guaranteed.slice.
+    """
+    cell = "qos-compete"
+    rows: list[tuple] = []
+    for rep in (1, 2):
+        rows.append((f"guaranteed-{cell}", rep, 1000, 0, 0, 60000, 59, 50000))
+        rows.append((f"burstable-{cell}", rep, 1000, 500, 25000, 100000, 100, 50000))
+        rows.append((f"besteffort-{cell}", rep, 1000, 0, 0, 5000, 1, 100000))
+    write_summary_csv(root / "summary.csv", rows)
+    (root / cell).mkdir(parents=True, exist_ok=True)
+    (root / cell / "cgroup-hierarchy-cp1.json").write_text(
+        json.dumps(direct_guaranteed_hierarchy(), indent=2) + "\n"
+    )
+    return root
+
+
+class TestGuaranteedDirectSlice:
+    """FIX-3 (REQ-2): a direct kubepods-pod*.slice maps to QoS 'guaranteed'.
+
+    A TRUE Guaranteed pod has no kubepods-guaranteed.slice wrapper. The
+    snapshot emits kubepods-pod<uid>.slice as a slice entry with one
+    self-representing pod entry; _slice_by_qos must attribute it to the
+    'guaranteed' class and build_qos_table / verify_hierarchy_weights must
+    use the self-representing entry's own weight.
+    """
+
+    @pytest.fixture
+    def summary_df(self, family_c_data_dir: pathlib.Path) -> pd.DataFrame:
+        return family_c_summary_df(family_c_data_dir)
+
+    def test_slice_by_qos_attributes_direct_pod_slice_to_guaranteed(self):
+        """_slice_by_qos maps kubepods-podXYZ.slice -> 'guaranteed'."""
+        module = load_qos_module()
+        mapped = module._slice_by_qos(direct_guaranteed_hierarchy())
+        assert mapped["guaranteed"]["name"] == "kubepods-podg1.slice"
+
+    def test_build_qos_table_guaranteed_row_uses_direct_slice(
+        self, summary_df: pd.DataFrame
+    ):
+        """build_qos_table emits the direct slice row with its own weight."""
+        module = load_qos_module()
+        table = module.build_qos_table(summary_df, direct_guaranteed_hierarchy())
+        row = table[table["qos_slice"] == "kubepods-podg1.slice"]
+        assert len(row) == 1
+        assert row.iloc[0]["pod"] == "kubepods-podg1.slice"
+        assert row.iloc[0]["cpu_weight"] == 59
+        assert row.iloc[0]["achieved_share"] == pytest.approx(
+            GUARANTEED_SHARE, abs=1e-9
+        )
+
+    def test_build_qos_table_keeps_other_classes(self, summary_df: pd.DataFrame):
+        """Burstable/besteffort rows are unaffected by the direct slice."""
+        module = load_qos_module()
+        table = module.build_qos_table(summary_df, direct_guaranteed_hierarchy())
+        assert set(table["qos_slice"]) == {
+            "kubepods-podg1.slice",
+            "kubepods-burstable.slice",
+            "kubepods-besteffort.slice",
+        }
+        burstable = table[table["qos_slice"] == "kubepods-burstable.slice"]
+        assert burstable.iloc[0]["cpu_weight"] == 100
+
+    def test_verify_hierarchy_weights_no_mismatch_for_direct_slice(
+        self, summary_df: pd.DataFrame
+    ):
+        """Matching self-representing weight emits no mismatch warning."""
+        module = load_qos_module()
+        warnings = module.verify_hierarchy_weights(
+            summary_df, direct_guaranteed_hierarchy()
+        )
+        assert warnings == []
+
+    def test_verify_hierarchy_weights_mismatch_warns_for_direct_slice(self):
+        """A summary weight disagreeing with the direct slice weight warns."""
+        module = load_qos_module()
+        df = pd.DataFrame(
+            [
+                ("guaranteed-qc", 1, 0, 0, 0, 60000, 99, 50000),  # JSON says 59
+                ("burstable-qc", 1, 0, 0, 0, 100000, 100, 50000),
+                ("besteffort-qc", 1, 0, 0, 0, 5000, 1, 100000),
+            ],
+            columns=FAMILY_SUMMARY_COLUMNS,  # type: ignore
+        )
+        warnings = module.verify_hierarchy_weights(df, direct_guaranteed_hierarchy())
+        assert len(warnings) == 1
+        assert "guaranteed" in warnings[0]
+
+    def test_end_to_end_direct_slice_writes_csv(self, tmp_path: pathlib.Path):
+        """CLI run over a direct-slice fixture emits the guaranteed row."""
+        data_dir = build_direct_guaranteed_data_dir(tmp_path / "family-c-direct")
+        rc, err, out_dir = run_ok(data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        result = pd.read_csv(out_dir / OUTPUT_CSV)
+        row = result[result["qos_slice"] == "kubepods-podg1.slice"]
+        assert len(row) == 1
+        assert row.iloc[0]["pod"] == "kubepods-podg1.slice"
+        assert row.iloc[0]["cpu_weight"] == 59
+        assert row.iloc[0]["achieved_share"] == pytest.approx(
+            GUARANTEED_SHARE, abs=1e-9
+        )

@@ -289,6 +289,9 @@ get_workload_template() {
         stress-ng)
             echo "${RESEARCH_DIR}/workloads/stress-ng/deploy.yaml"
             ;;
+        stress-ng-guaranteed)
+            echo "${RESEARCH_DIR}/workloads/stress-ng/deploy-guaranteed.yaml"
+            ;;
         cpu-burner)
             echo "${RESEARCH_DIR}/workloads/cpu-burner/deploy.yaml"
             ;;

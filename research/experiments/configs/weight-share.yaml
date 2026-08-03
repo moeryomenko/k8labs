@@ -36,5 +36,5 @@ matrix:
   - a_request: "250m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
   - a_request: "100m"; a_limit: ""; b_request: "500m"; b_limit: ""; c_request: ""; c_limit: ""
   - a_request: "100m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
-  - a_request: "1000m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "800m"; a_limit: ""; b_request: "800m"; b_limit: ""; c_request: ""; c_limit: ""
   - a_request: "500m"; a_limit: ""; b_request: "500m"; b_limit: ""; c_request: ""; c_limit: ""

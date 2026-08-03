@@ -24,7 +24,7 @@ matrix:
   - request: ""; limit: "250m"
   - request: ""; limit: "500m"
   - request: ""; limit: "1000m"
-  - request: ""; limit: "2000m"
+  - request: ""; limit: "1500m"
   - request: "100m"; limit: "100m"
   - request: "100m"; limit: "250m"
   - request: "100m"; limit: "500m"

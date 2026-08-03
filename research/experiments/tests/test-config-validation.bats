@@ -29,6 +29,17 @@
 #   REQ-6 -> VC-CV-06 (CV-06a target, CV-06b current-behavior guard)
 #   REQ-7 -> VC-CV-07 (CV-07a, CV-07b)
 #
+# FIX-3 additions (TRUE Guaranteed pod support):
+#   REQ-3 (FIX-3) -> VC-CV-G-01 (CV-G-01, CV-G-02) — guaranteed stress-ng
+#                   template exists and hardcodes memory request==limit 128Mi
+#                   while keeping CPU request/limit matrix markers.
+#   REQ-3 (FIX-3) -> VC-CV-G-02 (CV-G-03, CV-G-04) — get_workload_template
+#                   resolves type stress-ng-guaranteed (via --dry-run of a
+#                   temp config; unknown types die at validation).
+#   REQ-4 (FIX-3) -> VC-CV-G-03 (CV-G-05, CV-G-06) — qos-hierarchy.yaml's
+#                   guaranteed pod uses the guaranteed type; counts stay
+#                   2 cells / 3 deployments and dry-run stays exit 0.
+#
 # Run from project root:
 #   bats research/experiments/tests/test-config-validation.bats
 #
@@ -53,6 +64,32 @@ setup() {
     # Existing configs used by the REQ-7 backward-compatibility regression guards
     export BASELINE_CONFIG="$CONFIGS_DIR/throttling-baseline.yaml"
     export CO_LOCATED_CONFIG="$CONFIGS_DIR/co-located.yaml"
+
+    # FIX-3: TRUE Guaranteed stress-ng template (memory request==limit
+    # hardcoded) + workload type stress-ng-guaranteed. The template is created
+    # by FIX-3 (RED until it lands); the temp config proves the type mapping
+    # via --dry-run without touching the real config.
+    export GUARANTEED_TEMPLATE="$PROJECT_ROOT/research/workloads/stress-ng/deploy-guaranteed.yaml"
+    export GUARANTEED_TYPE_CONFIG="$BATS_TEST_TMPDIR/cv-guaranteed-type.yaml"
+    cat > "$GUARANTEED_TYPE_CONFIG" <<'EOF'
+experiment:
+  name: cv-guaranteed-type
+  description: "stress-ng-guaranteed type mapping — memory hardcoded 128Mi/128Mi"
+replicates: 1
+pre_warm: 5
+duration: 30
+cooldown: 5
+workloads:
+  gpod:
+    type: stress-ng-guaranteed
+    params:
+      cores: 2
+      load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - gpod_request: "500m"; gpod_limit: "500m"
+EOF
 
     # REQ-6 fixture: a temp config whose request exceeds its limit. Written by
     # the test (never committed); the runner must reject it once validation
@@ -329,4 +366,82 @@ EOF
     [[ "$output" == *"Experiment: co-located"* ]]
     [[ "$output" == *"Matrix cells:"* ]]
     [[ "$output" == *"DRY RUN MODE"* ]]
+}
+
+# =============================================================================
+# FIX-3: TRUE Guaranteed pod support (VC-CV-G)
+#
+# Kubernetes classifies a pod Guaranteed only when EVERY resource has
+# request==limit. The stress-ng template sets CPU only, so request==limit CPU
+# pods are Burstable. FIX-3 adds a guaranteed template whose MEMORY
+# request==limit (128Mi/128Mi) is hardcoded while CPU request/limit stay
+# matrix markers, and a workload type stress-ng-guaranteed mapping to it.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# VC-CV-G-01 (REQ-3): The guaranteed template exists and hardcodes memory
+# requests==limits (128Mi/128Mi) while keeping the CPU request/limit markers.
+# ---------------------------------------------------------------------------
+
+@test "CV-G-01: guaranteed workload template exists at the pinned path (REQ-3)" {
+    [ -f "$GUARANTEED_TEMPLATE" ]
+}
+
+@test "CV-G-02: guaranteed template hardcodes memory request==limit 128Mi and keeps CPU markers (REQ-3)" {
+    [ -f "$GUARANTEED_TEMPLATE" ]
+
+    # Exactly two memory keys (one in requests, one in limits) and exactly two
+    # 128Mi values — memory is hardcoded, not matrix-driven.
+    [ "$(grep -cE '^[[:space:]]*memory:' "$GUARANTEED_TEMPLATE")" -eq 2 ]
+    [ "$(grep -c '128Mi' "$GUARANTEED_TEMPLATE")" -eq 2 ]
+
+    # CPU request/limit must stay matrix-driven so the matrix can supply equal
+    # values (Guaranteed requires ALL resources request==limit).
+    grep -q '{{CPU_REQUEST}}' "$GUARANTEED_TEMPLATE"
+    grep -q '{{CPU_LIMIT}}' "$GUARANTEED_TEMPLATE"
+}
+
+# ---------------------------------------------------------------------------
+# VC-CV-G-02 (REQ-3): get_workload_template resolves the type
+# stress-ng-guaranteed. Asserted via --dry-run of a temp config: the runner
+# resolves every workload type at validation time, so an unknown type dies
+# with "Unknown workload type" before any plan output (RED today).
+# ---------------------------------------------------------------------------
+
+@test "CV-G-03: temp config with type stress-ng-guaranteed dry-runs and deploys the pod (REQ-3)" {
+    run bash "$RUN_EXPERIMENT_SH" "$GUARANTEED_TYPE_CONFIG" --dry-run
+
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" | grep -q 'Deployment 1/1: gpod (type: stress-ng-guaranteed'
+}
+
+@test "CV-G-04: stress-ng-guaranteed type does not die on unknown type (REQ-3)" {
+    run bash "$RUN_EXPERIMENT_SH" "$GUARANTEED_TYPE_CONFIG" --dry-run
+
+    [ "$status" -eq 0 ]
+    ! printf '%s\n' "$output" | grep -q 'Unknown workload type'
+}
+
+# ---------------------------------------------------------------------------
+# VC-CV-G-03 (REQ-4): qos-hierarchy.yaml's guaranteed pod switches to the
+# guaranteed type; counts stay 2 cells / 3 deployments; dry-run stays exit 0.
+# ---------------------------------------------------------------------------
+
+@test "CV-G-05: qos-hierarchy.yaml guaranteed pod uses type stress-ng-guaranteed, others stay stress-ng (REQ-4)" {
+    run bash "$RUN_EXPERIMENT_SH" "$QOS_HIERARCHY_CONFIG" --dry-run
+
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" | grep -q 'Deployment .*: guaranteed (type: stress-ng-guaranteed'
+    printf '%s\n' "$output" | grep -q 'Deployment .*: burstable (type: stress-ng,'
+    printf '%s\n' "$output" | grep -q 'Deployment .*: besteffort (type: stress-ng,'
+}
+
+@test "CV-G-06: qos-hierarchy.yaml dry-run still reports 2 cells and 3 deployments (REQ-4)" {
+    run bash "$RUN_EXPERIMENT_SH" "$QOS_HIERARCHY_CONFIG" --dry-run
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Matrix cells: 2"* ]]
+    local deploys
+    deploys="$(printf '%s\n' "$output" | grep -cE 'Deployment [0-9]+/3:' 2>/dev/null || true)"
+    [ "$deploys" -eq 3 ]
 }

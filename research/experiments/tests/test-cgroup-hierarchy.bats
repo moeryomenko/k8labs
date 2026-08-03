@@ -22,6 +22,16 @@
 #   REQ-5 -> VC-CH-05 (CH-15)
 #   REQ-6 -> VC-CH-06 (CH-20)
 #
+# FIX-3 additions (TRUE Guaranteed pod support):
+#   REQ-1(FIX-3) -> VC-CH-G-01 (CH-G-01, CH-G-02) — direct guaranteed pod slice
+#                   emitted as a slice entry with ONE self-representing pod
+#                   entry (name = slice name, cpu_weight = slice cpu.weight,
+#                   cpu_max = slice cpu.max), never a weight-losing entry.
+#   REQ-1 compat  -> VC-CH-G-02 (CH-G-03, CH-G-04) — burstable/besteffort
+#                   output byte-compatible with and without the guaranteed
+#                   slice present.
+#   REQ-1 read-only -> VC-CH-G-03 (CH-G-05) — additive change stays read-only.
+#
 # Run from project root:
 #   bats research/experiments/tests/test-cgroup-hierarchy.bats
 #
@@ -379,4 +389,115 @@ assert_captured_ok() {
     jq -e '.kubepods_slice_weight and .slices' "$STDOUT_FILE" >/dev/null
     [ "$(jq -r '.kubepods_slice_weight' "$STDOUT_FILE")" = "100" ]
     [ "$(jq -r '.slices | length' "$STDOUT_FILE")" = "2" ]
+}
+
+# =============================================================================
+# FIX-3: TRUE Guaranteed pod support (VC-CH-G)
+#
+# With the systemd cgroup driver a TRUE Guaranteed pod (memory
+# requests==limits) has NO kubepods-guaranteed.slice wrapper: its pod slice
+# kubepods-pod<uid>.slice sits DIRECTLY under kubepods.slice. The snapshot
+# must emit such a slice as a top-level slice entry whose pods[] holds ONE
+# self-representing pod entry mirroring the slice itself (name = slice name,
+# cpu_weight = slice cpu.weight, cpu_max = slice cpu.max) — never a
+# weight-losing empty entry. The change is additive: fixtures without a
+# direct pod slice must stay byte-compatible.
+#
+# The fake-ssh tree is created read-only in setup(); CH-G tests extend it
+# with the direct pod slices before running the snapshot.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# add_guaranteed_slice_fixture — Extend the golden tree with TRUE Guaranteed
+# pod slices (systemd cgroup driver layout): kubepods-podABC.slice (weight 59,
+# cpu.max 50000 100000) and kubepods-podDEF.slice (weight 10, cpu.max
+# "max 100000") directly under kubepods.slice. Self-contained (does not rely
+# on the setup() helper) so it works from any test body.
+# ---------------------------------------------------------------------------
+add_guaranteed_slice_fixture() {
+    chmod -R u+w "$FAKE_CGROUP_ROOT"
+    mkdir -p "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-podABC.slice"
+    printf '59\n' > "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-podABC.slice/cpu.weight"
+    printf '50000 100000\n' > "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-podABC.slice/cpu.max"
+    mkdir -p "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-podDEF.slice"
+    printf '10\n' > "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-podDEF.slice/cpu.weight"
+    printf 'max 100000\n' > "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-podDEF.slice/cpu.max"
+    chmod -R a-w "$FAKE_CGROUP_ROOT"
+}
+
+@test "CH-G-01: direct guaranteed pod slice is emitted with ONE self-representing pod entry (VC-CH-G-01)" {
+    export PATH="$FAKE_BIN:$PATH"
+    add_guaranteed_slice_fixture
+    snapshot_captured --node "$NODE"
+    assert_captured_ok
+
+    # Top-level slice entry for the direct pod slice (no guaranteed wrapper)
+    [ "$(jq -r '.slices | length' "$STDOUT_FILE")" = "4" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podABC.slice") | .cpu_weight' "$STDOUT_FILE")" = "59" ]
+
+    # Exactly one self-representing pod entry mirroring the slice itself:
+    # name == slice name, cpu_weight == slice cpu.weight, cpu_max == slice cpu.max.
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podABC.slice") | .pods | length' "$STDOUT_FILE")" = "1" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podABC.slice") | .pods[0].name' "$STDOUT_FILE")" = "kubepods-podABC.slice" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podABC.slice") | .pods[0].cpu_weight' "$STDOUT_FILE")" = "59" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podABC.slice") | .pods[0].cpu_max' "$STDOUT_FILE")" = "50000 100000" ]
+}
+
+@test "CH-G-02: unlimited guaranteed slice mirrors cpu.max 'max 100000' (VC-CH-G-01 edge)" {
+    export PATH="$FAKE_BIN:$PATH"
+    add_guaranteed_slice_fixture
+    snapshot_captured --node "$NODE"
+    assert_captured_ok
+
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podDEF.slice") | .pods | length' "$STDOUT_FILE")" = "1" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podDEF.slice") | .pods[0].name' "$STDOUT_FILE")" = "kubepods-podDEF.slice" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podDEF.slice") | .pods[0].cpu_weight' "$STDOUT_FILE")" = "10" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-podDEF.slice") | .pods[0].cpu_max' "$STDOUT_FILE")" = "max 100000" ]
+}
+
+@test "CH-G-03: burstable/besteffort slices stay byte-compatible when a guaranteed slice is present (VC-CH-G-02)" {
+    export PATH="$FAKE_BIN:$PATH"
+    add_guaranteed_slice_fixture
+    snapshot_captured --node "$NODE"
+    assert_captured_ok
+
+    [ "$(jq -r '.kubepods_slice_weight' "$STDOUT_FILE")" = "100" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-burstable.slice") | .cpu_weight' "$STDOUT_FILE")" = "46" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-burstable.slice") | .pods | length' "$STDOUT_FILE")" = "2" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-burstable.slice") | .pods[] | select(.name == "kubepods-burstable-podabc123.slice") | .cpu_weight' "$STDOUT_FILE")" = "38" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-burstable.slice") | .pods[] | select(.name == "kubepods-burstable-podabc123.slice") | .cpu_max' "$STDOUT_FILE")" = "50000 100000" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .cpu_weight' "$STDOUT_FILE")" = "2" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .pods | length' "$STDOUT_FILE")" = "1" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .pods[0].cpu_weight' "$STDOUT_FILE")" = "2" ]
+}
+
+@test "CH-G-04: tree without a guaranteed slice still emits exactly the two QoS slices (VC-CH-G-02 byte-compat)" {
+    # Regression pin for the additive FIX-3 change: with NO kubepods-pod*.slice
+    # directly under kubepods.slice, the snapshot output keeps the pre-fix
+    # shape (2 slices, burstable 2 pods, besteffort 1 pod).
+    export PATH="$FAKE_BIN:$PATH"
+    snapshot_captured --node "$NODE"
+    assert_captured_ok
+
+    [ "$(jq -r '.slices | length' "$STDOUT_FILE")" = "2" ]
+    [ "$(jq -r '[.slices[].name] | sort | join(",")' "$STDOUT_FILE")" = "kubepods-besteffort.slice,kubepods-burstable.slice" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-burstable.slice") | .pods | length' "$STDOUT_FILE")" = "2" ]
+    [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .pods | length' "$STDOUT_FILE")" = "1" ]
+}
+
+@test "CH-G-05: guaranteed-slice snapshot stays read-only and leaves the node untouched (VC-CH-G-03)" {
+    export PATH="$FAKE_BIN:$PATH"
+    add_guaranteed_slice_fixture
+
+    local before after
+    before="$(find "$FAKE_CGROUP_ROOT" -type f -exec sha256sum {} + | sort | sha256sum)"
+
+    snapshot_captured --node "$NODE"
+    assert_captured_ok
+
+    after="$(find "$FAKE_CGROUP_ROOT" -type f -exec sha256sum {} + | sort | sha256sum)"
+    [ "$before" = "$after" ]
+    ! grep -q '^REFUSED' "$FAKE_SSH_LOG"
+    ! grep -qE '^CMD .*>[^/12&]' "$FAKE_SSH_LOG"
+    ! grep -qE '^CMD .*(^|[^A-Za-z])(tee|touch|mkdir|rm|mv|cp|dd|truncate|chmod|chown|install|mknod)([^A-Za-z]|$)' "$FAKE_SSH_LOG"
 }

@@ -1,9 +1,8 @@
-# stress-ng CPU stress workload
-# Template markers {{CPU_REQUEST}} and {{CPU_LIMIT}} are replaced at deployment.
+# stress-ng TRUE Guaranteed workload — memory hardcoded, CPU matrix-driven
 apiVersion: v1
 kind: Pod
 metadata:
-  name: stress-ng
+  name: stress-ng-guaranteed
   labels:
     app: stress-ng
 spec:
@@ -32,5 +31,7 @@ spec:
       resources:
         requests:
           cpu: "{{CPU_REQUEST}}"
+          memory: "128Mi"
         limits:
           cpu: "{{CPU_LIMIT}}"
+          memory: "128Mi"
