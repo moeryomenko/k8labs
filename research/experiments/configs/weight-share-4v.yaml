@@ -1,0 +1,44 @@
+experiment:
+  name: weight-share-4v
+  description: "Weight-share matrix on the 4-vCPU worker — 3 co-located stress-ng pods with varying request-only CPU shares (limits empty on purpose; BestEffort pod-c demonstrates starvation). Family A scaled for 4 cores: every cell's request sum stays <= 3600m. Must be run with --eevdf."
+node: w2
+replicates: 3
+pre_warm: 10
+duration: 120
+cooldown: 15
+# Family A (weight-share) scaled for the 4-vCPU w2 worker: three stress-ng
+# pods sharing one node. The matrix varies pod-a/pod-b requests only — limits
+# are intentionally empty so the EEVDF weight (from requests) alone decides
+# the CPU split. pod-c gets no request/limit and becomes BestEffort,
+# demonstrating BestEffort starvation under full load. Per-cell request sum
+# (a + b) stays <= 3600m (4 cores minus ~200m system, rounded down for
+# scheduling headroom); cell 2 was adjusted from the suggested 750m/3000m
+# (3750m — over budget) to 600m/3000m (= 3600m).
+#
+# NOTE: run with --eevdf — this family measures EEVDF weight-share metrics
+# (per-pod vruntime/deadline/slice), so the Makefile target passes --eevdf.
+workloads:
+  pod-a:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+  pod-b:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+  pod-c:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - a_request: "1500m"; a_limit: ""; b_request: "1500m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "600m"; a_limit: ""; b_request: "3000m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "500m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "500m"; a_limit: ""; b_request: "3000m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "1000m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "750m"; a_limit: ""; b_request: "1500m"; b_limit: ""; c_request: ""; c_limit: ""

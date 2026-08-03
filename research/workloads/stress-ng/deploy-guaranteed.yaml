@@ -6,7 +6,6 @@ metadata:
   labels:
     app: stress-ng
 spec:
-  nodeName: w1
   restartPolicy: Never
   containers:
     - name: stress-ng

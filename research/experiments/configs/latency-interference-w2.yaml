@@ -1,0 +1,52 @@
+experiment:
+  name: latency-interference-w2
+  description: "Latency interference — api-server LS pod co-located with a stress-ng batch pod, LS request/limit swept across QoS classes with latency_load generation. w2-pinned rerun of latency-interference.yaml for the 4-vCPU node-size validation."
+node: w2
+# TASK-V06 w2 variant: byte-identical matrix/workloads to
+# latency-interference.yaml (which stays the w1 default for backward compat),
+# plus a top-level node: w2 key. latency_load is auto-wired by the runner
+# (top-level block targets the api-server pod on w2).
+#
+# RUN MODE: lighter by default (no --eevdf); the latency analysis needs
+# latency.csv which the runner writes when the top-level latency_load block
+# exists.
+replicates: 3
+pre_warm: 15
+duration: 120
+cooldown: 20
+# Family D (latency-interference): an api-server "latency-sensitive" pod
+# (image 192.168.124.1:5000/k8labs/api-server:v1) co-located with a stress-ng
+# batch pod. The matrix sweeps the LS pod's request/limit across QoS classes
+# while the batch pod stays fixed at 1000m/2000m:
+#   1. ls 500m/500m    (Guaranteed)  batch 1000m/2000m
+#   2. ls 250m/1000m   (Burstable)   batch 1000m/2000m
+#   3. ls 500m/1000m   (Burstable)   batch 1000m/2000m
+#   4. ls none/none    (BestEffort)  batch 1000m/2000m
+#
+# Pod names are deliberately NOT latency-sensitive/batch (TASK-010 contract
+# T-LEGACY-TRAP: those exact names trigger the runner's legacy 2-pod path and
+# suppress the generic N-pod deployment lines that CV-04c asserts).
+#
+# The TOP-LEVEL latency_load block (NOT per-pod; per-pod latency_load is not
+# parsed) drives the latency-recording generator (TASK-007 wiring). Keys:
+#   rate / duration / endpoints   (rate is the presence probe)
+# The runner writes latency.csv into each replicate dir when the block exists.
+workloads:
+  ls-api:
+    type: api-server
+  batch-stress:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+latency_load:
+  rate: 50
+  duration: 120
+  endpoints: "users:30,orders:30,search:20,reports:20"
+measurement:
+  cgroup_interval: 5
+matrix:
+  - ls-api_request: "500m"; ls-api_limit: "500m"; batch-stress_request: "1000m"; batch-stress_limit: "2000m"
+  - ls-api_request: "250m"; ls-api_limit: "1000m"; batch-stress_request: "1000m"; batch-stress_limit: "2000m"
+  - ls-api_request: "500m"; ls-api_limit: "1000m"; batch-stress_request: "1000m"; batch-stress_limit: "2000m"
+  - ls-api_request: ""; ls-api_limit: ""; batch-stress_request: "1000m"; batch-stress_limit: "2000m"

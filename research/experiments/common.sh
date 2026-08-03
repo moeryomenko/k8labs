@@ -116,6 +116,7 @@ substitute_cpu_params() {
     local cpu_request="$2"
     local cpu_limit="$3"
     local output_path="${4:-}"
+    local node_name="${NODE_NAME:-w1}"
 
     [[ -f "$template" ]] || die "Template file not found: $template"
 
@@ -138,10 +139,25 @@ substitute_cpu_params() {
     sed_expr+=(-e "s/{{BATCH_CPU_REQUEST}}/${BATCH_CPU_REQUEST:-${cpu_request}}/g")
     sed_expr+=(-e "s/{{BATCH_CPU_LIMIT}}/${BATCH_CPU_LIMIT:-${cpu_limit}}/g")
 
+    # Replace a {{NODE_NAME}} marker when the template declares one; manifests
+    # without the marker get spec.nodeName inserted below.
+    sed_expr+=(-e "s/{{NODE_NAME}}/${node_name}/g")
+
+    local rendered
+    rendered="$(sed "${sed_expr[@]}" "$template")"
+
+    # Inject spec.nodeName unless the rendered manifest already has a nodeName
+    # key. Every workload template is a Pod with a single column-0 spec: line,
+    # so appending after it is unambiguous. The value comes from the runner
+    # (config `node:` key, default w1 — backward compat).
+    if ! grep -qE '^[[:space:]]*nodeName:' <<<"$rendered"; then
+        rendered="$(printf '%s\n' "$rendered" | sed '/^spec:$/a\  nodeName: '"${node_name}")"
+    fi
+
     if [[ -n "$output_path" ]]; then
-        sed "${sed_expr[@]}" "$template" > "$output_path"
+        printf '%s\n' "$rendered" > "$output_path"
     else
-        sed "${sed_expr[@]}" "$template"
+        printf '%s\n' "$rendered"
     fi
 }
 

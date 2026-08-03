@@ -435,6 +435,15 @@ main() {
         || cgroup_interval="$(parse_yaml_value "$config_file" "measurement:cgroup_interval" 2>/dev/null)" \
         || die "Config missing 'measurement.cgroup_interval'"
 
+    # REQ-1 (TASK-V03): optional top-level node: key pins every pod manifest
+    # to a worker node via spec.nodeName. Absent key keeps the historical w1
+    # default (backward compat). The value is injected by
+    # substitute_cpu_params / substitute_pod_manifest through NODE_NAME.
+    local node_name
+    node_name="$(parse_yaml_value "$config_file" "node" 2>/dev/null || echo "w1")"
+    [[ -n "$node_name" ]] || node_name="w1"
+    NODE_NAME="$node_name"
+
     # Detect if this is a co-located experiment (key: "workloads:" at top level)
     local is_colocated=false
     local legacy_colocated=false
@@ -598,6 +607,20 @@ main() {
             log "  Degradation: generator failure is non-fatal — the cell continues with a warning and latency.csv may be absent"
         fi
 
+        # REQ-3 (TASK-V03): single-pod deployment plan. Dry-run must make node
+        # pinning visible per pod (spec.nodeName from the config `node:` key,
+        # default w1) — today the single-pod path prints no deployment line.
+        if [[ "$is_colocated" == false ]]; then
+            local dry_cell_dir="${OUTPUT_BASE_DIR}/${experiment_name}/<cell>/replicate-<n>"
+            local single_template single_pod_name
+            single_template="$(get_workload_template "$single_workload_type")"
+            single_pod_name="$(get_manifest_pod_name "$single_template" 2>/dev/null || true)"
+            log ""
+            log "Workload deployment:"
+            log "  Pod: ${single_pod_name} (type: ${single_workload_type}) -> nodeName: ${node_name}"
+            log "  Manifest: ${dry_cell_dir}/deploy.yaml"
+        fi
+
         if [[ "$is_colocated" == true && "$legacy_colocated" == false ]]; then
             # Generic N-pod plan: enumerate every deployment and
             # data-collection stream. Resolve the first matrix cell so the
@@ -619,7 +642,7 @@ main() {
                 fi
                 local wtemplate
                 wtemplate="$(get_workload_template "$wtype")"
-                log "  Deployment $((i + 1))/${#workload_pods[@]}: ${wpod} (type: ${wtype}, request=${CELL_PARAMS[$wreq_key]:-}, limit=${CELL_PARAMS[$wlim_key]:-})"
+                log "  Deployment $((i + 1))/${#workload_pods[@]}: ${wpod} (type: ${wtype}, request=${CELL_PARAMS[$wreq_key]:-}, limit=${CELL_PARAMS[$wlim_key]:-}) -> nodeName: ${node_name}"
                 run_cmd substitute_pod_manifest "$wtemplate" "$wpod" \
                     "${CELL_PARAMS[$wreq_key]:-}" "${CELL_PARAMS[$wlim_key]:-}" \
                     "${dry_cell_dir}/${wpod}.yaml"

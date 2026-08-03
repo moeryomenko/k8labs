@@ -8,7 +8,6 @@ metadata:
   labels:
     app: db-simulator
 spec:
-  nodeName: w1
   restartPolicy: Never
   containers:
     - name: db-simulator

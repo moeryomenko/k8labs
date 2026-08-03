@@ -1,0 +1,42 @@
+experiment:
+  name: request-limit-matrix-w2
+  description: "Request x limit matrix — single stress-ng pod, 15 request/limit combinations. w2-pinned rerun of request-limit-matrix.yaml for the 4-vCPU node-size validation. Must be run with --eevdf."
+node: w2
+# TASK-V06 w2 variant: byte-identical matrix/workloads to
+# request-limit-matrix.yaml (which stays the w1 default for backward compat),
+# plus a top-level node: w2 key. w2 has 4 vCPUs so the 1000m/2000m request
+# cells have ample allocatable CPU (limit=2000m is still exactly 2 CPUs).
+#
+# NOTE: run with --eevdf — this family measures EEVDF metrics across the
+# request/limit ratio sweep, so the Makefile target passes --eevdf.
+replicates: 3
+pre_warm: 10
+duration: 90
+cooldown: 15
+# Family B (request-limit-matrix): sweep the request/limit ratio for a single
+# stress-ng pod. The 2000m limit is exactly 2 CPUs — valid as a LIMIT. Requests
+# stay <= 1000m because the node has only ~1800m allocatable after system pods
+# (a 2000m request would not schedule). Do NOT add request=2000m.
+workload:
+  type: stress-ng
+  params:
+    cores: 2
+    load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: ""
+  - request: ""; limit: "250m"
+  - request: ""; limit: "500m"
+  - request: ""; limit: "1000m"
+  - request: ""; limit: "1500m"
+  - request: "100m"; limit: "100m"
+  - request: "100m"; limit: "250m"
+  - request: "100m"; limit: "500m"
+  - request: "100m"; limit: "1000m"
+  - request: "100m"; limit: "2000m"
+  - request: "500m"; limit: "500m"
+  - request: "500m"; limit: "1000m"
+  - request: "500m"; limit: "2000m"
+  - request: "1000m"; limit: "1000m"
+  - request: "1000m"; limit: "2000m"

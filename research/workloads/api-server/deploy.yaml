@@ -7,7 +7,6 @@ metadata:
   labels:
     app: api-server
 spec:
-  nodeName: w1
   restartPolicy: Always
   containers:
     - name: api-server

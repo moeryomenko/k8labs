@@ -204,6 +204,89 @@ Six families (weight-share, request×limit, QoS hierarchy, latency interference,
 5. **BestEffort co-location costs ~66% p99 latency** (132.2ms vs 77.8-80.7ms for requested pods) even when the LS pod is idle, purely from weight-1 scheduling.
 6. **EEVDF tunables moved p99 by <= 5ms and BOTH changes were significant under the pinned slice-optional rule** (82.7-87.3ms across default/low/high base_slice; base-slice-high diff −4.7ms > noise 2.9ms, base-slice-low diff −2.3ms > noise 1.1ms). Slice-duration columns are n/a — the dataset lacks `eevdf-slices.csv`, so the p99-only significance path was used.
 
+### Validated Interaction Findings — Multi-CPU validation (TASK-V06..V08)
+
+The 4-vCPU validation re-ran the node-size-dependent families on the single
+4-CPU worker `w2` (same kernel/day as the TASK-022 2-vCPU runs). All numbers
+below are traced to the analyzer outputs staged under
+`research/analysis/output/v08/` (clean per-family dirs, per-family CSVs,
+`report-input/`, `cpu-count-compare/`; `interaction-report.md` and
+`multi-cpu-validation.md` in `research/analysis/output/`).
+
+**Weight-share on 4-CPU does NOT show reduced ratio error — the granularity
+hypothesis is not supported by the same-cell comparison.** Mean |ratio_error|
+is **0.022 on 2-CPU vs 0.115 on 4-CPU** for the same request cells
+(`cpu-count-compare.csv`; verdict over the 5 cells present in both runs). The
+4-CPU error growth is driven by the low-weight pods: the same request cells
+occupy only ~2 of 4 CPUs, so demand does not saturate the 4-CPU node and the
+low-weight pod runs on idle capacity (e.g. the 100m pod achieved 0.359 share
+vs 0.144 model at 100/1000) while the high-weight pod under-achieves (0.514 vs
+0.847). Because the 2-CPU and 4-CPU runs used different workers (w1 vs w2) and
+a single 4-CPU node was measured, the 2-vs-4 difference cannot be cleanly
+attributed to vCPU count alone (see the node-size caveat below).
+
+| cell ratio | error_2cpu | error_4cpu | delta |
+|---|---|---|---|
+| 100/1000 | 0.0273 | 0.2223 | +0.195 |
+| 100/500 | 0.0319 | 0.1708 | +0.139 |
+| 250/1000 | 0.0307 | 0.1505 | +0.120 |
+| 500/500 | 0.0115 | 0.0170 | +0.005 |
+| 800/800 | 0.0094 | 0.0124 | +0.003 |
+| 200/500 | (no 2-CPU data) | 0.0999 | n/a |
+
+**Scaled 4-vCPU block** (requests scaled to the 4-CPU budget,
+`cpu-count-4v-scaled.csv`): mean |ratio_error| **0.093** — lower than the
+same-cell 4-CPU run (0.115) but still ~4x the 2-CPU 0.022; scaling demand
+toward node capacity reduces but does not eliminate the gap.
+
+| cell ratio | error_scaled |
+|---|---|
+| 1000/1000 | 0.0111 |
+| 1500/1500 | 0.0094 |
+| 500/1000 | 0.0828 |
+| 750/1500 | 0.0860 |
+| 600/3000 | 0.1775 |
+| 500/3000 | 0.1911 |
+
+**Node-size-dependent families on the 4-CPU worker (w2)** — these differ
+materially from the 2-CPU results and should be read as the 4-CPU
+measurements:
+
+- **QoS hierarchy (`qos-summary.csv`)** — cell 1 (guaranteed 500m/500m,
+  burstable 500m/2000m, besteffort): achieved 14.5% / 49.8% / **35.7%**
+  (2-CPU: 29.5% / 66.5% / 4.1%); cell 2 (guaranteed 1000m/1000m, burstable
+  250m/1000m, besteffort): 31.6% / 31.3% / **37.1%** (2-CPU: 56.2% / 41.0% /
+  2.8%). On 4-CPU with sub-capacity demand the weight-1 BestEffort pod
+  receives a large share of idle CPU; the quota-capped guaranteed pod stays
+  below its weight share.
+- **Latency interference (`latency-summary.csv`)** — p50/p95/p99 (ms) are
+  lower and flat across LS configs: Guaranteed 500/500 27.0/45.7/56.0,
+  Burstable 250/1000 26.7/45.3/54.7, Burstable 500/1000 26.3/44.7/54.3,
+  BestEffort 27.0/46.0/55.3. **The 2-CPU BestEffort p99 penalty (+66%) does
+  NOT reproduce on 4-CPU** — idle capacity absorbs the weight-1 neighbor.
+  Correlation p99_vs_throttled_usec is +0.95, but the LS pods never throttle
+  and throttled_usec is dominated by the batch pod, so treat the correlation
+  as spurious.
+- **Request×limit heatmap (`heatmap-throttling_ratio.csv`)** — bimodal
+  throttling reproduces: ratio >= 0.99 for every limit <= 1000m (max 0.9993
+  at 100m/500m), but limit=2000m is **not** 0.0 as on 2-CPU (0.003-0.015): on
+  the 4-CPU node 2000m is half of node capacity, not capacity itself, so a
+  saturating workload at that quota still sees small residual throttling.
+  This refines the "throttling eliminated at limit=2000m" finding to
+  "eliminated when the limit reaches the workload's real demand".
+
+**Node-size caveat (updated by TASK-V08)** — the TASK-022 six-family matrix
+was run on 2-vCPU workers. The 4-vCPU validation re-ran weight-share (same
+cells + scaled), request×limit, QoS hierarchy, and latency interference on the
+single 4-CPU worker `w2`; weight-share now has explicit 4-CPU validation
+(above). The re-run families carry a single-node, same-kernel/day caveat.
+`cpu-burst` and `tunables-contention` were NOT re-run on 4-CPU: they are
+node-size-independent by design (per-cgroup quota burst and global EEVDF
+tunables), so their 2-vCPU measurements remain authoritative. The 2-CPU
+weight-share data also lacks the 200/500 cell (its 6th config cell was a
+duplicate 500m/500m label pre-D05), so the 2-vs-4 comparison covers the 5
+cells present in both runs; the 4-CPU side has 6 unique cells.
+
 ---
 
 ## Decision Flowchart
