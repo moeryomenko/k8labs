@@ -48,6 +48,7 @@ import pytest
 
 from tests.conftest import (
     FAMILY_SUMMARY_COLUMNS,
+    QOS_CELL,
     family_c_hierarchy,
     write_summary_csv,
 )
@@ -691,3 +692,80 @@ class TestGuaranteedDirectSlice:
         assert row.iloc[0]["achieved_share"] == pytest.approx(
             GUARANTEED_SHARE, abs=1e-9
         )
+
+
+# =========================================================================
+# FIX-4 (REQ-2) — real runner layout: replicate-nested hierarchy JSON
+#
+# The live snapshots live at <data-dir>/<timestamp>/<cell>/replicate-<N>/
+# cgroup-hierarchy-<node>.json. The analyzer's direct-child glob
+# `**/<cell>/cgroup-hierarchy-*.json` misses them (TASK-022 verified); the fix
+# must discover recursively while keeping the flat direct-child layout working
+# (REQ-5 regression, pinned by the pre-FIX-4 tests).
+# =========================================================================
+
+
+class TestRealLayout:
+    """FIX-4 REQ-2: discover and analyze the REAL qos-hierarchy layout."""
+
+    def test_discover_hierarchy_finds_nested_replicate_json(
+        self, real_qos_data_dir: pathlib.Path
+    ):
+        """The replicate-N nested snapshot is discovered for the summary cell."""
+        module = load_qos_module()
+        summary = module.load_summary(real_qos_data_dir)
+        found = module.discover_hierarchy_files(real_qos_data_dir, summary)
+        assert set(found) == {QOS_CELL}
+        assert found[QOS_CELL].name == "cgroup-hierarchy-w1.json"
+        assert "replicate-1" in str(found[QOS_CELL])
+
+    def test_cli_exit_zero_and_csv_written(
+        self, real_qos_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-6: analyzer exits 0 on the real fixture and writes qos-summary.csv."""
+        rc, err, out_dir = run_ok(real_qos_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        assert (out_dir / OUTPUT_CSV).exists()
+
+    def test_cli_real_layout_exact_table(
+        self, real_qos_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-2: three QoS rows with exact shares/weights/throttling.
+
+        cell = the real cell dir name; qos_slice kubepods-guaranteed /
+        burstable / besteffort .slice; shares 12/33, 20/33, 1/33; weights
+        59/100/1; throttled 0/50000/0; rows in QoS priority order.
+        """
+        rc, err, out_dir = run_ok(real_qos_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        result = pd.read_csv(out_dir / OUTPUT_CSV)
+        assert list(result.columns) == OUTPUT_COLUMNS
+        assert set(result["cell"]) == {QOS_CELL}
+        assert len(result) == 3
+        rows = result.set_index("qos_slice")
+        assert list(rows.index) == [
+            "kubepods-guaranteed.slice",
+            "kubepods-burstable.slice",
+            "kubepods-besteffort.slice",
+        ]
+        assert rows.loc["kubepods-guaranteed.slice", "achieved_share"] == pytest.approx(
+            GUARANTEED_SHARE, abs=1e-9
+        )
+        assert rows.loc["kubepods-burstable.slice", "achieved_share"] == pytest.approx(
+            BURSTABLE_SHARE, abs=1e-9
+        )
+        assert rows.loc["kubepods-besteffort.slice", "achieved_share"] == pytest.approx(
+            BESTEFFORT_SHARE, abs=1e-9
+        )
+        assert rows.loc["kubepods-guaranteed.slice", "cpu_weight"] == 59
+        assert rows.loc["kubepods-burstable.slice", "cpu_weight"] == 100
+        assert rows.loc["kubepods-burstable.slice", "throttled_usec"] == 50000
+        assert rows.loc["kubepods-besteffort.slice", "cpu_weight"] == 1
+
+    def test_cli_real_layout_no_missing_hierarchy_warning(
+        self, real_qos_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """The nested snapshot is found: no 'no cgroup-hierarchy' warning."""
+        rc, err, _ = run_ok(real_qos_data_dir, tmp_path)
+        assert rc == 0
+        assert "no cgroup-hierarchy" not in err

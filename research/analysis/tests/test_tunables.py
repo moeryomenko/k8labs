@@ -505,3 +505,121 @@ class TestEndToEnd:
             "CSV must be written even without matplotlib"
         )
         assert "matplotlib" in err.lower() or "warn" in err.lower()
+
+
+# =========================================================================
+# FIX-4 (REQ-4) — real runner layout + slice-optional rule
+#
+# Family F runs WITHOUT --eevdf: no eevdf-slices.csv exists anywhere in the
+# dataset (TASK-022 verified). The analyzer currently counts a replicate only
+# when BOTH latency.csv and eevdf-slices.csv parse, so the p99-only verdict is
+# impossible. FIX-4 relaxes the rule: a replicate always counts for p99 when
+# latency.csv parses; slice-duration columns are computed only from replicates
+# that also have eevdf-slices.csv and are NaN when none do. When a tunable has
+# SOME slice files the legacy "n = complete replicates" rule is preserved
+# (backward compatible with the pre-FIX-4 tests). Cell dirs nest under
+# <data-dir>/<timestamp>/<cell>/ and summary cell_labels carry the ls-api/
+# batch-stress pod prefix, so discovery must resolve the trailing
+# `-tunables=<name>` token.
+# =========================================================================
+
+
+class TestRealLayout:
+    """FIX-4 REQ-4: discover tunables in the REAL layout, no slices anywhere."""
+
+    def test_discover_replicates_real_layout(
+        self, real_tunables_data_dir: pathlib.Path
+    ):
+        """Discovery keys are the extracted tunable names; 3 replicate dirs each."""
+        module = load_tunables_module()
+        summary = module.load_summary(real_tunables_data_dir)
+        found = module.discover_replicates(real_tunables_data_dir, summary)
+        assert set(found) == {"default", "base-slice-low", "base-slice-high"}
+        for tun in ("default", "base-slice-low", "base-slice-high"):
+            assert [p.name for p in found[tun]] == [
+                "replicate-1",
+                "replicate-2",
+                "replicate-3",
+            ]
+
+    def test_cli_exit_zero_and_csvs_written(
+        self, real_tunables_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-6: exit 0 on the real fixture; both CSVs written."""
+        rc, err, out_dir = run_ok(real_tunables_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        assert (out_dir / COMPARISON_CSV).exists()
+        assert (out_dir / SIGNIFICANCE_CSV).exists()
+
+    def test_cli_real_layout_no_slices_still_emits_verdict(
+        self, real_tunables_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-4: comparison rows with NaN slice columns + significance verdict.
+
+        No eevdf-slices.csv anywhere: mean_p99 from latency.csv alone (default
+        12.0, low 6.0, high 18.0), n=3, slice columns NaN. Significance: low
+        diff -6 significant, high diff +6 significant. No crash, exit 0.
+        """
+        rc, err, out_dir = run_ok(real_tunables_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        comparison = pd.read_csv(out_dir / COMPARISON_CSV).set_index("tunable")
+        assert list(comparison.columns) == COMPARISON_COLUMNS[1:]
+        assert set(comparison.index) == {"default", "base-slice-low", "base-slice-high"}
+        assert comparison.loc["default", "mean_p99"] == pytest.approx(12.0)
+        assert comparison.loc["base-slice-low", "mean_p99"] == pytest.approx(6.0)
+        assert comparison.loc["base-slice-high", "mean_p99"] == pytest.approx(18.0)
+        assert pd.isna(comparison.loc["default", "mean_slice_us"])
+        assert pd.isna(comparison.loc["default", "std_slice_us"])
+        assert comparison.loc["default", "n"] == 3
+        significance = pd.read_csv(out_dir / SIGNIFICANCE_CSV).set_index("tunable")
+        assert list(significance.columns) == SIGNIFICANCE_COLUMNS[1:]
+        assert set(significance.index) == {"base-slice-low", "base-slice-high"}
+        assert significance.loc["base-slice-low", "diff_p99"] == pytest.approx(-6.0)
+        assert bool(significance.loc["base-slice-low", "significant"]) is True
+        assert significance.loc["base-slice-high", "diff_p99"] == pytest.approx(6.0)
+        assert bool(significance.loc["base-slice-high", "significant"]) is True
+
+
+class TestSliceOptional:
+    """FIX-4 slice-optional rule in the FLAT layout (no pod prefix).
+
+    Proves the relaxation independent of the cell-dir discovery change, in the
+    exact layout the pre-FIX-4 tests use.
+    """
+
+    def test_comparison_without_slices_emits_rows(
+        self, flat_noslices_tunables_data_dir: pathlib.Path
+    ):
+        """latency.csv alone yields rows: n=3, slice columns NaN."""
+        module = load_tunables_module()
+        summary = module.load_summary(flat_noslices_tunables_data_dir)
+        dirs = module.discover_replicates(flat_noslices_tunables_data_dir, summary)
+        table = module.build_comparison(summary, dirs).set_index("tunable")
+        assert set(table.index) == {"default", "base-slice-low", "base-slice-high"}
+        assert table.loc["default", "mean_p99"] == pytest.approx(12.0)
+        assert table.loc["default", "n"] == 3
+        assert pd.isna(table.loc["default", "mean_slice_us"])
+        assert pd.isna(table.loc["default", "std_slice_us"])
+
+    def test_significance_without_slices_emits_verdict(
+        self, flat_noslices_tunables_data_dir: pathlib.Path
+    ):
+        """The p99-only diff > max(std_p99) verdict is still produced."""
+        module = load_tunables_module()
+        summary = module.load_summary(flat_noslices_tunables_data_dir)
+        dirs = module.discover_replicates(flat_noslices_tunables_data_dir, summary)
+        comparison = module.build_comparison(summary, dirs)
+        significance = module.build_significance(comparison).set_index("tunable")
+        assert set(significance.index) == {"base-slice-low", "base-slice-high"}
+        assert bool(significance.loc["base-slice-low", "significant"]) is True
+
+    def test_cli_without_slices_exit_zero(
+        self, flat_noslices_tunables_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-6: flat no-slices fixture exits 0 and populates both CSVs."""
+        rc, err, out_dir = run_ok(flat_noslices_tunables_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        comparison = pd.read_csv(out_dir / COMPARISON_CSV)
+        assert len(comparison) == 3
+        significance = pd.read_csv(out_dir / SIGNIFICANCE_CSV)
+        assert len(significance) == 2

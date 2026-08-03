@@ -38,20 +38,50 @@ OUTPUT_CSV = "weight-share-summary.csv"
 OUTPUT_COLUMNS = ["cell", "pod", "achieved_share", "weight_share", "ratio_error"]
 
 
-def _split_cell_label(label: str) -> tuple[str, str]:
+def _discover_cell_dirs(data_dir: pathlib.Path) -> set[str]:
+    """Return the cell directory names present under *data_dir*.
+
+    The runner nests per-replicate files under
+    ``<data-dir>/<timestamp>/<cell>/replicate-<N>/`` (real layout) or
+    ``<data-dir>/<cell>/replicate-<N>/`` (flat fixtures). Every
+    ``replicate-*`` directory's parent is a cell directory, so scanning for
+    them at any depth yields the cell dir names — never a label split.
+
+    Args:
+        data_dir: Experiment data root (summary.csv lives here).
+
+    Returns:
+        The set of cell directory names discovered from the filesystem.
+    """
+    return {p.parent.name for p in data_dir.rglob("replicate-*") if p.is_dir()}
+
+
+def _split_cell_label(
+    label: str, known_cells: set[str] | None = None
+) -> tuple[str, str]:
     """Split a runner cell_label into ``(pod, cell)``.
 
-    The pod name is the text before the first ``-`` and the cell is the
-    remainder (the runner writes ``printf '%s-%s' "$wpod" "$cell_label"``).
-    A label without a ``-`` denotes a single-pod cell: pod == cell == the
-    whole label.
+    The runner writes ``cell_label = "<pod>-<cell>"`` where ``<cell>`` is the
+    full matrix cell string that NAMES the directory and ``<pod>`` may itself
+    contain dashes (``pod-a``, ``batch-stress``). When *known_cells* is given,
+    the cell is the longest known cell directory name the label ends with and
+    the pod is the text before it — suffix matching is the only split robust
+    to dash-containing pod names. Without a match (or without *known_cells*)
+    the legacy first-dash split applies. A label without a ``-`` denotes a
+    single-pod cell: pod == cell == the whole label.
 
     Args:
         label: A cell_label column value from summary.csv.
+        known_cells: Cell directory names discovered from the filesystem.
 
     Returns:
         The ``(pod, cell)`` tuple.
     """
+    if known_cells:
+        for cell in sorted(known_cells, key=len, reverse=True):
+            prefix = "-" + cell
+            if label.endswith(prefix):
+                return label[: -len(prefix)], cell
     if "-" in label:
         pod, _, cell = label.partition("-")
         return pod, cell
@@ -78,7 +108,9 @@ def load_summary(data_dir: pathlib.Path) -> pd.DataFrame:
     return pd.read_csv(summary_path)
 
 
-def compute_weight_shares(summary_df: pd.DataFrame) -> pd.DataFrame:
+def compute_weight_shares(
+    summary_df: pd.DataFrame, known_cells: set[str] | None = None
+) -> pd.DataFrame:
     """Compute achieved and theoretical CPU shares per (cell, pod).
 
     One row per (cell, pod), with columns ``cell, pod, achieved_share,
@@ -86,10 +118,13 @@ def compute_weight_shares(summary_df: pd.DataFrame) -> pd.DataFrame:
     ``achieved_share`` is the aggregate-then-divide usage share,
     ``weight_share`` the equivalent weight share, and ``ratio_error`` the
     signed difference (achieved - weight). Zero total usage or weight degrades
-    to a 0.0 share.
+    to a 0.0 share. Cells resolve via *known_cells* when given (cell =
+    filesystem directory name), otherwise by the legacy first-dash label
+    split.
 
     Args:
         summary_df: Rows read from summary.csv.
+        known_cells: Cell directory names discovered from the filesystem.
 
     Returns:
         The share summary DataFrame; an empty DataFrame with the pinned
@@ -99,8 +134,12 @@ def compute_weight_shares(summary_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=pd.Index(OUTPUT_COLUMNS))
 
     df = summary_df.copy()
-    df["pod"] = df["cell_label"].map(lambda label: _split_cell_label(label)[0])
-    df["cell"] = df["cell_label"].map(lambda label: _split_cell_label(label)[1])
+    df["pod"] = df["cell_label"].map(
+        lambda label: _split_cell_label(label, known_cells)[0]
+    )
+    df["cell"] = df["cell_label"].map(
+        lambda label: _split_cell_label(label, known_cells)[1]
+    )
 
     rows: list[dict[str, float | str]] = []
     combos = df[["cell", "pod"]].drop_duplicates().sort_values(["cell", "pod"])
@@ -132,9 +171,11 @@ def check_cgroup_completeness(
     For every (cell, replicate, pod) combo present in the summary, the runner
     writes ``cgroup-<pod>.csv`` under a ``replicate-<N>`` directory nested
     below *data_dir*. Combos are matched recursively so *data_dir* may point
-    at the experiment root or a run-timestamp subdirectory. A cell is
-    incomplete when any expected combo has no matching file anywhere under
-    *data_dir*.
+    at the experiment root or a run-timestamp subdirectory. Cells resolve
+    against the cell directory names discovered from the filesystem (suffix
+    match of the cell_label), never a first-dash split — pod names contain
+    dashes (``pod-a``). A cell is incomplete when any expected combo has no
+    matching file anywhere under *data_dir*.
 
     Args:
         data_dir: Experiment data root (summary.csv lives here).
@@ -143,11 +184,12 @@ def check_cgroup_completeness(
     Returns:
         The set of cell identifiers that fail the completeness gate.
     """
+    known_cells = _discover_cell_dirs(data_dir)
     expected: dict[str, set[tuple[int, str]]] = {}
     for cell_label, replicate in zip(
         summary_df["cell_label"], summary_df["replicate"], strict=False
     ):
-        pod, cell = _split_cell_label(str(cell_label))
+        pod, cell = _split_cell_label(str(cell_label), known_cells)
         expected.setdefault(cell, set()).add((int(replicate), pod))
 
     actual: set[tuple[int, str]] = set()
@@ -208,10 +250,13 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    cells = summary["cell_label"].map(lambda label: _split_cell_label(label)[1])
+    known_cells = _discover_cell_dirs(data_dir)
+    cells = summary["cell_label"].map(
+        lambda label: _split_cell_label(label, known_cells)[1]
+    )
     valid = summary[~cells.isin(incomplete)]
 
-    result = compute_weight_shares(valid)
+    result = compute_weight_shares(valid, known_cells=known_cells)
 
     output_dir = pathlib.Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

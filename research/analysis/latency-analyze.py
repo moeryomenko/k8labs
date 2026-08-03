@@ -66,6 +66,47 @@ CORRELATION_METRICS = (
 )
 
 
+def _discover_cell_dirs(data_dir: pathlib.Path) -> set[str]:
+    """Return the cell directory names present under *data_dir*.
+
+    The runner nests per-replicate files under
+    ``<data-dir>/<timestamp>/<cell>/replicate-<N>/`` (real layout) or
+    ``<data-dir>/<cell>/replicate-<N>/`` (flat fixtures). Every
+    ``replicate-*`` directory's parent is a cell directory, so scanning for
+    them at any depth yields the cell dir names — never a label split.
+
+    Args:
+        data_dir: Experiment data root (summary.csv lives here).
+
+    Returns:
+        The set of cell directory names discovered from the filesystem.
+    """
+    return {p.parent.name for p in data_dir.rglob("replicate-*") if p.is_dir()}
+
+
+def _resolve_latency_cell(label: str, known_cells: set[str]) -> str:
+    """Resolve a cell_label to its cell directory name.
+
+    The runner writes ``cell_label = "<pod>-<cell>"`` where ``<pod>`` may
+    contain dashes (``ls-api``, ``batch-stress``). The cell is the longest
+    known cell directory name the label ends with; when no known cell matches
+    (single-pod flat fixtures) the label IS the cell name. First-dash
+    splitting is forbidden: ``batch-stress-<cell>`` would split into pod
+    ``batch``.
+
+    Args:
+        label: A cell_label column value from summary.csv.
+        known_cells: Cell directory names discovered from the filesystem.
+
+    Returns:
+        The cell directory name the label belongs to.
+    """
+    for cell in sorted(known_cells, key=len, reverse=True):
+        if label.endswith("-" + cell):
+            return cell
+    return label
+
+
 def load_summary(data_dir: pathlib.Path) -> pd.DataFrame:
     """Read ``<data_dir>/summary.csv`` with the runner's 8-column schema.
 
@@ -91,20 +132,28 @@ def discover_latency_csvs(
 ) -> dict[str, list[pathlib.Path]]:
     """Map each summary cell to its latency.csv files, sorted by path.
 
-    For Family D the cell_label IS the cell name (single-workload cells).
-    Every ``**/latency.csv`` under ``<data-dir>/<cell>`` is collected and
-    sorted; a cell without any latency file maps to an empty list (REQ-4).
+    Discovery keys are the resolved cell DIR names (from the filesystem), so
+    both ``ls-api-<cell>`` and ``batch-stress-<cell>`` summary rows map to the
+    same cell. Every ``**/latency.csv`` under ``<data-dir>/**/<cell>/`` is
+    collected recursively (covering both ``replicate-<N>/`` nesting and flat
+    direct-child layouts) and sorted; a cell without any latency file maps to
+    an empty list (REQ-4).
 
     Args:
         data_dir: Experiment data root (summary.csv lives here).
         summary_df: Rows read from summary.csv.
 
     Returns:
-        Cell name -> sorted latency.csv paths (possibly empty).
+        Cell dir name -> sorted latency.csv paths (possibly empty).
     """
+    cells = _discover_cell_dirs(data_dir)
+    label_to_cell = {
+        str(label): _resolve_latency_cell(str(label), cells)
+        for label in summary_df["cell_label"].unique()
+    }
     found: dict[str, list[pathlib.Path]] = {}
-    for cell in summary_df["cell_label"].unique():
-        found[str(cell)] = sorted(data_dir.glob(f"{cell}/**/latency.csv"))
+    for cell in sorted(set(label_to_cell.values())):
+        found[cell] = sorted(data_dir.glob(f"**/{cell}/**/latency.csv"))
     return found
 
 
@@ -153,15 +202,18 @@ def build_cell_table(
 
     One row per cell with columns ``cell, p50, p95, p99, throttled_usec,
     usage_usec, throttling_ratio`` in that order, sorted by cell. Cells whose
-    latencies are ``None`` are skipped. Per cell: ``throttled_usec`` and
-    ``usage_usec`` are sums across replicates, ``throttling_ratio`` is
-    ``sum(nr_throttled) / sum(nr_periods)`` (aggregate-then-divide; zero
-    periods degrade to NaN).
+    latencies are ``None`` are skipped. Summary rows resolve to the cell DIR
+    name (suffix match against the *cell_latencies* keys, falling back to the
+    label itself), so pod-prefixed labels (``ls-api-<cell>``,
+    ``batch-stress-<cell>``) aggregate into one row per cell. Per cell:
+    ``throttled_usec`` and ``usage_usec`` are sums across replicates,
+    ``throttling_ratio`` is ``sum(nr_throttled) / sum(nr_periods)``
+    (aggregate-then-divide; zero periods degrade to NaN).
 
     Args:
         summary_df: Rows read from summary.csv.
-        cell_latencies: Cell name -> percentile triple (``None`` values skip
-            the cell).
+        cell_latencies: Cell dir name -> percentile triple (``None`` values
+            skip the cell).
 
     Returns:
         The cell table; an empty DataFrame with the pinned columns when
@@ -170,16 +222,24 @@ def build_cell_table(
     if summary_df.empty:
         return pd.DataFrame(columns=pd.Index(OUTPUT_COLUMNS))
 
+    known_cells = set(cell_latencies)
+    label_to_cell = {
+        str(label): _resolve_latency_cell(str(label), known_cells)
+        for label in summary_df["cell_label"]
+    }
+    df = summary_df.copy()
+    df["_cell"] = df["cell_label"].map(lambda label: label_to_cell[str(label)])
+
     rows: list[dict[str, object]] = []
-    for cell, group in summary_df.groupby("cell_label"):
-        latencies = cell_latencies.get(str(cell))
+    for cell, group in df.groupby("_cell"):
+        latencies = cell_latencies.get(cell)
         if latencies is None:
             continue
         periods = group["nr_periods"].sum()
         ratio = group["nr_throttled"].sum() / periods if periods > 0 else float("nan")
         rows.append(
             {
-                "cell": str(cell),
+                "cell": cell,
                 "p50": latencies[0],
                 "p95": latencies[1],
                 "p99": latencies[2],

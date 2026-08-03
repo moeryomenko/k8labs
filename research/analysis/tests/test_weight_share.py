@@ -34,7 +34,7 @@ import sys
 import pandas as pd
 import pytest
 
-from tests.conftest import FAMILY_SUMMARY_COLUMNS
+from tests.conftest import FAMILY_SUMMARY_COLUMNS, WS_CELL_100, WS_CELL_500
 
 ANALYSIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 WEIGHT_SHARE_SCRIPT = ANALYSIS_DIR / "weight-share-analyze.py"
@@ -342,3 +342,91 @@ class TestEndToEnd:
         assert set(result["cell"]) == {"a=500m;b=500m"}
         assert "x=200m;y=200m" in err
         assert "warn" in err.lower() or "skip" in err.lower()
+
+
+# =========================================================================
+# FIX-4 (REQ-1) — real runner layout: pod names with dashes + cell dir names
+#
+# summary cell_label = "pod-a/pod-b/pod-c - <cell>" where <cell> is the full
+# matrix cell string that NAMES the directory under <data-dir>/<timestamp>/.
+# Naive first-dash splitting yields pod "pod" / cell "a-a_request=..." (the
+# TASK-022 verified bug) — the analyzer must resolve cells from the filesystem
+# (cell dir names) and map rows by cell_label suffix ("^(pod)-<cell>$").
+# =========================================================================
+
+
+class TestRealLayout:
+    """FIX-4 REQ-1: ingest the REAL runner output layout."""
+
+    def test_check_cgroup_completeness_resolves_real_labels(
+        self, real_weight_share_data_dir: pathlib.Path
+    ):
+        """Every expected (replicate, pod) combo is found -> no incomplete cell.
+
+        Pod names pod-a/pod-b/pod-c contain dashes; the completeness gate must
+        resolve labels via the filesystem cell dir names, not first-dash split.
+        """
+        module = load_weight_share_module()
+        summary = module.load_summary(real_weight_share_data_dir)
+        assert (
+            module.check_cgroup_completeness(real_weight_share_data_dir, summary)
+            == set()
+        )
+
+    def test_cli_exit_zero_and_csv_written(
+        self, real_weight_share_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-6: analyzer exits 0 on the real fixture and writes the CSV."""
+        rc, err, csv_path = run_ok(real_weight_share_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        assert csv_path.exists()
+
+    def test_cli_real_layout_cells_are_dir_names(
+        self, real_weight_share_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """Output cells are the REAL cell dir names (never the naive split)."""
+        rc, err, csv_path = run_ok(real_weight_share_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        result = pd.read_csv(csv_path)
+        assert list(result.columns) == OUTPUT_COLUMNS
+        assert set(result["cell"]) == {WS_CELL_500, WS_CELL_100}
+        assert set(result["pod"]) == {"pod-a", "pod-b", "pod-c"}
+        assert len(result) == 6  # 3 pods x 2 cells
+
+    def test_cli_real_layout_exact_shares(
+        self, real_weight_share_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-1: exact achieved/weight shares per pod, BestEffort included.
+
+        cell1 (500/500): achieved 12/33, 20/33, 1/33; weight 59/160, 100/160,
+        1/160. cell2 (100/500): achieved 6/37, 30/37, 1/37; weight 17/118,
+        100/118, 1/118. pod-c is BestEffort with weight 1 and IS present.
+        """
+        rc, err, csv_path = run_ok(real_weight_share_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        result = pd.read_csv(csv_path)
+        rows = result[result["cell"] == WS_CELL_500].set_index("pod")
+        assert rows.loc["pod-a", "achieved_share"] == pytest.approx(12 / 33, abs=1e-9)
+        assert rows.loc["pod-b", "achieved_share"] == pytest.approx(20 / 33, abs=1e-9)
+        assert rows.loc["pod-c", "achieved_share"] == pytest.approx(1 / 33, abs=1e-9)
+        assert rows.loc["pod-a", "weight_share"] == pytest.approx(59 / 160, abs=1e-9)
+        assert rows.loc["pod-b", "weight_share"] == pytest.approx(100 / 160, abs=1e-9)
+        assert rows.loc["pod-c", "weight_share"] == pytest.approx(1 / 160, abs=1e-9)
+        assert rows.loc["pod-a", "ratio_error"] == pytest.approx(
+            12 / 33 - 59 / 160, abs=1e-9
+        )
+        rows2 = result[result["cell"] == WS_CELL_100].set_index("pod")
+        assert rows2.loc["pod-a", "achieved_share"] == pytest.approx(6 / 37, abs=1e-9)
+        assert rows2.loc["pod-b", "achieved_share"] == pytest.approx(30 / 37, abs=1e-9)
+        assert rows2.loc["pod-c", "achieved_share"] == pytest.approx(1 / 37, abs=1e-9)
+        assert rows2.loc["pod-a", "weight_share"] == pytest.approx(17 / 118, abs=1e-9)
+        assert rows2.loc["pod-b", "weight_share"] == pytest.approx(100 / 118, abs=1e-9)
+        assert rows2.loc["pod-c", "weight_share"] == pytest.approx(1 / 118, abs=1e-9)
+
+    def test_cli_real_layout_no_skipped_cells(
+        self, real_weight_share_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """Every cell resolves and is complete: no 'skipping cell' warning."""
+        rc, err, _ = run_ok(real_weight_share_data_dir, tmp_path)
+        assert rc == 0
+        assert "skipping cell" not in err

@@ -47,6 +47,8 @@ import pytest
 
 from tests.conftest import (
     FAMILY_SUMMARY_COLUMNS,
+    LAT_CELL_250,
+    LAT_CELL_500,
     write_latency_csv,
     write_summary_csv,
 )
@@ -496,3 +498,99 @@ class TestEndToEnd:
             "CSV must be written even without matplotlib"
         )
         assert "matplotlib" in err.lower() or "warn" in err.lower()
+
+
+# =========================================================================
+# FIX-4 (REQ-3) — real runner layout: pod-prefixed cell_labels + nesting
+#
+# Family D cell_labels carry a pod prefix (ls-api-, batch-stress-) absent from
+# the cell directory names, and latency.csv nests at
+# <data-dir>/<timestamp>/<cell>/replicate-<N>/. The analyzer's
+# `<cell_label>/**/latency.csv` glob misses everything (TASK-022 verified).
+# batch-stress itself contains a dash, so first-dash splitting would turn
+# `batch-stress-<cell>` into pod "batch" — the analyzer must resolve cells via
+# the filesystem dir names and aggregate BOTH pods' summary rows per cell.
+# =========================================================================
+
+
+class TestRealLayout:
+    """FIX-4 REQ-3: discover and analyze the REAL latency-interference layout."""
+
+    def test_discover_latency_finds_nested_files(
+        self, real_latency_data_dir: pathlib.Path
+    ):
+        """Discovery keys are the cell DIR names; both pod rows map to one cell.
+
+        cell_label = ls-api-<cell> and batch-stress-<cell> both resolve to the
+        same cell dir; each cell maps to its 2 sorted nested latency.csv files.
+        """
+        module = load_latency_module()
+        summary = module.load_summary(real_latency_data_dir)
+        found = module.discover_latency_csvs(real_latency_data_dir, summary)
+        assert set(found) == {LAT_CELL_250, LAT_CELL_500}
+        for cell in (LAT_CELL_250, LAT_CELL_500):
+            assert len(found[cell]) == 2
+            assert [p.name for p in found[cell]] == ["latency.csv", "latency.csv"]
+            assert all("replicate-" in str(p) for p in found[cell])
+
+    def test_cli_exit_zero_and_csv_written(
+        self, real_latency_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-6: analyzer exits 0 on the real fixture and writes both CSVs."""
+        rc, err, out_dir = run_ok(real_latency_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        assert (out_dir / SUMMARY_CSV).exists()
+        assert (out_dir / CORRELATION_CSV).exists()
+
+    def test_cli_real_layout_exact_rows(
+        self, real_latency_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """REQ-3: one row per cell dir with exact percentiles + aggregates.
+
+        cell1 (250m): p50/p95/p99 10.5/19.05/19.81; throttled_usec 18000000
+        (both pods x 2 reps); usage 24200000; ratio 1800/4000. cell2 (500m):
+        5.5/9.55/9.91; throttled 2000000; usage 16200000; ratio 200/4000.
+        """
+        rc, err, out_dir = run_ok(real_latency_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        table = pd.read_csv(out_dir / SUMMARY_CSV).set_index("cell")
+        assert list(table.columns) == SUMMARY_COLUMNS[1:]
+        assert set(table.index) == {LAT_CELL_250, LAT_CELL_500}
+        assert len(table) == 2  # both pod rows aggregate into one cell row
+        row1 = table.loc[LAT_CELL_250]
+        assert row1["p50"] == pytest.approx(CELL1_P50)
+        assert row1["p95"] == pytest.approx(CELL1_P95)
+        assert row1["p99"] == pytest.approx(CELL1_P99)
+        assert row1["throttled_usec"] == 18000000
+        assert row1["usage_usec"] == 24200000
+        assert row1["throttling_ratio"] == pytest.approx(1800 / 4000)
+        row2 = table.loc[LAT_CELL_500]
+        assert row2["p50"] == pytest.approx(CELL2_P50)
+        assert row2["p95"] == pytest.approx(CELL2_P95)
+        assert row2["p99"] == pytest.approx(CELL2_P99)
+        assert row2["throttled_usec"] == 2000000
+        assert row2["usage_usec"] == 16200000
+        assert row2["throttling_ratio"] == pytest.approx(200 / 4000)
+
+    def test_cli_real_layout_correlation(
+        self, real_latency_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """The correlation CSV is emitted with the pinned metric rows."""
+        rc, err, out_dir = run_ok(real_latency_data_dir, tmp_path)
+        assert rc == 0, f"stderr: {err}"
+        corr = pd.read_csv(out_dir / CORRELATION_CSV).set_index("metric")
+        assert list(corr.index) == [
+            "p50_vs_throttled_usec",
+            "p95_vs_throttled_usec",
+            "p99_vs_throttled_usec",
+        ]
+        # 2 cells, monotonically increasing -> r = 1.0
+        assert corr.loc["p99_vs_throttled_usec", "correlation"] == pytest.approx(1.0)
+
+    def test_cli_real_layout_no_missing_latency_warning(
+        self, real_latency_data_dir: pathlib.Path, tmp_path: pathlib.Path
+    ):
+        """Every cell resolves: no 'no latency.csv files' warning."""
+        rc, err, _ = run_ok(real_latency_data_dir, tmp_path)
+        assert rc == 0
+        assert "no latency.csv files" not in err

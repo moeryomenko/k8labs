@@ -55,28 +55,63 @@ OUTPUT_COLUMNS = [
 QOS_PRIORITY = ("guaranteed", "burstable", "besteffort")
 
 
-def _split_qos_label(label: str) -> tuple[str, str]:
+def _discover_cell_dirs(data_dir: pathlib.Path) -> set[str]:
+    """Return the cell directory names present under *data_dir*.
+
+    The runner nests per-replicate files under
+    ``<data-dir>/<timestamp>/<cell>/replicate-<N>/`` (real layout) or
+    ``<data-dir>/<cell>/replicate-<N>/`` (flat fixtures). Every
+    ``replicate-*`` directory's parent is a cell directory, so scanning for
+    them at any depth yields the cell dir names — never a label split.
+
+    Args:
+        data_dir: Experiment data root (summary.csv lives here).
+
+    Returns:
+        The set of cell directory names discovered from the filesystem.
+    """
+    return {p.parent.name for p in data_dir.rglob("replicate-*") if p.is_dir()}
+
+
+def _split_qos_label(
+    label: str, known_cells: set[str] | None = None
+) -> tuple[str, str]:
     """Split a runner cell_label into ``(qos, cell)``.
 
-    The QoS class is the text before the first ``-`` and the cell is the
-    remainder (the runner writes ``printf '%s-%s' "$wpod" "$cell_label"``).
-    A label without a ``-`` denotes qos == cell == the whole label.
+    The runner writes ``cell_label = "<qos>-<cell>"`` where ``<cell>`` is the
+    full matrix cell string that NAMES the directory. When *known_cells* is
+    given, the cell is the longest known cell directory name the label ends
+    with and the qos class is the text before it (suffix match — robust to
+    dash-named pods). Without a match (or without *known_cells*) the legacy
+    first-dash split applies. A label without a ``-`` denotes qos == cell ==
+    the whole label.
 
     Args:
         label: A cell_label column value from summary.csv.
+        known_cells: Cell directory names discovered from the filesystem.
 
     Returns:
         The ``(qos, cell)`` tuple.
     """
+    if known_cells:
+        for cell in sorted(known_cells, key=len, reverse=True):
+            prefix = "-" + cell
+            if label.endswith(prefix):
+                return label[: -len(prefix)], cell
     if "-" in label:
         qos, _, cell = label.partition("-")
         return qos, cell
     return label, label
 
 
-def _summary_cells(summary_df: pd.DataFrame) -> set[str]:
+def _summary_cells(
+    summary_df: pd.DataFrame, known_cells: set[str] | None = None
+) -> set[str]:
     """Return the set of cell names present in the summary."""
-    return {_split_qos_label(str(label))[1] for label in summary_df["cell_label"]}
+    return {
+        _split_qos_label(str(label), known_cells)[1]
+        for label in summary_df["cell_label"]
+    }
 
 
 def _slice_by_qos(hierarchy: dict) -> dict[str, dict]:
@@ -130,25 +165,33 @@ def load_summary(data_dir: pathlib.Path) -> pd.DataFrame:
 
 
 def discover_hierarchy_files(
-    data_dir: pathlib.Path, summary_df: pd.DataFrame
+    data_dir: pathlib.Path,
+    summary_df: pd.DataFrame,
+    known_cells: set[str] | None = None,
 ) -> dict[str, pathlib.Path]:
     """Map each summary cell to its cgroup-hierarchy-*.json snapshot.
 
-    For every cell named in *summary_df* (the remainder of each cell_label
-    after the first ``-``), the first match of the recursive glob
-    ``<data-dir>/**/<cell>/cgroup-hierarchy-*.json`` is returned. Cells with
-    no snapshot anywhere under *data_dir* are absent from the result (REQ-2).
+    For every cell named in *summary_df* (resolved via *known_cells*, or via
+    the cell dirs discovered from *data_dir* when not given, falling back to
+    the first-dash label split), the first match of the recursive glob
+    ``<data-dir>/**/<cell>/**/cgroup-hierarchy-*.json`` is returned. The glob
+    covers BOTH layouts: snapshots nested at ``replicate-<N>/`` (real layout)
+    and direct children of the cell dir (flat fixtures). Cells with no
+    snapshot anywhere under *data_dir* are absent from the result (REQ-2).
 
     Args:
         data_dir: Experiment data root (summary.csv lives here).
         summary_df: Rows read from summary.csv.
+        known_cells: Cell directory names discovered from the filesystem.
 
     Returns:
         Cell name -> snapshot path, one entry per discoverable cell.
     """
+    if known_cells is None:
+        known_cells = _discover_cell_dirs(data_dir)
     found: dict[str, pathlib.Path] = {}
-    for cell in sorted(_summary_cells(summary_df)):
-        matches = sorted(data_dir.glob(f"**/{cell}/cgroup-hierarchy-*.json"))
+    for cell in sorted(_summary_cells(summary_df, known_cells)):
+        matches = sorted(data_dir.glob(f"**/{cell}/**/cgroup-hierarchy-*.json"))
         if matches:
             found[cell] = matches[0]
     return found
@@ -174,7 +217,11 @@ def load_hierarchy(path: pathlib.Path) -> dict:
         raise ValueError(f"malformed hierarchy JSON: {path}: {exc}") from exc
 
 
-def build_qos_table(summary_df: pd.DataFrame, hierarchy: dict) -> pd.DataFrame:
+def build_qos_table(
+    summary_df: pd.DataFrame,
+    hierarchy: dict,
+    known_cells: set[str] | None = None,
+) -> pd.DataFrame:
     """Build the per-QoS-class table for ONE cell.
 
     Pure. The caller passes the rows of a single cell (subset by cell) plus
@@ -183,11 +230,14 @@ def build_qos_table(summary_df: pd.DataFrame, hierarchy: dict) -> pd.DataFrame:
     that order, sorted by QoS priority (guaranteed, burstable, besteffort).
     ``achieved_share`` is the aggregate-then-divide usage share (zero total
     degrades to 0.0); ``cpu_weight`` comes from the hierarchy JSON pod entry;
-    a class with no matching slice is omitted.
+    a class with no matching slice is omitted. Cells resolve via *known_cells*
+    when given (cell = filesystem directory name), otherwise by the legacy
+    first-dash label split.
 
     Args:
         summary_df: Summary rows for one cell.
         hierarchy: Parsed cgroup-hierarchy JSON for the same cell.
+        known_cells: Cell directory names discovered from the filesystem.
 
     Returns:
         The QoS table; an empty DataFrame with the pinned columns when
@@ -198,8 +248,12 @@ def build_qos_table(summary_df: pd.DataFrame, hierarchy: dict) -> pd.DataFrame:
 
     slice_by_qos = _slice_by_qos(hierarchy)
     df = summary_df.copy()
-    df["qos"] = df["cell_label"].map(lambda label: _split_qos_label(str(label))[0])
-    df["cell"] = df["cell_label"].map(lambda label: _split_qos_label(str(label))[1])
+    df["qos"] = df["cell_label"].map(
+        lambda label: _split_qos_label(str(label), known_cells)[0]
+    )
+    df["cell"] = df["cell_label"].map(
+        lambda label: _split_qos_label(str(label), known_cells)[1]
+    )
 
     rows: list[dict[str, object]] = []
     for cell in df["cell"].unique():
@@ -228,11 +282,14 @@ def build_qos_table(summary_df: pd.DataFrame, hierarchy: dict) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=pd.Index(OUTPUT_COLUMNS))
 
 
-def qos_achieved_shares(summary_df: pd.DataFrame) -> pd.DataFrame:
+def qos_achieved_shares(
+    summary_df: pd.DataFrame, known_cells: set[str] | None = None
+) -> pd.DataFrame:
     """Compute per-(cell, QoS class) achieved usage share.
 
     Args:
         summary_df: Rows read from summary.csv (any number of cells).
+        known_cells: Cell directory names discovered from the filesystem.
 
     Returns:
         One row per (cell, class) with columns ``cell, qos, achieved_share``;
@@ -242,8 +299,12 @@ def qos_achieved_shares(summary_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=pd.Index(["cell", "qos", "achieved_share"]))
 
     df = summary_df.copy()
-    df["qos"] = df["cell_label"].map(lambda label: _split_qos_label(str(label))[0])
-    df["cell"] = df["cell_label"].map(lambda label: _split_qos_label(str(label))[1])
+    df["qos"] = df["cell_label"].map(
+        lambda label: _split_qos_label(str(label), known_cells)[0]
+    )
+    df["cell"] = df["cell_label"].map(
+        lambda label: _split_qos_label(str(label), known_cells)[1]
+    )
 
     rows: list[dict[str, object]] = []
     for cell in df["cell"].unique():
@@ -257,7 +318,11 @@ def qos_achieved_shares(summary_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=pd.Index(["cell", "qos", "achieved_share"]))
 
 
-def verify_hierarchy_weights(summary_df: pd.DataFrame, hierarchy: dict) -> list[str]:
+def verify_hierarchy_weights(
+    summary_df: pd.DataFrame,
+    hierarchy: dict,
+    known_cells: set[str] | None = None,
+) -> list[str]:
     """Compare hierarchy JSON pod weights with the summary cpu_weight column.
 
     For every QoS class present in *summary_df* whose slice exists in the
@@ -268,13 +333,16 @@ def verify_hierarchy_weights(summary_df: pd.DataFrame, hierarchy: dict) -> list[
     Args:
         summary_df: Rows read from summary.csv.
         hierarchy: Parsed cgroup-hierarchy JSON.
+        known_cells: Cell directory names discovered from the filesystem.
 
     Returns:
         Warning strings, one per mismatching class.
     """
     slice_by_qos = _slice_by_qos(hierarchy)
     df = summary_df.copy()
-    df["qos"] = df["cell_label"].map(lambda label: _split_qos_label(str(label))[0])
+    df["qos"] = df["cell_label"].map(
+        lambda label: _split_qos_label(str(label), known_cells)[0]
+    )
 
     warnings: list[str] = []
     for qos in QOS_PRIORITY:
@@ -367,21 +435,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    hierarchy_files = discover_hierarchy_files(data_dir, summary)
+    known_cells = _discover_cell_dirs(data_dir)
+    hierarchy_files = discover_hierarchy_files(data_dir, summary, known_cells)
 
     tables: list[pd.DataFrame] = []
     for cell in sorted(hierarchy_files):
         cell_rows = summary[
             summary["cell_label"].map(
-                lambda label: _split_qos_label(str(label))[1] == cell
+                lambda label: _split_qos_label(str(label), known_cells)[1] == cell
             )
         ]
         hierarchy = load_hierarchy(hierarchy_files[cell])
-        for warning in verify_hierarchy_weights(cell_rows, hierarchy):
+        for warning in verify_hierarchy_weights(cell_rows, hierarchy, known_cells):
             print(f"warn: {warning}", file=sys.stderr)
-        tables.append(build_qos_table(cell_rows, hierarchy))
+        tables.append(build_qos_table(cell_rows, hierarchy, known_cells))
 
-    for cell in sorted(_summary_cells(summary) - set(hierarchy_files)):
+    for cell in sorted(_summary_cells(summary, known_cells) - set(hierarchy_files)):
         print(
             f"warn: skipping cell {cell!r}: no cgroup-hierarchy-*.json found",
             file=sys.stderr,

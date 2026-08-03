@@ -1002,3 +1002,234 @@ def partial_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
         root / "weight-share-summary.csv", WEIGHT_SHARE_COLUMNS, WEIGHT_SHARE_ROWS
     )
     return root
+
+
+# ---------------------------------------------------------------------------
+# FIX-4 fixtures — REAL runner output layout (verified by TASK-022 + live runs)
+#
+# The runner writes:
+#   <data-dir>/summary.csv                                   (8-column schema)
+#   <data-dir>/<timestamp>/<cell>/replicate-<N>/cgroup-<pod>.csv
+#   <data-dir>/<timestamp>/<cell>/replicate-<N>/latency.csv
+#   <data-dir>/<timestamp>/<cell>/replicate-<N>/cgroup-hierarchy-<node>.json
+# and the summary cell_label is "<pod>-<cell>" where <pod> may contain dashes
+# (pod-a, pod-b, ls-api, batch-stress) and <cell> is the full matrix cell
+# string that NAMES the cell directory (no pod prefix). A naive first-dash
+# split of the label is therefore WRONG (pod-a-a_request=... -> pod "pod"),
+# which is the TASK-022 verified bug these fixtures reproduce. Cell strings
+# below are copied verbatim from research/experiments/data/*/summary.csv.
+# ---------------------------------------------------------------------------
+
+REAL_TS = "20260803T093031Z"
+
+# Real cell strings (matrix cells; these ARE the cell directory names).
+WS_CELL_500 = "a_request=500m-a_limit=-b_request=500m-b_limit=-c_request=-c_limit="
+WS_CELL_100 = "a_request=100m-a_limit=-b_request=500m-b_limit=-c_request=-c_limit="
+QOS_CELL = (
+    "guaranteed_request=500m-guaranteed_limit=500m-"
+    "burstable_request=500m-burstable_limit=2000m-besteffort_request=-besteffort_limit="
+)
+LAT_CELL_250 = (
+    "ls-api_request=250m-ls-api_limit=1000m-"
+    "batch-stress_request=1000m-batch-stress_limit=2000m"
+)
+LAT_CELL_500 = (
+    "ls-api_request=500m-ls-api_limit=500m-"
+    "batch-stress_request=1000m-batch-stress_limit=2000m"
+)
+TUN_CELL_PREFIX = (
+    "ls-api_request=500m-ls-api_limit=500m-"
+    "batch-stress_request=1000m-batch-stress_limit=2000m-tunables="
+)
+
+
+def build_real_weight_share_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Family A fixture in the REAL layout, 3 dash-named pods per cell.
+
+    Cells nest at ``<root>/<timestamp>/<cell>/replicate-<N>/``; summary rows
+    carry ``pod-a/pod-b/pod-c - <cell>`` labels (pod names contain dashes, so
+    first-dash splitting is wrong). Two cells, 3 pods each, 2 replicates.
+    Weights 59/100/1 (pod-c is BestEffort, weight 1); per-replicate usage
+    60000/100000/5000 (cell1) and 30000/150000/5000 (cell2).
+
+    Expected shares (hand-computed, sum-then-divide over 2 replicates):
+      cell1: achieved 12/33, 20/33, 1/33 ; weight 59/160, 100/160, 1/160
+      cell2: achieved 6/37, 30/37, 1/37  ; weight 17/118, 100/118, 1/118
+    """
+    specs = {
+        WS_CELL_500: (60000, 100000, 5000, 59),
+        WS_CELL_100: (30000, 150000, 5000, 17),
+    }
+    rows: list[tuple] = []
+    for cell, (ua, ub, uc, wa) in specs.items():
+        for rep in (1, 2):
+            base = root / REAL_TS / cell / f"replicate-{rep}"
+            write_cgroup_csv(base / "cgroup-pod-a.csv", "pod-a", ua, wa, 50000)
+            write_cgroup_csv(base / "cgroup-pod-b.csv", "pod-b", ub, 100, 50000)
+            write_cgroup_csv(base / "cgroup-pod-c.csv", "pod-c", uc, 1, 100000)
+            rows.append((f"pod-a-{cell}", rep, 30, 0, 0, ua, wa, 50000))
+            rows.append((f"pod-b-{cell}", rep, 30, 0, 0, ub, 100, 50000))
+            rows.append((f"pod-c-{cell}", rep, 30, 0, 0, uc, 1, 100000))
+    write_summary_csv(root / "summary.csv", rows)
+    return root
+
+
+def build_real_qos_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Family C fixture in the REAL layout.
+
+    The cgroup-hierarchy snapshot nests at
+    ``<root>/<timestamp>/<cell>/replicate-<N>/cgroup-hierarchy-w1.json`` — the
+    direct-child glob the analyzer used misses it (TASK-022 verified). Summary
+    rows carry ``guaranteed/burstable/besteffort - <cell>`` labels. Numbers
+    mirror the flat family_c fixture so the same hand-computed shares apply
+    (12/33, 20/33, 1/33; weights 59/100/1; throttled 0/50000/0).
+    """
+    rows: list[tuple] = []
+    for rep in (1, 2):
+        base = root / REAL_TS / QOS_CELL / f"replicate-{rep}"
+        write_hierarchy_json(base / "cgroup-hierarchy-w1.json", node="w1")
+        rows.append((f"guaranteed-{QOS_CELL}", rep, 1000, 0, 0, 60000, 59, 50000))
+        rows.append(
+            (f"burstable-{QOS_CELL}", rep, 1000, 500, 25000, 100000, 100, 200000)
+        )
+        rows.append((f"besteffort-{QOS_CELL}", rep, 1000, 0, 0, 5000, 1, 100000))
+    write_summary_csv(root / "summary.csv", rows)
+    return root
+
+
+def build_real_latency_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Family D fixture in the REAL layout, two pods per cell.
+
+    ``ls-api`` and ``batch-stress`` (a dash-named pod!) share each cell; one
+    latency.csv per replicate nests at ``<timestamp>/<cell>/replicate-<N>/``.
+    Summary labels ``ls-api-<cell>`` / ``batch-stress-<cell>`` force suffix
+    cell resolution (naive first-dash split turns ``batch-stress-...`` into
+    pod "batch"). Both pods' summary rows aggregate into ONE cell row.
+
+    Expected (hand-computed):
+      cell1 (250m): p50/p95/p99 10.5/19.05/19.81; throttled 18000000;
+                    usage 24200000; ratio 1800/4000 = 0.45
+      cell2 (500m): p50/p95/p99 5.5/9.55/9.91;  throttled 2000000;
+                    usage 16200000; ratio 200/4000 = 0.05
+    """
+    specs = {
+        LAT_CELL_250: (
+            [float(v) for v in range(1, 21)],
+            100000,
+            9000000,
+            12000000,
+            900,
+        ),
+        LAT_CELL_500: ([float(v) for v in range(1, 11)], 100000, 1000000, 8000000, 100),
+    }
+    rows: list[tuple] = []
+    for cell, (
+        vals,
+        ls_usage,
+        bs_throttled,
+        bs_usage,
+        bs_throttled_nr,
+    ) in specs.items():
+        for rep in (1, 2):
+            write_latency_csv(
+                root / REAL_TS / cell / f"replicate-{rep}" / "latency.csv", vals
+            )
+            rows.append((f"ls-api-{cell}", rep, 1000, 0, 0, ls_usage, 59, 100000))
+            rows.append(
+                (
+                    f"batch-stress-{cell}",
+                    rep,
+                    1000,
+                    bs_throttled_nr,
+                    bs_throttled,
+                    bs_usage,
+                    100,
+                    200000,
+                )
+            )
+    write_summary_csv(root / "summary.csv", rows)
+    return root
+
+
+def build_real_tunables_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Family F fixture in the REAL layout with NO eevdf-slices.csv anywhere.
+
+    Cell dirs end ``-tunables=<name>``; latency.csv nests at
+    ``<timestamp>/<cell>/replicate-<N>/``; summary labels carry the
+    ls-api/batch-stress pod prefix. FIX-4 relaxes the analyzer so the p99-only
+    significance verdict is still emitted and slice columns are NaN.
+
+    Per-replicate p99s: default 12.0, base-slice-low 6.0, base-slice-high 18.0
+    (all tied -> std 0.0, n=3). Verdicts: low diff -6 significant, high diff
+    +6 significant.
+    """
+    tunables = [
+        ("default", (12.0, 12.0, 12.0)),
+        ("base-slice-low", (6.0, 6.0, 6.0)),
+        ("base-slice-high", (18.0, 18.0, 18.0)),
+    ]
+    rows: list[tuple] = []
+    for name, p99s in tunables:
+        cell = TUN_CELL_PREFIX + name
+        for rep, p99 in enumerate(p99s, start=1):
+            write_latency_csv(
+                root / REAL_TS / cell / f"replicate-{rep}" / "latency.csv",
+                [p99] * 10,
+            )
+            rows.append((f"ls-api-{cell}", rep, 1000, 0, 0, 100000, 59, 50000))
+            rows.append(
+                (f"batch-stress-{cell}", rep, 1000, 0, 0, 173000000, 100, 200000)
+            )
+    write_summary_csv(root / "summary.csv", rows)
+    return root
+
+
+def build_flat_noslices_tunables_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Flat-layout Family F fixture (dirs directly under root) with latency.csv
+    only — NO eevdf-slices.csv. Pins the FIX-4 slice-optional rule in the
+    layout the pre-FIX-4 tests use, so the relaxed rule is proven independent
+    of the cell-dir discovery change."""
+    tunables = [
+        ("default", (12.0, 12.0, 12.0)),
+        ("base-slice-low", (6.0, 6.0, 6.0)),
+        ("base-slice-high", (18.0, 18.0, 18.0)),
+    ]
+    rows: list[tuple] = []
+    for name, p99s in tunables:
+        for rep, p99 in enumerate(p99s, start=1):
+            write_latency_csv(
+                root / name / f"replicate-{rep}" / "latency.csv", [p99] * 10
+            )
+            rows.append((name, rep, 1000, 0, 0, 100000, 59, 100000))
+    write_summary_csv(root / "summary.csv", rows)
+    return root
+
+
+@pytest.fixture
+def real_weight_share_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """FIX-4 REQ-1: weight-share fixture in the REAL runner layout."""
+    return build_real_weight_share_data_dir(tmp_path / "weight-share-real")
+
+
+@pytest.fixture
+def real_qos_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """FIX-4 REQ-2: QoS fixture with replicate-nested hierarchy JSON."""
+    return build_real_qos_data_dir(tmp_path / "qos-real")
+
+
+@pytest.fixture
+def real_latency_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """FIX-4 REQ-3: latency fixture with pod-prefixed labels + nesting."""
+    return build_real_latency_data_dir(tmp_path / "latency-real")
+
+
+@pytest.fixture
+def real_tunables_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """FIX-4 REQ-4: tunables fixture with no eevdf-slices.csv anywhere."""
+    return build_real_tunables_data_dir(tmp_path / "tunables-real")
+
+
+@pytest.fixture
+def flat_noslices_tunables_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """FIX-4 REQ-4: flat tunables fixture with latency.csv but no slices."""
+    return build_flat_noslices_tunables_data_dir(tmp_path / "tunables-flat-noslices")

@@ -9,22 +9,28 @@ each tunable against the ``default`` set; emit ``tunables-comparison.csv`` and
 Usage:
     tunables-analyze.py --data-dir <dir> --output-dir <dir>
 
-Math (pinned by the TASK-016 contract, TEST-DESIGN.md section 6):
+Math (pinned by the TASK-016 contract, TEST-DESIGN.md section 6, plus the
+FIX-4 slice-optional hybrid rule, TEST-DESIGN.md section 3.4):
 
     mean_p99 / std_p99          = mean / sample std (ddof=1) of per-replicate
-                                  p99 latency (latency_stats reuse)
+                                  p99 latency (latency_stats reuse); every
+                                  replicate whose latency.csv parses counts
     mean_slice_us / std_slice_us = mean / sample std of per-replicate mean
-                                  ``duration_us`` from eevdf-slices.csv
-    n                           = number of complete replicates (both files
-                                  parse)
+                                  ``duration_us`` from eevdf-slices.csv; NaN
+                                  when no replicate has a parseable slice file
+    n                           = latency-parseable replicates when NO slice
+                                  file exists for the tunable, otherwise the
+                                  number of replicates with BOTH files parse
+                                  (legacy rule, backward compatible)
     diff_p99                    = mean_p99 - default_mean_p99   (signed)
     noise_threshold             = max(std_p99_tunable, std_p99_default)
     significant                 = abs(diff_p99) > noise_threshold (strict)
 
-A replicate counts only when BOTH latency.csv and eevdf-slices.csv parse;
-missing files shrink ``n``. Rows are ordered with ``default`` first, then the
-remaining tunables alphabetically. No ``default`` group -> the significance
-table is header-only and main warns. PNG rendering is lazy and non-fatal.
+Slice data is optional: the p99-only significance verdict is still emitted
+when eevdf-slices.csv is absent everywhere (runs without ``--eevdf``). Rows
+are ordered with ``default`` first, then the remaining tunables
+alphabetically. No ``default`` group -> the significance table is header-only
+and main warns. PNG rendering is lazy and non-fatal.
 
 The module is also importable — callers use ``load_summary``,
 ``discover_replicates``, ``build_comparison`` and ``build_significance``
@@ -63,6 +69,45 @@ SIGNIFICANCE_COLUMNS = [
 DEFAULT_TUNABLE = "default"
 
 
+def _discover_cell_dirs(data_dir: pathlib.Path) -> set[str]:
+    """Return the cell directory names present under *data_dir*.
+
+    The runner nests per-replicate files under
+    ``<data-dir>/<timestamp>/<cell>/replicate-<N>/`` (real layout) or
+    ``<data-dir>/<cell>/replicate-<N>/`` (flat fixtures). Every
+    ``replicate-*`` directory's parent is a cell directory, so scanning for
+    them at any depth yields the cell dir names — never a label split.
+
+    Args:
+        data_dir: Experiment data root (summary.csv lives here).
+
+    Returns:
+        The set of cell directory names discovered from the filesystem.
+    """
+    return {p.parent.name for p in data_dir.rglob("replicate-*") if p.is_dir()}
+
+
+def _tunable_name(cell_dir: str) -> str:
+    """Extract the tunable set name from a cell directory name.
+
+    The real layout names cell dirs ``...-tunables=<name>`` while the flat
+    layout names them exactly after the tunable (``default``,
+    ``base-slice-low``). The trailing ``-tunables=<name>`` token wins when
+    present, else the directory name itself — under both layouts the
+    ``default`` comparison group is the tunable named exactly ``default``.
+
+    Args:
+        cell_dir: A cell directory name.
+
+    Returns:
+        The tunable set name.
+    """
+    marker = "-tunables="
+    if marker in cell_dir:
+        return cell_dir.rsplit(marker, 1)[1]
+    return cell_dir
+
+
 def load_summary(data_dir: pathlib.Path) -> pd.DataFrame:
     """Read ``<data_dir>/summary.csv`` with the runner's 8-column schema.
 
@@ -88,8 +133,12 @@ def discover_replicates(
 ) -> dict[str, list[pathlib.Path]]:
     """Map each tunable to its replicate directories, sorted by path.
 
-    For Family F the cell_label IS the tunable set name. Replicate directories
-    are the direct ``replicate-*`` children of ``<data-dir>/<tunable>/``.
+    Cells are discovered from the filesystem (cell dir names under any run
+    timestamp) and mapped to tunable names via the trailing ``-tunables=<name>``
+    token (or the dir name itself for flat fixtures). Replicate directories
+    are the ``replicate-*`` children of each cell dir, found at any nesting
+    depth so both ``<data-dir>/<tunable>/replicate-*`` (flat) and
+    ``<data-dir>/<timestamp>/<cell>/replicate-*`` (real) layouts work.
 
     Args:
         data_dir: Experiment data root (summary.csv lives here).
@@ -99,39 +148,57 @@ def discover_replicates(
         Tunable name -> sorted replicate directory paths.
     """
     found: dict[str, list[pathlib.Path]] = {}
-    for tunable in summary_df["cell_label"].unique():
+    for cell_dir in sorted(_discover_cell_dirs(data_dir)):
+        tunable = _tunable_name(cell_dir)
         rep_dirs = sorted(
-            p for p in (data_dir / str(tunable)).glob("replicate-*") if p.is_dir()
+            p
+            for p in data_dir.rglob("replicate-*")
+            if p.is_dir() and p.parent.name == cell_dir
         )
-        found[str(tunable)] = rep_dirs
+        found.setdefault(tunable, []).extend(rep_dirs)
+    for tunable in found:
+        found[tunable].sort()
     return found
 
 
-def _replicate_metrics(replicate_dir: pathlib.Path) -> tuple[float, float] | None:
-    """Return ``(p99, mean_slice_us)`` for one replicate, or None.
-
-    A replicate counts only when BOTH latency.csv and eevdf-slices.csv parse:
-    the p99 percentile comes from latency.csv (latency_stats reuse) and the
-    mean slice duration from the mean of ``duration_us`` in eevdf-slices.csv.
+def _replicate_p99(replicate_dir: pathlib.Path) -> float | None:
+    """p99 latency from ``latency.csv`` in one replicate, or None.
 
     Args:
         replicate_dir: A ``replicate-<N>`` directory.
 
     Returns:
-        The ``(p99, mean_slice_us)`` pair, or ``None`` when either file is
-        missing or unparseable.
+        The p99 percentile, or ``None`` when latency.csv is missing or
+        unparseable.
     """
     latency_path = replicate_dir / "latency.csv"
-    slices_path = replicate_dir / "eevdf-slices.csv"
-    if not (latency_path.is_file() and slices_path.is_file()):
+    if not latency_path.is_file():
         return None
     try:
         stats = percentiles_from_csv(latency_path)
-        slice_frame = pd.read_csv(slices_path)
-        mean_slice = float(slice_frame["duration_us"].mean())
     except Exception:
         return None
-    return float(stats[99.0]), mean_slice
+    return float(stats[99.0])
+
+
+def _replicate_slice_mean(replicate_dir: pathlib.Path) -> float | None:
+    """Mean ``duration_us`` from ``eevdf-slices.csv`` in one replicate.
+
+    Args:
+        replicate_dir: A ``replicate-<N>`` directory.
+
+    Returns:
+        The mean slice duration, or ``None`` when eevdf-slices.csv is missing
+        or unparseable.
+    """
+    slices_path = replicate_dir / "eevdf-slices.csv"
+    if not slices_path.is_file():
+        return None
+    try:
+        slice_frame = pd.read_csv(slices_path)
+        return float(slice_frame["duration_us"].mean())
+    except Exception:
+        return None
 
 
 def _tunable_sort_key(tunable: str) -> tuple[int, str]:
@@ -154,10 +221,21 @@ def build_comparison(
 
     One row per tunable with columns ``tunable, mean_p99, std_p99,
     mean_slice_us, std_slice_us, n`` in that order. Group stats are mean /
-    sample std (``ddof=1``, pandas default) across complete replicates; ``n``
-    is the count of complete replicates. Rows are ordered with ``default``
-    first, then the remaining tunables alphabetically. Empty summary -> an
-    empty DataFrame with the pinned columns.
+    sample std (``ddof=1``, pandas default). The slice-optional hybrid rule
+    (FIX-4, TEST-DESIGN section 3.4) applies per tunable:
+
+    - A replicate always counts toward ``n`` / ``mean_p99`` / ``std_p99``
+      when latency.csv parses.
+    - ``mean_slice_us`` / ``std_slice_us`` come only from replicates that
+      ALSO have a parseable eevdf-slices.csv; when NO replicate has slice data
+      they are NaN.
+    - When a tunable HAS some eevdf-slices.csv files, the legacy rule
+      ``n = replicates with both files parse`` is preserved (backward
+      compatible with the pre-FIX-4 degraded-replicate tests).
+
+    Rows are ordered with ``default`` first, then the remaining tunables
+    alphabetically. Empty summary -> an empty DataFrame with the pinned
+    columns.
 
     Args:
         summary_df: Rows read from summary.csv.
@@ -171,24 +249,35 @@ def build_comparison(
 
     rows: list[dict[str, object]] = []
     for tunable in sorted(replicate_dirs_by_cell, key=_tunable_sort_key):
-        p99s: list[float] = []
-        slice_means: list[float] = []
+        p99_by_rep: list[tuple[pathlib.Path, float]] = []
+        slice_by_rep: list[tuple[pathlib.Path, float]] = []
         for rep_dir in replicate_dirs_by_cell[tunable]:
-            metrics = _replicate_metrics(rep_dir)
-            if metrics is not None:
-                p99, mean_slice = metrics
-                p99s.append(p99)
-                slice_means.append(mean_slice)
-        if not p99s:
+            p99 = _replicate_p99(rep_dir)
+            if p99 is not None:
+                p99_by_rep.append((rep_dir, p99))
+            slice_mean = _replicate_slice_mean(rep_dir)
+            if slice_mean is not None:
+                slice_by_rep.append((rep_dir, slice_mean))
+        if not p99_by_rep:
             continue
+        if slice_by_rep:
+            # legacy rule: n = replicates with BOTH files parse
+            p99_dirs = {rep_dir for rep_dir, _ in p99_by_rep}
+            slice_dirs = {rep_dir for rep_dir, _ in slice_by_rep}
+            both_dirs = p99_dirs & slice_dirs
+            p99_values = [p for rep_dir, p in p99_by_rep if rep_dir in both_dirs]
+            slice_values = [m for rep_dir, m in slice_by_rep if rep_dir in both_dirs]
+        else:
+            p99_values = [p for _, p in p99_by_rep]
+            slice_values = []
         rows.append(
             {
                 "tunable": tunable,
-                "mean_p99": pd.Series(p99s).mean(),
-                "std_p99": pd.Series(p99s).std(ddof=1),
-                "mean_slice_us": pd.Series(slice_means).mean(),
-                "std_slice_us": pd.Series(slice_means).std(ddof=1),
-                "n": len(p99s),
+                "mean_p99": pd.Series(p99_values).mean(),
+                "std_p99": pd.Series(p99_values).std(ddof=1),
+                "mean_slice_us": pd.Series(slice_values).mean(),
+                "std_slice_us": pd.Series(slice_values).std(ddof=1),
+                "n": len(p99_values),
             }
         )
     return pd.DataFrame(rows, columns=pd.Index(OUTPUT_COLUMNS))

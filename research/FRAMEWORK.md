@@ -17,7 +17,7 @@ limit    ──>  cpu.max     ──>  absolute cap via CFS throttling
 
 When `request == limit`, the pod gets **Guaranteed QoS**, and the CFS quota is set to match. When `request < limit`, the pod is **Burstable QoS** — it gets a baseline reservation (weight) but can burst up to the limit.
 
-A critical implementation detail: in cgroup v2 with crun as the OCI runtime, when `request == limit`, the CFS quota can be disabled entirely (set to `max`), meaning **no throttling occurs**. This is the key insight for latency-sensitive workloads.
+A measured implementation detail (Fedora 44, kernel 7.1, crun, cgroup v2 — TASK-022): when `request == limit` the kubelet/crun set `cpu.max` quota exactly equal to the request (`100m/100m` -> `10000 100000`), **not** `max`. A workload that saturates its quota is therefore throttled in >= 98% of periods (measured: 100/100 -> 0.999, 500/500 -> 0.996, 1000/1000 -> 0.980 throttling ratio). Throttling disappears only when the limit is at/above the workload's real demand (limit=2000m on a 2-vCPU node -> 0 throttling regardless of request). The claim that `request == limit` disables CFS quota is NOT supported by this cluster's measurements.
 
 ---
 
@@ -29,7 +29,7 @@ A critical implementation detail: in cgroup v2 with crun as the OCI runtime, whe
 - **Strategy**: Guaranteed QoS (request == limit)
 - **Sizing**: Steady-state CPU + 20% headroom for bursts
 - **Example**: request=500m, limit=500m for a service using ~400m
-- **Why**: Avoids throttling entirely; CFS quota is disabled when request == limit with cpu.weight = shares
+- **Why**: Keeps usage far below the enforced quota, so the workload is never throttled (measured: a 500m/500m API pod using ~1.5% CPU saw 0 throttled periods with batch co-located)
 - **Tradeoff**: Lower resource utilization; can leave CPU idle
 
 **Best for**: API servers, web backends, database query handlers, gRPC services, real-time applications.
@@ -95,17 +95,23 @@ A critical implementation detail: in cgroup v2 with crun as the OCI runtime, whe
 
 ### Throttling Regions (from experiment data)
 
-> **(Validated by experiments — see CPU-PARAMETER-GUIDE.md for full analysis)**
+> **(Validated by experiments — TASK-022 Family B request×limit matrix, CPU-saturating stress-ng on a 2-vCPU node)**
 
-| Region | Limit Utilization | Throttling Impact | Recommendation |
-|--------|------------------|-------------------|----------------|
-| Safe | < 80% of limit | < 0.1% periods throttled | Acceptable for all workloads |
-| Caution | 80–95% of limit | 0.1–50% periods throttled | Acceptable for batch, avoid for latency-sensitive |
-| Dangerous | > 95% of limit | > 50% periods throttled | Redesign: increase limit or reduce request |
+| Region | Limit vs demand | Measured throttling ratio (Family B) | Recommendation |
+|--------|------------------|--------------------------------------|----------------|
+| Safe | limit >= demand (>= node capacity) | 0.0003 (100m/2000m), 0.0 (500m/2000m), 0.0 (1000m/2000m) | Acceptable for all workloads |
+| Caution | limit slightly below demand | **not observed** — throttling is bimodal for a saturating workload; retained as approximate guidance only | -- |
+| Dangerous | limit < demand | >= 0.98 for every limit <= 1000m: 100/100 0.999, 100/250 0.998, 100/500 0.9997 (max), 100/1000 0.983, 500/500 0.996, 500/1000 0.986, 1000/1000 0.980 | Redesign: increase limit or reduce request |
+
+Measured facts that update the thresholds:
+
+- **`request == limit` does not escape the Dangerous region.** Quota is enforced at the request value (100m/100m -> `cpu.max=10000`), so a workload that saturates its quota is throttled in ~98-100% of periods. The old assumption that Guaranteed QoS disables throttling is **not validated**; what protects a pod is usage well below the limit.
+- **Throttling onset is demand-driven, not request-driven.** With a saturating workload the throttling ratio is >= 0.98 for every limit <= 1000m and 0 for limit=2000m, regardless of the request (100m vs 1000m). A limit at/above actual CPU demand eliminates throttling entirely.
+- The previous 80%/95% limit-utilization bands were never measured; treat them as approximate until a non-saturating workload matrix is run.
 
 ### Experimental Validation Summary
 
-These thresholds are validated by 50+ experiment runs on a 3-node Fedora 44 cluster (Kernel 7.1, CRI-O, crun, Cilium, cgroup v2):
+These thresholds are validated by 50+ experiment runs on a 3-node Fedora 44 cluster (Kernel 7.1, CRI-O, crun, Cilium, cgroup v2), plus the six-family TASK-022 matrix (weight-share, request×limit, QoS hierarchy, latency interference, cpu-burst, tunables):
 
 - **Baseline (no limits)**: 0% throttling, ~246M usec CPU over 120s, 2 stress-ng threads at 200% total.
 - **100m limit**: 100% throttling, ~13M usec CPU (limit fully saturated), 94.6% of wall time spent throttled.
@@ -118,6 +124,32 @@ These thresholds are validated by 50+ experiment runs on a 3-node Fedora 44 clus
 - **Light workload (cpu-burner)**: 0% throttling across all 8 request/limit configs.
 - **Co-located**: LS pod (200m/500m) zero throttling, batch (1000m/2000m) only 4% throttled with cpu.weight=29 vs 100 for LS and batch respectively.
 
+TASK-022 six-family validated numbers (54+45+18+24+6+18 summary rows, data-integrity verified):
+
+- **Weight-share (A)** — proportional-share model `weight_i / Σweight_j` **validated within ~5 percentage points** (weight-share-analyze.py output, 15 rows = 5 cells x 3 pods). Measured achieved vs theoretical per ratio: 1:1 (500/500) 0.488/0.496, (800/800) 0.489/0.497; 1:4 (250/1000) 0.211/0.257; 1:5 (100/500) 0.173/0.221; 1:10 (100/1000) 0.103/0.144 for the low-weight pod (a), with the high-weight pod (b) correspondingly +0.03 above its model share. **ratio_error range −0.048..+0.034 (max |err| = 0.048 at the 1:5 cell)**. The low-weight pod systematically underachieves by 4-5 pp at wide ratios; the weight-1 BestEffort pod overachieves (0.019-0.034 achieved vs 0.006-0.013 model) — EEVDF minimum-share granularity. The 1:1 cells match within <1 pp.
+- **Request×limit matrix (B)** — throttling is bimodal for a saturating workload: ratio >= 0.98 for every limit <= 1000m (including quota==request cells: 100/100 0.999, 500/500 0.996, 1000/1000 0.980), and 0.0 for limit=2000m (node capacity) regardless of request. Max ratio 0.9997 at 100m/500m (heatmap CSV). **Guaranteed QoS does not disable throttling when the workload saturates its quota.**
+- **QoS hierarchy (C)** — two-level weight fact documented in the conversion table below. Achieved share with co-located classes (qos-analyze.py output, 6 rows incl. guaranteed): guaranteed 500m/500m 29.5% (throttled 3023/4000 periods, quota-capped at 0.5 core; pod-slice weight 20), burstable 500m/2000m 66.5% (pod-slice weight 20), besteffort 4.1% (weight 1); guaranteed 1000m/1000m 56.2% (throttled 2693/4013, pod-slice weight 39), burstable 250m/1000m 41.0% (pod-slice weight 10), besteffort 2.8%. The limit cap, not the hierarchy weight, dominates achieved share when limits differ.
+- **Latency interference (D)** — p50/p95/p99 (ms) per LS config with batch co-located (latency-analyze.py output, 4 cells):
+
+  | LS config | p50 | p95 | p99 |
+  |---|---|---|---|
+  | Guaranteed 500/500 | 32.0 | 58.7 | 79.8 |
+  | Burstable 250/1000 | 32.0 | 59.7 | 80.7 |
+  | Burstable 500/1000 | 32.0 | 57.4 | 77.8 |
+  | BestEffort (no req/limit) | 36.7 | 85.3 | **132.2** |
+
+  **BestEffort penalty: p99 132.2ms, +66% over Guaranteed (79.8ms)** purely from weight-1 scheduling (LS pods were idle, ~1.5% CPU, 0 throttled periods). Correlation with throttled time is weakly negative and not meaningful (p50 -0.33, p95 -0.39, p99 -0.37; throttled_usec ~0 across all cells, so the correlation is driven by noise).
+- **cpu-burst (E)** — with `cpu.max.burst` applied at 25000 (== quota; burst=100000 was rejected EINVAL by the kernel since burst > quota), throttling is **eliminated**: mean nr_throttled 105 -> 0, throttled_usec 5.28M -> 0 on the same 250m-limit workload.
+- **Tunables under contention (F)** — p99 mean (ms) per set (tunables-analyze.py output; n=3 each, slice columns n/a — the dataset has no `eevdf-slices.csv`, so the p99-only significance path was used):
+
+  | Tunable set | base_slice_ns applied | mean_p99 (ms) | std_p99 (ms) |
+  |---|---|---|---|
+  | default | 1400000 | 87.3 | 0.6 |
+  | base-slice-low | 1000000 | 85.0 | 1.1 |
+  | base-slice-high | 10000000 | 82.7 | 2.9 |
+
+  **Significance verdict (per the pinned contract's slice-optional rule): BOTH tunable changes are significant** — base-slice-high diff_p99 = −4.7ms vs noise_threshold 2.9ms (significant), base-slice-low diff_p99 = −2.3ms vs noise_threshold 1.1ms (significant). Both lower p99 than default; a larger base_slice (10ms) gave the largest reduction (−4.7ms).
+
 ### crun Conversion: CpuShares → cpu.weight
 
 The kubelet converts milliCPU requests to CpuShares using the formula:
@@ -126,17 +158,51 @@ The kubelet converts milliCPU requests to CpuShares using the formula:
 CpuShares = (milliCPU / 1000) * 1024
 ```
 
-The crun OCI runtime then converts CpuShares to the cgroup v2 `cpu.weight` value using a logarithmic formula. The theoretical mapping (to be validated experimentally):
+The crun OCI runtime then converts CpuShares to the cgroup v2 `cpu.weight` value using a logarithmic formula. **Measured mapping** (TASK-022, read from the summary `cpu_weight` column across families A/B/C/E and the earlier throttling-limits family):
 
-| milliCPU | CpuShares | cpu.weight (approx) |
-|----------|-----------|---------------------|
-| 100m     | 102       | 5                   |
-| 250m     | 256       | 10                  |
-| 500m     | 512       | 20                  |
-| 1000m    | 1024      | 100                 |
-| 2000m    | 2048      | ~500                |
+| milliCPU | CpuShares | cpu.weight (measured) |
+|----------|-----------|-----------------------|
+| none     | --        | 1                     |
+| 100m     | 102       | 17                    |
+| 200m     | 205       | 29                    |
+| 250m     | 256       | 35                    |
+| 500m     | 512       | 59                    |
+| 750m     | 768       | 80                    |
+| 800m     | 819       | 84                    |
+| 1000m    | 1024      | 100                   |
+| 1500m    | 1536      | 138                   |
 
-The cpu.weight values are approximate because crun applies a non-linear mapping. Run `make experiment-baseline` and check cgroup data to observe the actual values on your kernel/runtime combination.
+Notes on the measured mapping:
+
+- The earlier "approx" values (100m->5, 250m->10, 500m->20) were **wrong**; the measured crun conversion is roughly `weight ≈ 0.1 * milliCPU` (100m->17, 1000m->100, 1500m->138).
+- **1800m -> 160 is PROBE-DERIVED, not experiment-validated**: no request=1800m cell exists in any dataset (the only 1800m row is `request=100m-limit=1800m`, whose weight 17 comes from the 100m request). The 160 value was extrapolated from the probe kernel formula, not measured. Do not cite it as an experimental result; nearest measured value is 1500m -> 138.
+- The besteffort/no-request floor is weight=1 (not 0), which is why BestEffort pods still receive CPU under contention.
+
+#### Two-level weight fact (measured, Family C snapshots)
+
+The same request maps to different `cpu.weight` values at different levels of the cgroup hierarchy:
+
+| Level | cgroup | 500m request | 1000m request |
+|-------|--------|--------------|---------------|
+| Container | pod container | 59 | 100 |
+| Pod slice | `kubepods-pod<uid>.slice` (Guaranteed direct) | 20 | 39 |
+| Pod slice | `kubepods-burstable-pod<uid>.slice` | 20 | -- (250m -> 10) |
+| QoS slice | `kubepods-burstable.slice` | 28 (20 + 4 + 4 idle pods) | 18 (10 + 4 + 4) |
+| QoS slice | `kubepods-besteffort.slice` | 1 | 1 |
+| Root | `kubepods.slice` | 79 | 79 |
+
+EEVDF distributes time hierarchically: first among `kubepods.slice` children, then inside each QoS slice among pod slices, then inside the pod slice among containers. The pod-slice weights are ~2.5-3x lower than the container weights, so a pod's effective share depends on the weights of its sibling pods at every level, not only on its container weight.
+
+### Validated Interaction Findings (TASK-022)
+
+Six families (weight-share, request×limit, QoS hierarchy, latency interference, cpu-burst, tunables) were run on the 3-node cluster and data-integrity verified. The quantitative conclusions:
+
+1. **The proportional-share model holds.** Under pure contention (requests only, no limits), achieved CPU share tracks `weight_i / Σweight_j` within ~5 pp; 1:1 cells match within <1 pp. The model slightly over-predicts the low-weight pod (by 4-5 pp at 1:4/1:5/1:10 ratios) and under-predicts BestEffort (weight-1) pods, which always receive at least a small share.
+2. **Limits override weights.** Once a limit is below demand, achieved share is set by the quota cap (throttling), not by the hierarchy weight — a guaranteed 500m/500m pod achieved 29.5% while a burstable 500m/2000m pod achieved 66.5% in the same cell. Guaranteed QoS protects latency only when usage is far below the (enforced) quota.
+3. **Throttling is bimodal for saturating workloads.** Ratio >= 0.98 whenever limit < demand, 0 when limit >= demand. There is no measured middle band; the Caution region is approximate.
+4. **`cpu.max.burst` eliminates throttling when applied** (burst=25000 == quota; burst > quota is rejected EINVAL). This is the only tested mechanism that removes throttling without raising the limit.
+5. **BestEffort co-location costs ~66% p99 latency** (132.2ms vs 77.8-80.7ms for requested pods) even when the LS pod is idle, purely from weight-1 scheduling.
+6. **EEVDF tunables moved p99 by <= 5ms and BOTH changes were significant under the pinned slice-optional rule** (82.7-87.3ms across default/low/high base_slice; base-slice-high diff −4.7ms > noise 2.9ms, base-slice-low diff −2.3ms > noise 1.1ms). Slice-duration columns are n/a — the dataset lacks `eevdf-slices.csv`, so the p99-only significance path was used.
 
 ---
 
@@ -248,7 +314,7 @@ Before rolling to production, validate the parameters in a staging environment:
 
 ## Key Insights
 
-1. **Guaranteed QoS eliminates throttling in cgroup v2 with crun.** When `request == limit`, the CFS quota is effectively disabled. This is the single most important finding for latency-sensitive workloads.
+1. **Guaranteed QoS (request == limit) does NOT disable the CFS quota on this cluster.** Measured `cpu.max` equals the request (`100m/100m` -> `10000 100000`), and a workload that saturates its quota is throttled in >= 98% of periods (Family B). Guaranteed QoS still benefits latency-sensitive workloads whose usage stays far below the quota: the 500m/500m API pod used ~1.5% CPU and was never throttled even with a CPU-bound neighbor.
 
 2. **CPU requests protect during contention, not during idle.** Without contention, a pod with 100m request can use all available CPU. The request only matters when multiple pods compete for CPU time.
 
@@ -353,7 +419,7 @@ EEVDF exposes several tunables via `/sys/kernel/debug/sched/`:
 
 | Tunable | Description | Default | Impact |
 |---------|-------------|---------|--------|
-| `base_slice_ns` | Base time slice for a weight-100 task | 3,000,000 (3ms) | Smaller = more context switches, lower latency; larger = higher throughput |
+| `base_slice_ns` | Base time slice for a weight-100 task | 3,000,000 (3ms) in kernel docs; **measured cluster default 1,400,000 (1.4ms, TASK-022)** | Smaller = more context switches, lower latency; larger = higher throughput |
 | `migration_cost_ns` | Cost estimate for task migration between CPUs | 500,000 (500us) | Higher = less migration, potential load imbalance |
 | `nr_migrate` | Max tasks to migrate in a single balance pass | 32 | Higher = faster load balancing, more overhead |
 
