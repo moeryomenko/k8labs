@@ -396,29 +396,43 @@ perfetto-plots: ## Generate CPU execution time plots from Perfetto analysis
 	echo "Plots generated in: $(PERFETTO_ANALYSIS_DIR)/perfetto-plots/"
 
 .PHONY: perfetto-view
-perfetto-view: ## Serve the newest Perfetto trace with the TraceProcessor httpd and open the Perfetto UI
+perfetto-view: ## Serve the newest Perfetto trace with the CORS static server and open the Perfetto UI
 	@trace="$$(find "$(EXPERIMENTS_DIR)/data" -name '*.perfetto-trace' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"; \
 	if [[ -z "$${trace}" ]]; then \
 		echo "  No Perfetto traces found. Run an experiment with --perfetto first."; \
 		exit 0; \
 	fi; \
-	tp="$$(find "$${HOME}/.local/share/perfetto/prebuilts" -maxdepth 1 -name 'trace_processor_shell-*' -type f 2>/dev/null | head -1 || true)"; \
-	if [[ -z "$${tp}" || ! -x "$${tp}" ]]; then \
-		echo "  trace_processor_shell not found in $${HOME}/.local/share/perfetto/prebuilts. Install the perfetto Python package and use it once to download the prebuilt." >&2; \
+	trace_dir="$$(dirname -- "$${trace}")"; \
+	trace_name="$$(basename -- "$${trace}")"; \
+	serve="$(PERFETTO_BIN_DIR)/perfetto-serve.py"; \
+	if [[ ! -f "$${serve}" ]]; then \
+		echo "  perfetto-serve.py not found: $${serve}" >&2; \
 		exit 1; \
 	fi; \
 	port="$${PERFETTO_VIEW_PORT:-9001}"; \
 	echo "  Serving newest trace: $${trace}"; \
-	"$${tp}" --httpd --http-port "$${port}" "$${trace}" & \
-	tp_pid=$$!; \
-	trap 'kill "$${tp_pid}" 2>/dev/null || true' EXIT INT TERM; \
-	url="https://ui.perfetto.dev/#!/?url=http://127.0.0.1:$${port}"; \
+	python3 "$${serve}" --port "$${port}" --dir "$${trace_dir}" & \
+	serve_pid=$$!; \
+	trap 'kill "$${serve_pid}" 2>/dev/null || true' EXIT INT TERM; \
+	if command -v curl &>/dev/null; then \
+		deadline=$$((SECONDS + 10)); \
+		until curl -fsSI -o /dev/null "http://127.0.0.1:$${port}/$${trace_name}" 2>/dev/null; do \
+			if (( SECONDS > deadline )); then \
+				echo "  perfetto-serve did not accept connections on port $${port} within 10s" >&2; \
+				exit 1; \
+			fi; \
+			sleep 0.2; \
+		done; \
+	else \
+		sleep 1; \
+	fi; \
+	url="https://ui.perfetto.dev/#!/?url=http://127.0.0.1:$${port}/$${trace_name}"; \
 	echo "  $${url}"; \
 	if command -v xdg-open &>/dev/null; then \
-		xdg-open "$${url}" 2>/dev/null || true; \
+		xdg-open "$${url}" 2>/dev/null & \
 	fi; \
 	echo "  Press Ctrl-C to stop the trace server."; \
-	wait "$${tp_pid}"
+	wait "$${serve_pid}"
 
 .PHONY: perfetto-clean
 perfetto-clean: ## Remove all Perfetto trace data from experiment data

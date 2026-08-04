@@ -8,7 +8,18 @@ Usage:
 
 Loads .perfetto-trace files via Perfetto Trace Processor and runs SQL queries
 to extract per-thread CPU execution, per-core utilization, per-process
-summary, and scheduling wakeup latency.  Results are saved as CSVs.
+summary, scheduling wakeup latency, and per-task runtime samples.  Results
+are saved as CSVs.
+
+The trace is loaded with raw ftrace ingestion enabled
+(``TraceProcessorConfig(ingest_ftrace_in_raw=True)``), which is required for
+kernel scheduler events (``sched_waking``, ``sched_stat_runtime``) to be
+queryable through the ``ftrace_event`` table.
+
+Known limitation: the Fedora 44 kernel's ``sched_stat_runtime`` tracepoint
+carries no ``vruntime`` field, so EEVDF virtual-runtime analysis cannot be
+derived from Perfetto traces.  EEVDF vruntime analysis is served by
+``research/bin/eevdf-observe.sh`` (``/proc/<pid>/sched``), not Perfetto.
 
 The module is also importable — callers can access the SQL query constants
 and the process_trace() / process_trace_file() functions directly.
@@ -81,21 +92,81 @@ GROUP BY process.pid
 ORDER BY cpu_time_ms DESC
 """
 
-# Query 4 — scheduling wakeup latency
+# Query 4 — scheduling wakeup latency (real, from raw ftrace)
+#
+# sched_waking raw ftrace events carry the WAKER in ftrace_event.utid; the
+# woken task is identified by the 'pid' arg, so it is mapped back through
+# thread.tid.  Latency is the time until the woken utid's next sched_slice.
 QUERY_SCHED_LATENCY = """
 SELECT
   process.pid,
-  thread.tid,
-  thread.name AS thread_name,
-  (sched.ts - waked.ts) / 1000.0 AS wakeup_latency_ms,
+  t_woken.tid,
+  COALESCE(t_woken.name, a_comm.string_value) AS thread_name,
+  AVG((next_slice.ts - w.ts) / 1000000.0) AS wakeup_latency_ms,
   COUNT(*) AS count
-FROM sched_waking AS waked
-INNER JOIN thread ON waked.utid = thread.utid
-INNER JOIN process ON thread.upid = process.upid
-LEFT JOIN sched_slice AS sched ON waked.utid = sched.utid
-  AND sched.ts > waked.ts
-WHERE sched.ts IS NOT NULL
-GROUP BY process.pid, thread.tid
+FROM ftrace_event AS w
+JOIN args AS a_comm ON w.arg_set_id = a_comm.arg_set_id AND a_comm.key = 'comm'
+JOIN args AS a_pid ON w.arg_set_id = a_pid.arg_set_id AND a_pid.key = 'pid'
+JOIN args AS a_prio ON w.arg_set_id = a_prio.arg_set_id AND a_prio.key = 'prio'
+JOIN thread AS t_woken ON t_woken.tid = a_pid.int_value
+JOIN process ON t_woken.upid = process.upid
+JOIN (
+  SELECT
+    w2.id AS waked_id,
+    MIN(s.ts) AS ts
+  FROM ftrace_event AS w2
+  JOIN args AS a_pid2 ON w2.arg_set_id = a_pid2.arg_set_id AND a_pid2.key = 'pid'
+  JOIN thread AS t2 ON t2.tid = a_pid2.int_value
+  JOIN sched_slice AS s ON s.utid = t2.utid AND s.ts >= w2.ts
+  WHERE w2.name = 'sched_waking'
+  GROUP BY w2.id
+) AS next_slice ON next_slice.waked_id = w.id
+WHERE w.name = 'sched_waking'
+GROUP BY process.pid, t_woken.tid, COALESCE(t_woken.name, a_comm.string_value)
+ORDER BY count DESC
+"""
+
+# Query 5 — per-task runtime samples from raw ftrace
+#
+# sched_stat_runtime on this kernel carries exactly comm/pid/runtime args
+# (runtime is in int_value; there is NO vruntime field — see module docstring).
+QUERY_SCHED_RUNTIME = """
+SELECT
+  r.ts,
+  r.cpu,
+  a_pid.int_value AS pid,
+  t.tid,
+  COALESCE(t.name, a_comm.string_value) AS thread_name,
+  a_runtime.int_value AS runtime_ns
+FROM ftrace_event AS r
+JOIN args AS a_comm ON r.arg_set_id = a_comm.arg_set_id AND a_comm.key = 'comm'
+JOIN args AS a_pid ON r.arg_set_id = a_pid.arg_set_id AND a_pid.key = 'pid'
+JOIN args AS a_runtime ON r.arg_set_id = a_runtime.arg_set_id AND a_runtime.key = 'runtime'
+LEFT JOIN thread AS t ON t.tid = a_pid.int_value
+WHERE r.name = 'sched_stat_runtime'
+ORDER BY r.ts
+"""
+
+# Query 6 — task migrations from raw ftrace
+#
+# sched_migrate_task carries comm/pid/prio/orig_cpu/dest_cpu args; the pid arg
+# is the migrated task's tid, mapped back through thread.tid like the other
+# scheduler queries.
+QUERY_SCHED_MIGRATIONS = """
+SELECT
+  m.ts,
+  m.cpu,
+  a_pid.int_value AS pid,
+  t.tid,
+  COALESCE(t.name, a_comm.string_value) AS thread_name,
+  a_dest.int_value AS dest_cpu
+FROM ftrace_event AS m
+JOIN args AS a_comm ON m.arg_set_id = a_comm.arg_set_id AND a_comm.key = 'comm'
+JOIN args AS a_pid ON m.arg_set_id = a_pid.arg_set_id AND a_pid.key = 'pid'
+JOIN args AS a_dest ON m.arg_set_id = a_dest.arg_set_id AND a_dest.key = 'dest_cpu'
+LEFT JOIN thread AS t ON t.tid = a_pid.int_value
+WHERE m.name = 'sched_migrate_task'
+ORDER BY m.ts
 """
 
 # Output CSV column headers for empty-result fallback.
@@ -127,6 +198,22 @@ EMPTY_HEADERS: dict[str, list[str]] = {
         "thread_name",
         "wakeup_latency_ms",
         "count",
+    ],
+    "perfetto-sched-runtime.csv": [
+        "ts",
+        "cpu",
+        "pid",
+        "tid",
+        "thread_name",
+        "runtime_ns",
+    ],
+    "perfetto-sched-migrations.csv": [
+        "ts",
+        "cpu",
+        "pid",
+        "tid",
+        "thread_name",
+        "dest_cpu",
     ],
 }
 
@@ -175,8 +262,29 @@ def process_trace_file(trace_path: str, output_dir: str) -> None:
     """
     from perfetto.trace_processor import TraceProcessor
 
+    # TraceProcessorConfig is part of the perfetto 0.57.x API.  Some
+    # environments (e.g. minimal test doubles) expose only TraceProcessor;
+    # fall back to the default config there so analysis still runs.
+    try:
+        from perfetto.trace_processor import TraceProcessorConfig
+    except ImportError:
+        TraceProcessorConfig = None
+
     log(f"Loading trace: {trace_path}")
-    tp = TraceProcessor(file_path=trace_path)
+    # Raw ftrace ingestion is required for sched_waking / sched_stat_runtime
+    # to be queryable via ftrace_event; the default config drops them.
+    if TraceProcessorConfig is None:
+        log(
+            "  TraceProcessorConfig unavailable — using default config "
+            "(raw ftrace not ingested; scheduler ftrace events invisible)",
+            level="warn",
+        )
+        tp = TraceProcessor(file_path=trace_path)
+    else:
+        tp = TraceProcessor(
+            file_path=trace_path,
+            config=TraceProcessorConfig(ingest_ftrace_in_raw=True),
+        )
 
     # Query 1 — per-thread CPU execution
     try:
@@ -260,22 +368,35 @@ ORDER BY cpu_time_ms DESC
             EMPTY_HEADERS["perfetto-process-summary.csv"],
         )
 
-    # Query 4 — scheduling wakeup latency
+    # Query 4 — scheduling wakeup latency (real, from raw ftrace)
     try:
         result = tp.query("""
 SELECT
   process.pid,
-  thread.tid,
-  thread.name AS thread_name,
-  (sched.ts - waked.ts) / 1000.0 AS wakeup_latency_ms,
+  t_woken.tid,
+  COALESCE(t_woken.name, a_comm.string_value) AS thread_name,
+  AVG((next_slice.ts - w.ts) / 1000000.0) AS wakeup_latency_ms,
   COUNT(*) AS count
-FROM sched_waking AS waked
-INNER JOIN thread ON waked.utid = thread.utid
-INNER JOIN process ON thread.upid = process.upid
-LEFT JOIN sched_slice AS sched ON waked.utid = sched.utid
-  AND sched.ts > waked.ts
-WHERE sched.ts IS NOT NULL
-GROUP BY process.pid, thread.tid
+FROM ftrace_event AS w
+JOIN args AS a_comm ON w.arg_set_id = a_comm.arg_set_id AND a_comm.key = 'comm'
+JOIN args AS a_pid ON w.arg_set_id = a_pid.arg_set_id AND a_pid.key = 'pid'
+JOIN args AS a_prio ON w.arg_set_id = a_prio.arg_set_id AND a_prio.key = 'prio'
+JOIN thread AS t_woken ON t_woken.tid = a_pid.int_value
+JOIN process ON t_woken.upid = process.upid
+JOIN (
+  SELECT
+    w2.id AS waked_id,
+    MIN(s.ts) AS ts
+  FROM ftrace_event AS w2
+  JOIN args AS a_pid2 ON w2.arg_set_id = a_pid2.arg_set_id AND a_pid2.key = 'pid'
+  JOIN thread AS t2 ON t2.tid = a_pid2.int_value
+  JOIN sched_slice AS s ON s.utid = t2.utid AND s.ts >= w2.ts
+  WHERE w2.name = 'sched_waking'
+  GROUP BY w2.id
+) AS next_slice ON next_slice.waked_id = w.id
+WHERE w.name = 'sched_waking'
+GROUP BY process.pid, t_woken.tid, COALESCE(t_woken.name, a_comm.string_value)
+ORDER BY count DESC
 """)
         _save_or_empty(
             os.path.join(output_dir, "perfetto-sched-latency.csv"),
@@ -287,6 +408,66 @@ GROUP BY process.pid, thread.tid
         _write_empty_csv(
             os.path.join(output_dir, "perfetto-sched-latency.csv"),
             EMPTY_HEADERS["perfetto-sched-latency.csv"],
+        )
+
+    # Query 5 — per-task runtime samples from raw ftrace
+    try:
+        result = tp.query("""
+SELECT
+  r.ts,
+  r.cpu,
+  a_pid.int_value AS pid,
+  t.tid,
+  COALESCE(t.name, a_comm.string_value) AS thread_name,
+  a_runtime.int_value AS runtime_ns
+FROM ftrace_event AS r
+JOIN args AS a_comm ON r.arg_set_id = a_comm.arg_set_id AND a_comm.key = 'comm'
+JOIN args AS a_pid ON r.arg_set_id = a_pid.arg_set_id AND a_pid.key = 'pid'
+JOIN args AS a_runtime ON r.arg_set_id = a_runtime.arg_set_id AND a_runtime.key = 'runtime'
+LEFT JOIN thread AS t ON t.tid = a_pid.int_value
+WHERE r.name = 'sched_stat_runtime'
+ORDER BY r.ts
+""")
+        _save_or_empty(
+            os.path.join(output_dir, "perfetto-sched-runtime.csv"),
+            "perfetto-sched-runtime.csv",
+            result,
+        )
+    except Exception as exc:
+        log(f"  perfetto-sched-runtime.csv — query failed: {exc}", level="warn")
+        _write_empty_csv(
+            os.path.join(output_dir, "perfetto-sched-runtime.csv"),
+            EMPTY_HEADERS["perfetto-sched-runtime.csv"],
+        )
+
+    # Query 6 — task migrations from raw ftrace
+    try:
+        result = tp.query("""
+SELECT
+  m.ts,
+  m.cpu,
+  a_pid.int_value AS pid,
+  t.tid,
+  COALESCE(t.name, a_comm.string_value) AS thread_name,
+  a_dest.int_value AS dest_cpu
+FROM ftrace_event AS m
+JOIN args AS a_comm ON m.arg_set_id = a_comm.arg_set_id AND a_comm.key = 'comm'
+JOIN args AS a_pid ON m.arg_set_id = a_pid.arg_set_id AND a_pid.key = 'pid'
+JOIN args AS a_dest ON m.arg_set_id = a_dest.arg_set_id AND a_dest.key = 'dest_cpu'
+LEFT JOIN thread AS t ON t.tid = a_pid.int_value
+WHERE m.name = 'sched_migrate_task'
+ORDER BY m.ts
+""")
+        _save_or_empty(
+            os.path.join(output_dir, "perfetto-sched-migrations.csv"),
+            "perfetto-sched-migrations.csv",
+            result,
+        )
+    except Exception as exc:
+        log(f"  perfetto-sched-migrations.csv — query failed: {exc}", level="warn")
+        _write_empty_csv(
+            os.path.join(output_dir, "perfetto-sched-migrations.csv"),
+            EMPTY_HEADERS["perfetto-sched-migrations.csv"],
         )
 
 

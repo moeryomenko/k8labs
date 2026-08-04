@@ -1,12 +1,14 @@
 """Tests for perfetto-analyze.py — Perfetto trace analysis pipeline.
 
-Test categories (24 tests total):
+Test categories (29 tests total):
   1. CLI argument parsing        (5 tests)
   2. Error handling              (5 tests)
   3. SQL query validation        (4 tests)
   4. CSV output                  (4 tests)
   5. Edge cases / resilience     (4 tests)
   6. Trace directory discovery   (2 tests, TASK-001: recursive discovery + --trace-dir alias)
+  7. Raw ftrace + sched contracts (5 tests, TASK-002/003: ingest_ftrace_in_raw,
+     ftrace-based wakeup/runtime SQL, CSV header contracts)
 """
 
 from __future__ import annotations
@@ -86,6 +88,38 @@ def extract_sql_queries(script_path: str | None = None) -> list[str]:
             queries.append(sql)
 
     return queries
+
+
+def read_analyze_source(script_path: str | None = None) -> str:
+    """Return the analyzer script source text (empty string if missing)."""
+    path = script_path or ANALYZE_SCRIPT
+    if not os.path.isfile(path):
+        return ""
+    return pathlib.Path(path).read_text()
+
+
+def extract_csv_headers(csv_name: str, script_path: str | None = None) -> list[str]:
+    """Extract the header list literal declared next to *csv_name* in the script.
+
+    Matches dict-style entries ``"<csv_name>": [ "col", ... ]`` (the analyzer's
+    EMPTY_HEADERS, or any equivalent contract dict).  Returns [] when the CSV
+    has no declared header contract in the script.
+    """
+    source = read_analyze_source(script_path)
+    match = re.search(
+        re.escape(csv_name) + r'"?\s*:\s*\[(.*?)\]',
+        source,
+        re.DOTALL,
+    )
+    if not match:
+        return []
+    return re.findall(r"""['"]([^'"]+)['"]""", match.group(1))
+
+
+def has_arg_key(sql: str, key: str) -> bool:
+    """True when *sql* uses *key* as an args value (single- or double-quoted)."""
+    lowered = sql.lower()
+    return f"'{key}'" in lowered or f'"{key}"' in lowered
 
 
 # =========================================================================
@@ -552,3 +586,99 @@ class TestTraceDirectoryDiscovery:
                 csv_path = trace_out / name
                 assert csv_path.is_file(), f"missing CSV {name} in {trace_out}"
                 assert csv_path.stat().st_size > 0, f"empty CSV {csv_path}"
+
+
+# =========================================================================
+# 7. Raw ftrace ingestion + scheduler SQL/CSV contracts (5 tests, TASK-002/003)
+#
+# REQ-A1: traces MUST load with raw ftrace ingestion enabled —
+#         TraceProcessorConfig(ingest_ftrace_in_raw=True). The current default
+#         TraceProcessor(file_path=...) config does not import raw ftrace, so
+#         sched_waking / sched_stat_runtime are not queryable and
+#         perfetto-sched-latency.csv is header-only.
+# REQ-A2: two new SQL queries must be present:
+#         - wakeup latency: ftrace_event (sched_waking) + args keys
+#           comm/pid/prio + thread mapping + next sched_slice of the woken utid
+#           (existing consumers plot-perfetto-cpu.py / sched-latency-heatmap.py
+#           depend on this contract);
+#         - per-task runtime samples: ftrace_event (sched_stat_runtime) + args
+#           keys comm/pid/runtime (runtime stored in int_value).
+# REQ-A3: EMPTY_HEADERS (or equivalent) must declare the CSV header contracts:
+#         perfetto-sched-latency.csv -> pid,tid,thread_name,wakeup_latency_ms,count
+#         perfetto-sched-runtime.csv -> ts,cpu,pid,tid,thread_name,runtime_ns
+# =========================================================================
+
+
+class TestRawFtraceConfig:
+    """REQ-A1 — the analyzer loads traces with raw ftrace ingestion enabled."""
+
+    def test_trace_processor_config_enables_raw_ftrace(self):
+        """TraceProcessorConfig with ingest_ftrace_in_raw=True is used."""
+        source = read_analyze_source()
+        assert "TraceProcessorConfig" in source, (
+            "analyzer must build a TraceProcessorConfig — the default "
+            "TraceProcessor(file_path=...) config does not ingest raw ftrace, "
+            "so sched_waking/sched_stat_runtime are not queryable"
+        )
+        assert re.search(r"ingest_ftrace_in_raw\s*=\s*True", source) is not None, (
+            "missing ingest_ftrace_in_raw=True in TraceProcessorConfig — "
+            "raw ftrace events are not imported without it"
+        )
+
+
+class TestFtraceSqlQueries:
+    """REQ-A2 — the ftrace-based wakeup-latency and runtime SQL queries exist."""
+
+    def _find_ftrace_query(self, marker: str) -> str | None:
+        """Return the first extracted query joining ftrace_event with *marker*."""
+        queries = extract_sql_queries()
+        return next(
+            (q for q in queries if "ftrace_event" in q.lower() and marker in q.lower()),
+            None,
+        )
+
+    def test_wakeup_latency_query_traces_sched_waking(self):
+        """Wakeup-latency query joins sched_waking args (comm/pid/prio) to sched_slice."""
+        query = self._find_ftrace_query("sched_waking")
+        assert query is not None, "no ftrace_event query referencing sched_waking found"
+        lower = query.lower()
+        for frag in ("sched_waking", "ftrace_event", "sched_slice"):
+            assert frag in lower, f"missing '{frag}' in wakeup-latency query"
+        for key in ("comm", "pid", "prio"):
+            assert has_arg_key(query, key), (
+                f"missing args key '{key}' in wakeup-latency query"
+            )
+
+    def test_runtime_query_traces_sched_stat_runtime(self):
+        """Per-task runtime query reads sched_stat_runtime args (comm/pid/runtime)."""
+        query = self._find_ftrace_query("sched_stat_runtime")
+        assert query is not None, (
+            "no ftrace_event query referencing sched_stat_runtime found"
+        )
+        lower = query.lower()
+        for frag in ("sched_stat_runtime", "ftrace_event"):
+            assert frag in lower, f"missing '{frag}' in runtime query"
+        for key in ("comm", "pid", "runtime"):
+            assert has_arg_key(query, key), f"missing args key '{key}' in runtime query"
+
+
+class TestCsvHeaderContracts:
+    """REQ-A3 — EMPTY_HEADERS (or equivalent) declares each output CSV contract."""
+
+    def test_sched_latency_csv_header_contract(self):
+        """perfetto-sched-latency.csv declares pid,tid,thread_name,wakeup_latency_ms,count."""
+        headers = extract_csv_headers("perfetto-sched-latency.csv")
+        expected = {"pid", "tid", "thread_name", "wakeup_latency_ms", "count"}
+        assert expected.issubset(set(headers)), (
+            "perfetto-sched-latency.csv contract missing columns: "
+            f"{expected - set(headers)} (got {headers})"
+        )
+
+    def test_sched_runtime_csv_header_contract(self):
+        """perfetto-sched-runtime.csv declares ts,cpu,pid,tid,thread_name,runtime_ns."""
+        headers = extract_csv_headers("perfetto-sched-runtime.csv")
+        expected = {"ts", "cpu", "pid", "tid", "thread_name", "runtime_ns"}
+        assert expected.issubset(set(headers)), (
+            "perfetto-sched-runtime.csv contract missing columns: "
+            f"{expected - set(headers)} (got {headers})"
+        )

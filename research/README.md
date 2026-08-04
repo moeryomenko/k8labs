@@ -272,7 +272,42 @@ make perfetto-plots
 | `make perfetto-capture` | Interactive capture from a node |
 | `make perfetto-analyze` | Analyze all traces in experiment data |
 | `make perfetto-plots` | Generate CPU execution time plots |
+| `make perfetto-view` | Serve the newest trace and open it in the Perfetto UI |
 | `make perfetto-clean` | Remove all Perfetto trace data |
+
+### Viewing Traces
+
+`make perfetto-view` serves the newest `*.perfetto-trace` under
+`experiments/data` (recursive, newest mtime) as a raw file over HTTP via the
+read-only CORS server `perfetto/bin/perfetto-serve.py`, then opens
+`https://ui.perfetto.dev/#!/?url=http://127.0.0.1:<port>/<trace-basename>`.
+The Perfetto UI treats the `?url=` parameter as a raw trace file: it fetches the
+URL and the in-browser WASM trace processor parses the returned bytes. The
+server binds `127.0.0.1` only and sends
+`Access-Control-Allow-Origin: https://ui.perfetto.dev` on every response so the
+UI's fetch succeeds. Override the port with `PERFETTO_VIEW_PORT` (default 9001).
+Press Ctrl-C to stop the server; it is killed on EXIT/INT/TERM.
+
+**Why the old recipe failed:** the previous target ran
+`trace_processor --httpd --http-port <port>` and opened the bare URL
+`https://ui.perfetto.dev/#!/?url=http://127.0.0.1:<port>`. The Perfetto UI still
+treats a bare localhost URL as a raw trace file, but the httpd root returns a
+plain-text RPC help page instead of trace bytes, so the WASM parser failed with
+"Unknown trace type provided (ERR:fmt)".
+
+**Alternative for very large traces:** if the trace is too big to fetch into the
+browser efficiently, use the native trace processor acceleration instead:
+
+```bash
+trace_processor --httpd --http-port 9001 /path/to/trace.perfetto-trace
+# then open https://ui.perfetto.dev and click YES on the
+# "Trace Processor native acceleration" dialog (Enter the "Add Trace
+# Processor" / httpd URL as http://127.0.0.1:9001)
+```
+
+The httpd server is an RPC server, not a file server — it must never be
+referenced with a bare `?url=http://127.0.0.1:<port>` URL, because that path
+makes the UI treat the RPC help page as a raw trace.
 
 ## File Structure
 
