@@ -103,3 +103,83 @@ setup() {
     [[ "$output" == *"stop"* ]] || [[ "$output" == *"SIGTERM"* ]] || [[ "$output" == *"kill"* ]]
     [[ "$output" == *"download"* ]] || [[ "$output" == *"SCP"* ]] || [[ "$output" == *"scp"* ]]
 }
+
+# =============================================================================
+# REQ-003: _reconstruct_remote_path extracts /tmp/<name>.perfetto-trace
+#          from /proc/<pid>/cmdline
+#
+# The real script is sourced with its trailing `main "$@"` disabled (via a
+# temp fixture copy) so the function can be unit-tested directly. ssh is
+# stubbed via PATH to simulate the remote `cat /proc/<pid>/cmdline` output.
+# =============================================================================
+
+@test "P14: REQ-003 _reconstruct_remote_path extracts trace path from cmdline" {
+    local stub_dir
+    stub_dir="$(mktemp -d)"
+    cat > "$stub_dir/ssh" <<'STUB'
+#!/bin/bash
+# Simulate remote `cat /proc/<pid>/cmdline | tr '\0' ' '` output
+printf '%s\n' 'nohup /usr/bin/tracebox -o /tmp/cpu-trace-123.perfetto-trace -c /tmp/cpu.cfg'
+exit 0
+STUB
+    chmod +x "$stub_dir/ssh"
+
+    local tmp_stop
+    tmp_stop="$(mktemp)"
+    sed -e '/^main "\$@"$/d' \
+        -e "s|source \"\$SCRIPT_DIR/perfetto-common.sh\"|source \"$PERFETTO_BIN/perfetto-common.sh\"|" \
+        "$PERFETTO_STOP_SH" > "$tmp_stop"
+
+    run env PATH="$stub_dir:$PATH" bash -c "
+        source '$tmp_stop'
+        _reconstruct_remote_path '192.168.122.10' '1234'
+    "
+    [ "$status" -eq 0 ]
+    [ "$output" = "/tmp/cpu-trace-123.perfetto-trace" ]
+    rm -rf "$stub_dir" "$tmp_stop"
+}
+
+@test "P15: REQ-003 _reconstruct_remote_path fails when cmdline has no trace path" {
+    local stub_dir
+    stub_dir="$(mktemp -d)"
+    cat > "$stub_dir/ssh" <<'STUB'
+#!/bin/bash
+# cmdline without any /tmp/*.perfetto-trace output path
+printf '%s\n' '/usr/bin/tracebox -o /tmp/plain-output.txt -c /tmp/cpu.cfg'
+exit 0
+STUB
+    chmod +x "$stub_dir/ssh"
+
+    local tmp_stop
+    tmp_stop="$(mktemp)"
+    sed -e '/^main "\$@"$/d' \
+        -e "s|source \"\$SCRIPT_DIR/perfetto-common.sh\"|source \"$PERFETTO_BIN/perfetto-common.sh\"|" \
+        "$PERFETTO_STOP_SH" > "$tmp_stop"
+
+    run env PATH="$stub_dir:$PATH" bash -c "
+        source '$tmp_stop'
+        _reconstruct_remote_path '192.168.122.10' '4321'
+    "
+    [ "$status" -ne 0 ]
+    rm -rf "$stub_dir" "$tmp_stop"
+}
+
+# =============================================================================
+# REQ-002: local trace filename keeps the .perfetto-trace suffix
+# =============================================================================
+
+@test "P16: REQ-002 stop dry-run local path keeps .perfetto-trace basename" {
+    run env DRY_RUN=true bash "$PERFETTO_STOP_SH" "192.168.122.10" "1234" --output-dir /tmp/perfetto-out
+    [ "$status" -eq 0 ]
+    # Dry-run fakes the reconstructed remote path as /tmp/trace-<pid>.perfetto-trace
+    [[ "$output" == *"/tmp/trace-1234.perfetto-trace"* ]]
+    # Local download path is <output-dir>/<basename> with the suffix intact
+    [[ "$output" == *"/tmp/perfetto-out/trace-1234.perfetto-trace"* ]]
+}
+
+@test "P17: REQ-002 stop with --remote-path downloads to output-dir/<basename>.perfetto-trace" {
+    run env DRY_RUN=true bash "$PERFETTO_STOP_SH" "192.168.122.10" "1234" \
+        --output-dir /tmp/perfetto-out --remote-path /tmp/whatever.perfetto-trace
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/tmp/perfetto-out/whatever.perfetto-trace"* ]]
+}

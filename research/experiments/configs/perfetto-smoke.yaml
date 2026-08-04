@@ -1,0 +1,16 @@
+experiment:
+  name: perfetto-smoke
+  description: "Perfetto capture smoke test — 30s eevdf-deep trace lifecycle check with light stress-ng load"
+replicates: 1
+pre_warm: 5
+duration: 30
+cooldown: 5
+workload:
+  type: stress-ng
+  params:
+    cores: 1
+    load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: "250m"

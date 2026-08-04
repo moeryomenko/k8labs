@@ -174,3 +174,22 @@ setup() {
     [[ "$output" == *"capture"* ]] || [[ "$output" == *"lifecycle"* ]] || [[ "$output" == *"orchestrat"* ]]
     [[ "$output" == *"start"* ]] && [[ "$output" == *"stop"* ]]
 }
+
+# =============================================================================
+# REQ-001 (amended): capture dry-run tracebox command MUST pass --txt (pbtxt
+# config parsing; trace OUTPUT is always binary protobuf)
+# =============================================================================
+
+@test "R24: REQ-001 capture dry-run tracebox command contains --txt" {
+    run bash "$PERFETTO_CAPTURE_SH" "192.168.122.10" "scheduling" --duration 10 --dry-run
+    [ "$status" -eq 0 ]
+    # The dry-run plan still emits the tracebox invocation...
+    [[ "$output" == *"tracebox"* ]]
+    # ...with --txt: per `tracebox --help`, "--txt : Parse config as pbtxt".
+    # The repo .cfg files are pbtxt text configs; without --txt tracebox
+    # rejects them ("The trace config is invalid, bailing out."). Trace
+    # OUTPUT is always binary protobuf regardless of --txt.
+    # EXPECTED TO FAIL pre-restore: --txt was stripped from the plan text;
+    # green once the restore lands.
+    [[ "$output" == *"--txt"* ]]
+}

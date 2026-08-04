@@ -113,3 +113,81 @@ setup() {
     # Should contain some description of starting a trace
     [[ "$output" == *"trace"* ]] || [[ "$output" == *"perfetto"* ]] || [[ "$output" == *"start"* ]]
 }
+
+# =============================================================================
+# REQ-001 (amended): tracebox command MUST pass --txt (pbtxt config parsing;
+# trace OUTPUT is always binary protobuf regardless of --txt)
+# =============================================================================
+
+@test "S15: REQ-001 dry-run tracebox command contains --txt" {
+    run env DRY_RUN=true bash "$PERFETTO_START_SH" "192.168.122.10" "scheduling" --duration 10
+    [ "$status" -eq 0 ]
+    # Dry-run still emits the tracebox invocation...
+    [[ "$output" == *"tracebox"* ]]
+    # ...with --txt: per `tracebox --help`, "--txt : Parse config as pbtxt".
+    # The repo .cfg files are pbtxt text configs; without --txt tracebox
+    # rejects them ("The trace config is invalid, bailing out."). Trace
+    # OUTPUT is always binary protobuf regardless of --txt.
+    # EXPECTED TO FAIL pre-restore: --txt was stripped from the tracebox
+    # command; green once the restore lands.
+    [[ "$output" == *"--txt"* ]]
+}
+
+@test "S16: REQ-001 real tracebox command construction includes --txt" {
+    # The real command is only constructed in non-dry-run (needs a live node),
+    # so pin the command construction by inspecting the script source: the
+    # tracebox invocation must exist and carry --txt. --txt means "parse the
+    # -c config as pbtxt text config" (tracebox --help); trace OUTPUT is
+    # always binary protobuf.
+    # EXPECTED TO FAIL pre-restore: --txt was stripped from the tracebox
+    # command; green once the restore lands.
+    run grep -n 'tracebox' "$PERFETTO_START_SH"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"tracebox -o"* ]]
+    run grep -- '--txt' "$PERFETTO_START_SH"
+    [ "$status" -eq 0 ]
+}
+
+# =============================================================================
+# REQ-002: trace filenames end in .perfetto-trace
+# =============================================================================
+
+@test "S17: REQ-002 default remote trace path ends in .perfetto-trace" {
+    run env DRY_RUN=true bash "$PERFETTO_START_SH" "192.168.122.10" "scheduling" --duration 10
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/tmp/scheduling-"*".perfetto-trace"* ]]
+}
+
+@test "S18: REQ-002 --output custom name still yields .perfetto-trace suffix" {
+    run env DRY_RUN=true bash "$PERFETTO_START_SH" "192.168.122.10" "scheduling" --duration 10 --output my-custom-trace
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/tmp/my-custom-trace.perfetto-trace"* ]]
+}
+
+# =============================================================================
+# Edge cases
+# =============================================================================
+
+@test "S19: dry-run output is parseable (pid + remote path, space-separated)" {
+    run env DRY_RUN=true bash "$PERFETTO_START_SH" "192.168.122.10" "scheduling" --duration 10
+    [ "$status" -eq 0 ]
+    local parsed
+    parsed="$(printf '%s\n' "$output" | sed -n 's/.*Would print: //p')"
+    [ -n "$parsed" ]
+    # Exactly two space-separated fields: pid and remote trace path
+    local field_count
+    field_count="$(printf '%s\n' "$parsed" | awk '{print NF}')"
+    [ "$field_count" -eq 2 ]
+    [[ "$parsed" == "<pid>"*"/tmp/"*".perfetto-trace" ]]
+}
+
+@test "S20: config name with .cfg extension resolves in dry-run output" {
+    run env DRY_RUN=true bash "$PERFETTO_START_SH" "192.168.122.10" "scheduling.cfg" --duration 10
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/tmp/scheduling.cfg"* ]]
+}
+
+@test "S21: empty-string positional args print error and exit non-zero" {
+    run bash "$PERFETTO_START_SH" "" ""
+    [ "$status" -ne 0 ]
+}
