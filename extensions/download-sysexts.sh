@@ -40,7 +40,12 @@ KUBERNETES_CP_VERSION="v1.32.13"
 ETCD_URL="https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
 KUBERNETES_CP_URL="https://dl.k8s.io/${KUBERNETES_CP_VERSION}/kubernetes-server-linux-amd64.tar.gz"
 
-PERFETTO_URL="https://get.perfetto.dev/tracebox"
+# Pin the exact v57.2 linux-amd64 tracebox ELF. get.perfetto.dev/tracebox
+# serves Perfetto's Python prebuilt-wrapper (a text script), not the ELF —
+# do not switch back. The ELF must be present on nodes with no outbound
+# internet, so the download must be the real binary, verified by sha256.
+PERFETTO_URL="https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox"
+PERFETTO_SHA256="af22b25abb57260eb22bd4dc5bd64ea25d88fd781c1c221f446d0d49eaff59e8"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,6 +87,21 @@ check_cached() {
     done
     echo "  ${desc}: already available, skipping download"
     return 0  # all exist — cache hit
+}
+
+# ---------------------------------------------------------------------------
+# is_elf_binary — Return 0 only if $1 exists, is non-empty, and starts with
+# the ELF magic bytes (0x7f 'E'). Used for the perfetto cache check so a
+# stale text wrapper (e.g. the get.perfetto.dev Python prebuilt-wrapper) is
+# never treated as a cache hit.
+# ---------------------------------------------------------------------------
+is_elf_binary() {
+    [ -f "$1" ] || return 1
+    [ -s "$1" ] || return 1
+    # ELF magic is 0x7f 'E' 'L' 'F' — the first three bytes hex-encode as
+    # 7f454c. (head -c 2 alone yields only "7f45" and cannot match.)
+    magic="$(head -c 3 "$1" | od -An -tx1 | tr -d ' \n')"
+    [ "$magic" = "7f454c" ]
 }
 
 dry_run=0
@@ -282,8 +302,27 @@ download_etcd() {
 
 download_perfetto() {
     target="${SYSEXT_DIR}/perfetto/usr/bin/tracebox"
-    check_cached "tracebox" "$target" && return 0
+    if is_elf_binary "$target"; then
+        echo "  tracebox: already available, skipping download"
+        return 0
+    fi
     download_file "$PERFETTO_URL" "$target" "tracebox"
+
+    # Pin the exact v57.2 linux-amd64 ELF: verify the sha256 so a wrong or
+    # truncated artifact never ships in the sysext image. On mismatch remove
+    # the file so the ELF-magic cache check cannot hide the bad download.
+    if [ "$dry_run" -eq 0 ]; then
+        actual="$(sha256sum "$target" 2>/dev/null | awk '{print $1}')"
+        if [ -z "$actual" ]; then
+            rm -f "$target"
+            die "failed to compute sha256 for tracebox (download incomplete?)"
+        fi
+        if [ "$actual" != "$PERFETTO_SHA256" ]; then
+            rm -f "$target"
+            die "sha256 mismatch for tracebox: expected ${PERFETTO_SHA256}, got ${actual}"
+        fi
+        echo "  Verified tracebox sha256: ${actual}"
+    fi
 }
 
 download_kubernetes_cp() {
@@ -407,9 +446,8 @@ main() {
                     fi
                     ;;
                 perfetto)
-                    if check_cached "tracebox" \
-                        "${SYSEXT_DIR}/perfetto/usr/bin/tracebox"
-                    then
+                    if is_elf_binary "${SYSEXT_DIR}/perfetto/usr/bin/tracebox"; then
+                        echo "  tracebox: already available, skipping download"
                         continue
                     fi
                     ;;

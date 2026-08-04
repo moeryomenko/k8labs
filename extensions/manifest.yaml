@@ -191,7 +191,12 @@ sysexts:
 
   # -----------------------------------------------------------------------
   # perfetto: Performance tracing tool (tracebox)
-  # Source: single binary from get.perfetto.dev
+  # Source: pinned v57.2 linux-amd64 ELF from Perfetto's LUCI artifact mirror:
+  #   https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox
+  #   (sha256 af22b25abb57260eb22bd4dc5bd64ea25d88fd781c1c221f446d0d49eaff59e8)
+  # NOTE: https://get.perfetto.dev/tracebox serves a ~10KB Python prebuilt-
+  # wrapper that downloads the ELF on first run; the wrapper is unusable on
+  # nodes with no outbound internet, so the pinned ELF URL is used instead.
   # -----------------------------------------------------------------------
   - name: perfetto
     version: latest
@@ -199,7 +204,7 @@ sysexts:
     metadata:
       extension_name: perfetto
     sources:
-      - url: "https://get.perfetto.dev/tracebox"
+      - url: "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox"
         path: usr/bin/tracebox
         type: binary
         mode: 755
