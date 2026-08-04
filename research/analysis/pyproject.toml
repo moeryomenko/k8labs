@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-perfetto = ["perfetto>=24.1,<26.0"]
+perfetto = ["perfetto>=0.57"]
 
 [build-system]
 requires = ["setuptools>=64"]

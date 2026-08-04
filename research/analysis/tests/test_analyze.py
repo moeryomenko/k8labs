@@ -1,11 +1,12 @@
 """Tests for perfetto-analyze.py — Perfetto trace analysis pipeline.
 
-Test categories (22 tests total):
+Test categories (24 tests total):
   1. CLI argument parsing        (5 tests)
   2. Error handling              (5 tests)
   3. SQL query validation        (4 tests)
   4. CSV output                  (4 tests)
   5. Edge cases / resilience     (4 tests)
+  6. Trace directory discovery   (2 tests, TASK-001: recursive discovery + --trace-dir alias)
 """
 
 from __future__ import annotations
@@ -35,17 +36,28 @@ ANALYZE_SCRIPT = str(
     pathlib.Path(__file__).resolve().parent.parent / "perfetto-analyze.py"
 )
 
+# Output CSVs every analyzed trace must produce (one subdir per trace basename).
+EXPECTED_ANALYSIS_CSVS = [
+    "perfetto-threads.csv",
+    "perfetto-cpu-util.csv",
+    "perfetto-process-summary.csv",
+    "perfetto-sched-latency.csv",
+]
 
-def run_analyze(argv: list[str]) -> tuple[int, str, str]:
+
+def run_analyze(argv: list[str], env: dict | None = None) -> tuple[int, str, str]:
     """Run perfetto-analyze.py with the given argv using subprocess.
 
-    Returns (exit_code, stdout, stderr).
+    Returns (exit_code, stdout, stderr). ``env`` is passed through to the
+    subprocess unchanged (default: inherit the test process environment), so
+    tests can extend PYTHONPATH with a fake perfetto package.
     """
     proc = subprocess.run(
         [sys.executable, ANALYZE_SCRIPT, *argv],
         capture_output=True,
         text=True,
         timeout=15,
+        env=env,
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -395,3 +407,148 @@ class TestEdgeCases:
         traces = sorted(p for p in d.iterdir() if p.suffix == ".perfetto-trace")
         assert len(traces) == 1
         assert traces[0].name == "trace.perfetto-trace"
+
+
+# =========================================================================
+# 6. Trace directory discovery (2 tests, TASK-001)
+#
+# REQ-001: *.perfetto-trace files nested ANY number of levels deep must be
+#          discovered (current code only scans top-level entries via
+#          os.listdir) and analyzed into <output-dir>/<trace-basename>/.
+# REQ-002: the input path must be accepted BOTH positionally AND via the
+#          --trace-dir alias (current parser rejects --trace-dir).
+#
+# The real `perfetto` package is not installed in the test environment, so
+# these subprocess-based tests prepend a self-contained fake package to
+# PYTHONPATH (fake_perfetto_env). The fake mirrors conftest.py's in-process
+# mock TraceProcessor: every query returns an empty DataFrame with the exact
+# schema the analyzer's EMPTY_HEADERS define, so the 4 CSVs are still written
+# (header-only). This keeps "real traces are not needed" true for the CLI-level
+# discovery contract these tests pin.
+# =========================================================================
+
+FAKE_TRACE_PROCESSOR_SRC = '''\
+"""Self-contained fake of perfetto.trace_processor for subprocess-based tests.
+
+Mirrors tests/conftest.py::make_mock_trace_processor so perfetto-analyze.py can
+be exercised via subprocess without the real (not installed) perfetto package.
+Every query returns an empty DataFrame with the schema the analyzer defines in
+its EMPTY_HEADERS, so _save_or_empty writes a header-only CSV for each of the 4
+outputs.
+"""
+import pandas as pd
+
+_SCHEMAS = {
+    "threads": [
+        "cpu", "thread_name", "pid", "tid", "exec_time_ms", "exec_time_pct",
+    ],
+    "cpu_util": ["core", "utilization_pct", "nr_switches"],
+    "process_summary": [
+        "pid", "name", "cpu_time_ms", "cpu_time_pct",
+        "thread_count", "nr_ctx_switches",
+    ],
+    "sched_latency": [
+        "pid", "tid", "thread_name", "wakeup_latency_ms", "count",
+    ],
+}
+
+
+class _QueryResult:
+    """Minimal Perfetto QueryResult stand-in."""
+
+    def __init__(self, df: pd.DataFrame):
+        self._df = df
+
+    def __iter__(self):
+        return iter(self._df.itertuples(index=False))
+
+    def as_pandas_dataframe(self) -> pd.DataFrame:
+        return self._df
+
+
+class TraceProcessor:
+    """Duck-type of perfetto.trace_processor.TraceProcessor."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def query(self, sql: str) -> _QueryResult:
+        sql_lower = sql.lower()
+        if "sched_slice" in sql_lower and "group by" in sql_lower and "thread" in sql_lower:
+            columns = _SCHEMAS["threads"]
+        elif "sched_slice" in sql_lower and "group by" in sql_lower and "cpu" in sql_lower:
+            columns = _SCHEMAS["cpu_util"]
+        elif "process" in sql_lower and "group by" in sql_lower:
+            columns = _SCHEMAS["process_summary"]
+        else:
+            columns = _SCHEMAS["sched_latency"]
+        return _QueryResult(pd.DataFrame(columns=columns))
+'''
+
+
+@pytest.fixture
+def fake_perfetto_env(tmp_path: pathlib.Path) -> dict:
+    """Write a fake perfetto package to a temp dir and return a PYTHONPATH env.
+
+    perfetto-analyze.py imports ``perfetto.trace_processor`` at process time.
+    The real package is not installed here, so the subprocess needs this fake
+    package on PYTHONPATH to run past trace processing and produce the CSVs.
+    """
+    pkg_root = tmp_path / "fake-perfetto"
+    pkg = pkg_root / "perfetto"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "trace_processor.py").write_text(FAKE_TRACE_PROCESSOR_SRC)
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(pkg_root) + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+class TestTraceDirectoryDiscovery:
+    """Verify directory-mode trace discovery (REQ-001) and the --trace-dir
+    alias (REQ-002)."""
+
+    def test_nested_directory_traces_discovered_recursively(
+        self, tmp_path, fake_perfetto_env
+    ):
+        """A trace nested 4 levels deep is found and analyzed into its basename subdir."""
+        top = tmp_path / "exp" / "run" / "cell" / "replicate-1"
+        top.mkdir(parents=True)
+        (top / "t.perfetto-trace").write_bytes(b"HPb\x00\x01\x00\x00\x00")
+
+        out_dir = tmp_path / "out"
+        rc, out, err = run_analyze(
+            [str(tmp_path / "exp"), "--output-dir", str(out_dir)],
+            env=fake_perfetto_env,
+        )
+        assert rc == 0, f"expected 0, got {rc}\nstderr: {err}"
+
+        trace_out = out_dir / "t"
+        assert trace_out.is_dir(), (
+            f"expected output subdir {trace_out} for nested trace\nstdout: {out}\nstderr: {err}"
+        )
+        for name in EXPECTED_ANALYSIS_CSVS:
+            csv_path = trace_out / name
+            assert csv_path.is_file(), f"missing CSV {name} in {trace_out}"
+            assert csv_path.stat().st_size > 0, f"empty CSV {csv_path}"
+
+    def test_trace_dir_alias_accepted(
+        self, mock_trace_dir, tmp_path, fake_perfetto_env
+    ):
+        """--trace-dir DIR is an accepted alias for the positional input path."""
+        out_dir = tmp_path / "out"
+        rc, out, err = run_analyze(
+            ["--trace-dir", str(mock_trace_dir), "--output-dir", str(out_dir)],
+            env=fake_perfetto_env,
+        )
+        assert rc == 0, (
+            f"expected 0, got {rc} — --trace-dir alias rejected\nstderr: {err}"
+        )
+        for basename in ("trace-a", "trace-b"):
+            trace_out = out_dir / basename
+            assert trace_out.is_dir(), f"missing output subdir {trace_out}"
+            for name in EXPECTED_ANALYSIS_CSVS:
+                csv_path = trace_out / name
+                assert csv_path.is_file(), f"missing CSV {name} in {trace_out}"
+                assert csv_path.stat().st_size > 0, f"empty CSV {csv_path}"

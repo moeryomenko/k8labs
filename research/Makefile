@@ -305,7 +305,7 @@ report: ## Generate analysis report from experiment data
 	@echo ''
 	@echo '--- Perfetto analysis ---'
 	@if find "$(EXPERIMENTS_DIR)/data" -name '*.perfetto-trace' -type f 2>/dev/null | head -1 | grep -q .; then \
-		echo "  Perfetto traces found. Run 'make perfetto-analyze' and 'make perfetto-plots' for trace visualization."; \
+		echo "  Perfetto traces found. Run 'make perfetto-view' to open in the Perfetto UI, or 'make perfetto-analyze' and 'make perfetto-plots' for CSV/PNG analysis."; \
 	else \
 		echo "  No Perfetto traces found."; \
 	fi
@@ -380,8 +380,45 @@ perfetto-plots: ## Generate CPU execution time plots from Perfetto analysis
 		echo "  No analysis data found. Run 'make perfetto-analyze' first."; \
 		exit 0; \
 	fi; \
-	cd $(PERFETTO_ANALYSIS_DIR) && python3 plot-perfetto-cpu.py --csv-dir "$$analysis_dir" --output-dir ./perfetto-plots; \
+	shopt -s nullglob; \
+	subdirs=("$$analysis_dir"/*/); \
+	shopt -u nullglob; \
+	if [ $${#subdirs[@]} -eq 0 ]; then \
+		echo "  No analysis data found. Run 'make perfetto-analyze' first."; \
+		exit 0; \
+	fi; \
+	cd $(PERFETTO_ANALYSIS_DIR) || exit 1; \
+	for subdir in "$${subdirs[@]}"; do \
+		trace_name=$$(basename "$$subdir"); \
+		echo "  Plotting trace: $$trace_name"; \
+		python3 plot-perfetto-cpu.py "$$subdir" --output-dir "./perfetto-plots/$$trace_name"; \
+	done; \
 	echo "Plots generated in: $(PERFETTO_ANALYSIS_DIR)/perfetto-plots/"
+
+.PHONY: perfetto-view
+perfetto-view: ## Serve the newest Perfetto trace with the TraceProcessor httpd and open the Perfetto UI
+	@trace="$$(find "$(EXPERIMENTS_DIR)/data" -name '*.perfetto-trace' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"; \
+	if [[ -z "$${trace}" ]]; then \
+		echo "  No Perfetto traces found. Run an experiment with --perfetto first."; \
+		exit 0; \
+	fi; \
+	tp="$$(find "$${HOME}/.local/share/perfetto/prebuilts" -maxdepth 1 -name 'trace_processor_shell-*' -type f 2>/dev/null | head -1 || true)"; \
+	if [[ -z "$${tp}" || ! -x "$${tp}" ]]; then \
+		echo "  trace_processor_shell not found in $${HOME}/.local/share/perfetto/prebuilts. Install the perfetto Python package and use it once to download the prebuilt." >&2; \
+		exit 1; \
+	fi; \
+	port="$${PERFETTO_VIEW_PORT:-9001}"; \
+	echo "  Serving newest trace: $${trace}"; \
+	"$${tp}" --httpd --http-port "$${port}" "$${trace}" & \
+	tp_pid=$$!; \
+	trap 'kill "$${tp_pid}" 2>/dev/null || true' EXIT INT TERM; \
+	url="https://ui.perfetto.dev/#!/?url=http://127.0.0.1:$${port}"; \
+	echo "  $${url}"; \
+	if command -v xdg-open &>/dev/null; then \
+		xdg-open "$${url}" 2>/dev/null || true; \
+	fi; \
+	echo "  Press Ctrl-C to stop the trace server."; \
+	wait "$${tp_pid}"
 
 .PHONY: perfetto-clean
 perfetto-clean: ## Remove all Perfetto trace data from experiment data

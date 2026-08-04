@@ -3,6 +3,7 @@
 
 Usage:
     perfetto-analyze.py trace_path [--output-dir PATH]
+    perfetto-analyze.py --trace-dir DIR [--output-dir PATH]
     perfetto-analyze.py --help
 
 Loads .perfetto-trace files via Perfetto Trace Processor and runs SQL queries
@@ -308,9 +309,12 @@ def process_trace(
     if os.path.isfile(trace_path):
         trace_files = [trace_path]
     elif os.path.isdir(trace_path):
+        # Walk recursively: traces may be nested any number of levels deep
+        # (e.g. experiments/data/<exp>/<ts>/<cell>/replicate-N/x.perfetto-trace).
         trace_files = sorted(
-            os.path.join(trace_path, f)
-            for f in os.listdir(trace_path)
+            os.path.join(root, f)
+            for root, _dirs, files in os.walk(trace_path)
+            for f in files
             if f.endswith(".perfetto-trace")
         )
         if not trace_files:
@@ -354,7 +358,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "trace_path",
         metavar="trace_path",
+        nargs="?",
+        default=None,
         help="Path to a .perfetto-trace file or a directory containing such files",
+    )
+    parser.add_argument(
+        "--trace-dir",
+        dest="trace_dir",
+        metavar="DIR",
+        default=None,
+        help=(
+            "Directory containing .perfetto-trace files "
+            "(alias for the positional trace_path)"
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -376,8 +392,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Accept the input path positionally or via the --trace-dir alias.
+    trace_path = args.trace_path or args.trace_dir
+    if trace_path is None:
+        parser.error("a trace path or --trace-dir is required")
+
     return process_trace(
-        trace_path=args.trace_path,
+        trace_path=trace_path,
         output_dir=args.output_dir,
     )
 

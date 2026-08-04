@@ -1,9 +1,9 @@
 """Tests for plot-perfetto-cpu.py — Perfetto trace visualization.
 
-Test categories (22 tests total):
+Test categories (23 tests total):
   1. CLI argument parsing        (5 tests)
   2. Direct trace mode           (3 tests)
-  3. CSV input mode              (5 tests)
+  3. CSV input mode              (6 tests)
   4. --pod-name filter           (3 tests)
   5. Output generation           (4 tests)
   6. Edge cases / resilience     (2 tests)
@@ -181,6 +181,20 @@ class TestCsvInputMode:
         if rc == 0:
             for name in EXPECTED_PLOTS:
                 assert (out_dir / name).exists(), f"Missing plot: {name}"
+
+    def test_csv_dir_produces_all_four_valid_pngs(self, mock_csv_dir, tmp_path):
+        """A per-trace analysis subdir with the 4 flat CSVs yields the 4 PNGs.
+
+        TASK-001 REQ-003: plot-perfetto-cpu.py directory mode must accept the
+        perfetto-analyze.py output layout (4 CSVs flat) and produce all 4
+        plots. This pins rc == 0 and valid, non-empty PNG files — unlike the
+        weaker test above, it never passes vacuously when the script fails.
+        """
+        out_dir = tmp_path / "plots"
+        rc, out, err = run_plots([str(mock_csv_dir), "--output-dir", str(out_dir)])
+        assert rc == 0, f"expected 0, got {rc}\nstderr: {err}"
+        for name in EXPECTED_PLOTS:
+            assert_is_png(out_dir / name)
 
     def test_csv_dir_default_output_dir(self, mock_csv_dir):
         """CSV dir input uses default output path when --output-dir not given."""

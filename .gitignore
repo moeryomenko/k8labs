@@ -60,6 +60,7 @@ terraform/cloud-init/out/
 
 .container.stamp
 perfetto-plots
+perfetto-analysis
 research/analysis/output/
 
 # Go compiled binaries — built from source
