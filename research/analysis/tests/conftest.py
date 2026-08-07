@@ -7,6 +7,7 @@ so tests can run without a real Perfetto trace file or installation.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 from collections.abc import Iterator
 from typing import Any
@@ -296,7 +297,7 @@ def mock_png_plots(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 # ---------------------------------------------------------------------------
-# TASK-014 fixtures — weight-share (Family A) and request×limit heatmap (Family B)
+# Fixtures — weight-share (Family A) and request×limit heatmap (Family B)
 #
 # The schemas below are copied verbatim from run-experiment.sh:
 #   summary.csv  : cell_label,replicate,nr_periods,nr_throttled,throttled_usec,
@@ -455,7 +456,7 @@ def build_incomplete_cgroup_data_dir(root: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def incomplete_cgroup_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Family A fixture with a cell that is missing one cgroup file (REQ-2)."""
+    """Family A fixture with a cell that is missing one cgroup file."""
     return build_incomplete_cgroup_data_dir(tmp_path / "family-a-incomplete")
 
 
@@ -513,18 +514,18 @@ def family_b_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def empty_summary_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Data dir whose summary.csv has only the header row (REQ-4 empty input)."""
+    """Data dir whose summary.csv has only the header row (empty input)."""
     root = tmp_path / "empty-summary"
     write_summary_csv(root / "summary.csv", [])
     return root
 
 
 # ---------------------------------------------------------------------------
-# TASK-016 fixtures — QoS hierarchy (Family C), latency interference (Family D),
+# Fixtures — QoS hierarchy (Family C), latency interference (Family D),
 # tunable sweep under contention (Family F)
 #
 # summary.csv keeps the runner's 8-column schema (FAMILY_SUMMARY_COLUMNS).
-#   Family C adds per-cell cgroup-hierarchy-<node>.json (TASK-009 schema):
+#   Family C adds per-cell cgroup-hierarchy-<node>.json (schema):
 #     {node, timestamp, kubepods_slice_weight,
 #      slices[{name, cpu_weight, pods[{name, cpu_weight, cpu_max}]}]}
 #   Family D adds per-replicate latency.csv (load-generator contract:
@@ -642,7 +643,7 @@ def build_family_c_data_dir(root: pathlib.Path) -> pathlib.Path:
 
 
 def build_incomplete_hierarchy_data_dir(root: pathlib.Path) -> pathlib.Path:
-    """Family C fixture with a cell that has NO hierarchy JSON (REQ-2).
+    """Family C fixture with a cell that has NO hierarchy JSON.
 
     ``qos-compete`` is complete; ``qos-broken`` has summary rows but no
     cgroup-hierarchy-*.json anywhere, so the analyzer must skip it with a
@@ -690,7 +691,7 @@ def build_family_d_data_dir(root: pathlib.Path) -> pathlib.Path:
 
 
 def build_missing_latency_data_dir(root: pathlib.Path) -> pathlib.Path:
-    """Family D fixture with a cell that has NO latency.csv (REQ-4).
+    """Family D fixture with a cell that has NO latency.csv.
 
     ``req=100m-lim=200m`` has latency files; ``req=500m-lim=1000m`` has summary
     rows only, so the analyzer must skip it with a warning and still emit the
@@ -763,7 +764,7 @@ def family_c_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def incomplete_hierarchy_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Family C fixture with one cell missing its hierarchy JSON (REQ-2)."""
+    """Family C fixture with one cell missing its hierarchy JSON."""
     return build_incomplete_hierarchy_data_dir(tmp_path / "family-c-incomplete")
 
 
@@ -775,7 +776,7 @@ def family_d_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def missing_latency_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Family D fixture with one cell missing latency.csv (REQ-4)."""
+    """Family D fixture with one cell missing latency.csv."""
     return build_missing_latency_data_dir(tmp_path / "family-d-missing")
 
 
@@ -800,11 +801,11 @@ def family_f_no_default_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 # ---------------------------------------------------------------------------
-# TASK-018 fixtures — analysis outputs consumed by generate-report.py
+# Fixtures — analysis outputs consumed by generate-report.py
 #
-# The report generator (TASK-019) reads these CSVs from one input dir and
-# renders interaction-report.md. The values below mirror the TASK-014/016
-# fixtures (same cell labels, shares, percentiles, significance verdicts) so
+# The report generator reads these CSVs from one input dir and
+# renders interaction-report.md. The values below mirror the analyzer fixtures
+# (same cell labels, shares, percentiles, significance verdicts) so
 # the report assertions stay consistent with the analyzer tests. Column
 # schemas are copied verbatim from the analyzer output contracts:
 #   weight-share-summary.csv  : cell,pod,achieved_share,weight_share,ratio_error
@@ -814,11 +815,11 @@ def family_f_no_default_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 #   latency-correlation.csv   : metric,correlation
 #   tunables-comparison.csv   : tunable,mean_p99,std_p99,mean_slice_us,std_slice_us,n
 #   tunables-significance.csv : tunable,mean_p99,default_mean_p99,diff_p99,noise_threshold,significant
-#   burst-summary.csv (TASK-D01 pinned contract): cell,replicate,nr_periods,
+#   burst-summary.csv (pinned contract): cell,replicate,nr_periods,
 #     nr_throttled,throttled_usec,usage_usec,cpu_max_burst,cpu_max_quota
 # qos-summary.csv rows can carry either the kubepods-guaranteed.slice wrapper
 # (QOS_ROWS) or the direct kubepods-pod<uid>.slice TRUE-Guaranteed row
-# (QOS_ROWS_DIRECT_GUARANTEED, TASK-D08) — the latter is what qos-analyze.py
+# (QOS_ROWS_DIRECT_GUARANTEED) — the latter is what qos-analyze.py
 # emits when the snapshot has no wrapper slice.
 # ---------------------------------------------------------------------------
 
@@ -883,7 +884,7 @@ QOS_ROWS = [
     ),
 ]
 
-# TASK-D08: qos-summary rows for a TRUE-Guaranteed pod (systemd cgroup driver).
+# qos-summary rows for a TRUE-Guaranteed pod (systemd cgroup driver).
 # qos-analyze.py emits the direct kubepods-pod<uid>.slice as the guaranteed row
 # (self-representing: qos_slice == pod) when the snapshot has NO
 # kubepods-guaranteed.slice wrapper. The report generator must sort this row
@@ -965,7 +966,7 @@ TUN_SIGNIFICANCE_ROWS = [
     ("base-slice-high", 18.0, 12.0, 6.0, 0.0, True),
 ]
 
-# TASK-D01 pinned burst contract (see TEST-DESIGN.md, REQ-5):
+# Pinned burst contract:
 #   burst-summary.csv — cell,replicate,nr_periods,nr_throttled,throttled_usec,
 #   usage_usec,cpu_max_burst,cpu_max_quota
 # cpu_max_burst is the value ACTUALLY written to cpu.max.burst during the cell
@@ -1023,12 +1024,12 @@ def build_analysis_output_dir(
 ) -> pathlib.Path:
     """Write all eight analysis-output CSVs into *root* and return it.
 
-    Values mirror the TASK-014/016 analyzer fixtures so report assertions
+    Values mirror the analyzer fixtures so report assertions
     reuse the same hand-computed numbers. With ``shuffled=True`` the data
     rows are reversed inside every CSV while the schema stays identical —
     the report must sort, so output must be byte-identical either way
-    (REQ-4 determinism). ``qos_rows`` overrides the qos-summary rows
-    (TASK-D08 passes QOS_ROWS_DIRECT_GUARANTEED for the TRUE-Guaranteed
+    (determinism). ``qos_rows`` overrides the qos-summary rows
+    (QOS_ROWS_DIRECT_GUARANTEED is passed for the TRUE-Guaranteed
     layout; default is the wrapper layout QOS_ROWS).
     """
     specs = [
@@ -1065,7 +1066,7 @@ def shuffled_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def qos_direct_guaranteed_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """TASK-D08: qos-summary carries the direct kubepods-podg1.slice row.
+    """qos-summary carries the direct kubepods-podg1.slice row.
 
     Mirrors what qos-analyze.py emits for a TRUE-Guaranteed pod (systemd
     cgroup driver: no kubepods-guaranteed.slice wrapper — the pod slice IS
@@ -1080,7 +1081,7 @@ def qos_direct_guaranteed_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def empty_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Analysis-output dir with no CSVs at all (REQ-2 empty input)."""
+    """Analysis-output dir with no CSVs at all (empty input)."""
     root = tmp_path / "analysis-empty"
     root.mkdir()
     return root
@@ -1088,7 +1089,7 @@ def empty_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def partial_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Analysis-output dir with only weight-share-summary.csv (REQ-2)."""
+    """Analysis-output dir with only weight-share-summary.csv."""
     root = tmp_path / "analysis-partial"
     write_analysis_csv(
         root / "weight-share-summary.csv", WEIGHT_SHARE_COLUMNS, WEIGHT_SHARE_ROWS
@@ -1097,7 +1098,7 @@ def partial_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 # ---------------------------------------------------------------------------
-# FIX-4 fixtures — REAL runner output layout (verified by TASK-022 + live runs)
+# FIX-4 fixtures — REAL runner output layout (verified by live runs)
 #
 # The runner writes:
 #   <data-dir>/summary.csv                                   (8-column schema)
@@ -1108,7 +1109,7 @@ def partial_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 # (pod-a, pod-b, ls-api, batch-stress) and <cell> is the full matrix cell
 # string that NAMES the cell directory (no pod prefix). A naive first-dash
 # split of the label is therefore WRONG (pod-a-a_request=... -> pod "pod"),
-# which is the TASK-022 verified bug these fixtures reproduce. Cell strings
+# which is the verified bug these fixtures reproduce. Cell strings
 # below are copied verbatim from research/experiments/data/*/summary.csv.
 # ---------------------------------------------------------------------------
 
@@ -1171,7 +1172,7 @@ def build_real_qos_data_dir(root: pathlib.Path) -> pathlib.Path:
 
     The cgroup-hierarchy snapshot nests at
     ``<root>/<timestamp>/<cell>/replicate-<N>/cgroup-hierarchy-w1.json`` — the
-    direct-child glob the analyzer used misses it (TASK-022 verified). Summary
+    direct-child glob the analyzer used misses it. Summary
     rows carry ``guaranteed/burstable/besteffort - <cell>`` labels. Numbers
     mirror the flat family_c fixture so the same hand-computed shares apply
     (12/33, 20/33, 1/33; weights 59/100/1; throttled 0/50000/0).
@@ -1299,29 +1300,997 @@ def build_flat_noslices_tunables_data_dir(root: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def real_weight_share_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """FIX-4 REQ-1: weight-share fixture in the REAL runner layout."""
+    """FIX-4: weight-share fixture in the REAL runner layout."""
     return build_real_weight_share_data_dir(tmp_path / "weight-share-real")
 
 
 @pytest.fixture
 def real_qos_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """FIX-4 REQ-2: QoS fixture with replicate-nested hierarchy JSON."""
+    """FIX-4: QoS fixture with replicate-nested hierarchy JSON."""
     return build_real_qos_data_dir(tmp_path / "qos-real")
 
 
 @pytest.fixture
 def real_latency_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """FIX-4 REQ-3: latency fixture with pod-prefixed labels + nesting."""
+    """FIX-4: latency fixture with pod-prefixed labels + nesting."""
     return build_real_latency_data_dir(tmp_path / "latency-real")
 
 
 @pytest.fixture
 def real_tunables_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """FIX-4 REQ-4: tunables fixture with no eevdf-slices.csv anywhere."""
+    """FIX-4: tunables fixture with no eevdf-slices.csv anywhere."""
     return build_real_tunables_data_dir(tmp_path / "tunables-real")
 
 
 @pytest.fixture
 def flat_noslices_tunables_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """FIX-4 REQ-4: flat tunables fixture with latency.csv but no slices."""
+    """FIX-4: flat tunables fixture with latency.csv but no slices."""
     return build_flat_noslices_tunables_data_dir(tmp_path / "tunables-flat-noslices")
+
+
+# ---------------------------------------------------------------------------
+# Fixtures — dist-analyze.py (EEVDF CPU execution-time distribution)
+#
+# dist-analyze.py consumes staged experiment data per cell. Cell
+# layout follows the runner convention, with --data-dir
+# pointing at the run dir and cell dirs nested inside:
+#   <data-dir>/<cell>/replicate-<N>/perfetto-trace.perfetto-trace
+#   <data-dir>/<cell>/replicate-<N>/eevdf-<pod>-pids.csv
+#   <data-dir>/<cell>/replicate-<N>/cgroup-<pod>.csv
+#   <data-dir>/<cell>/replicate-<N>/metadata.json
+#
+# The Perfetto trace itself is never parsed in tests: a fake
+# perfetto.trace_processor package (PYTHONPATH shim, same pattern as
+# fake_perfetto_env) serves canned sched_slice / sched_stat_runtime rows for
+# subprocess runs, and make_dist_mock_trace_processor serves them in-process.
+# The pinned dist-analyze output contracts:
+#   dist-slices.csv    ts_start_us,ts_end_us,duration_us,cpu,tid,thread_name,pod
+#   dist-runtime.csv   ts,cpu,pid,tid,thread_name,pod,runtime_ns
+#   dist-summary.csv   cell,replicate,pod,slice_count,total_exec_ms,mean_us,
+#                      median_us,p50_us,p95_us,p99_us,max_us,throttle_ratio,
+#                      cpu_weight,cpu_max,quality
+#   dist-percentiles.json  {replicate: {pod: {p1..p99 at 1-decile steps}}}
+# ---------------------------------------------------------------------------
+
+DIST_SLICES_COLUMNS = [
+    "ts_start_us",
+    "ts_end_us",
+    "duration_us",
+    "cpu",
+    "tid",
+    "thread_name",
+    "pod",
+]
+DIST_RUNTIME_COLUMNS = [
+    "ts",
+    "cpu",
+    "pid",
+    "tid",
+    "thread_name",
+    "pod",
+    "runtime_ns",
+]
+DIST_SUMMARY_COLUMNS = [
+    "cell",
+    "replicate",
+    "pod",
+    "slice_count",
+    "total_exec_ms",
+    "mean_us",
+    "median_us",
+    "p50_us",
+    "p95_us",
+    "p99_us",
+    "max_us",
+    "throttle_ratio",
+    "cpu_weight",
+    "cpu_max",
+    "quality",
+]
+# 1..99 covered at 1-decile steps (pinned interpretation).
+DIST_PERCENTILE_STEPS = (1, 11, 21, 31, 41, 51, 61, 71, 81, 91, 99)
+DIST_COVERAGE_THRESHOLD = 0.80
+DIST_SYSTEM_POD = "system"
+DIST_GUARD_S = 2.0
+DIST_DEMAND_MILLICORES = 2000  # saturating demand on the 2-vCPU w1 worker
+
+# eevdf-<pod>-pids.csv schema (cgroup-pid-watch.sh print_csv_header).
+EEVDF_PIDS_COLUMNS = (
+    "timestamp,pod,pid,sum_exec_runtime,wait_sum,sleep_sum,iowait_sum,"
+    "nr_switches,nr_voluntary_switches,nr_involuntary_switches,run_delay,pcount"
+)
+
+
+def write_eevdf_pids_csv(
+    path: pathlib.Path, pod: str, pids: list[int], samples: int = 2
+) -> pathlib.Path:
+    """Write an eevdf-<pod>-pids.csv with the cgroup-pid-watch schema.
+
+    Every sample lists every pid with the pod label; the analyzer must build
+    the pid->pod map from the pod/pid columns ONLY.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [EEVDF_PIDS_COLUMNS]
+    for s in range(1, samples + 1):
+        for pid in pids:
+            lines.append(
+                ",".join(
+                    [
+                        f"2026-08-05T10:00:{s:02d}Z",
+                        pod,
+                        str(pid),
+                        "123456",
+                        "0",
+                        "0",
+                        "0",
+                        str(s * 10),
+                        "0",
+                        "0",
+                        "0",
+                        str(s),
+                    ]
+                )
+            )
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def write_dist_cgroup_csv(
+    path: pathlib.Path,
+    pod: str,
+    *,
+    nr_periods: int,
+    nr_throttled: int,
+    cpu_weight: int,
+    cpu_max_quota: int,
+    container: str = "stress-ng",
+    samples: int = 3,
+) -> pathlib.Path:
+    """Write a per-pod cgroup-<pod>.csv (runner 10-column schema).
+
+    All samples carry the same nr_periods/nr_throttled so the analyzer's
+    last-sample semantics equal the pinned ratio (summary.csv is built from
+    the last cgroup line in the runner).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [",".join(CGROUP_COLUMNS)]
+    for i in range(1, samples + 1):
+        lines.append(
+            ",".join(
+                [
+                    f"2026-08-05T10:00:{i * 5:02d}Z",
+                    pod,
+                    container,
+                    str(nr_periods),
+                    str(nr_throttled),
+                    "5000",
+                    "100000",
+                    str(cpu_weight),
+                    str(cpu_max_quota),
+                    "100000",
+                ]
+            )
+        )
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def write_dist_metadata_json(
+    path: pathlib.Path,
+    *,
+    cell: str,
+    replicate: int,
+    pod_name: str,
+    node_name: str = "w1",
+    trace_size: int = 12345678,
+) -> pathlib.Path:
+    """Write a cell metadata.json (runner save_cell_metadata schema).
+
+    The runner logs the trace file size per cell, so the
+    pinned metadata carries perfetto_trace_file / perfetto_config /
+    trace_file_size alongside the runner's base fields.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-08-05T10:00:00Z",
+                "experiment_cell": cell,
+                "replicate": replicate,
+                "pod_name": pod_name,
+                "node_name": node_name,
+                "perfetto_trace_file": "perfetto-trace.perfetto-trace",
+                "perfetto_config": "eevdf-deep",
+                "trace_file_size": trace_size,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return path
+
+
+def write_dist_trace(cell_dir: pathlib.Path) -> pathlib.Path:
+    """Write the fake .perfetto-trace marker the runner produces per cell."""
+    cell_dir.mkdir(parents=True, exist_ok=True)
+    path = cell_dir / "perfetto-trace.perfetto-trace"
+    path.write_bytes(b"HPb\x00\x01\x00\x00\x00")
+    return path
+
+
+def dist_slice_rows(
+    ts_starts: list[int],
+    durations: list[int],
+    tid: int,
+    thread_name: str = "stress-ng-cpu",
+    cpu: int = 0,
+) -> list[dict]:
+    """Build sched_slice rows as query_slices returns them (ts already in us)."""
+    rows: list[dict] = []
+    for ts, dur in zip(ts_starts, durations):
+        rows.append(
+            {
+                "ts_start_us": ts,
+                "ts_end_us": ts + dur,
+                "duration_us": dur,
+                "cpu": cpu,
+                "tid": tid,
+                "thread_name": thread_name,
+            }
+        )
+    return rows
+
+
+def dist_runtime_rows(
+    rows: list[tuple[int, int, int, str, int]], cpu: int = 0
+) -> list[dict]:
+    """Build sched_stat_runtime rows: (ts, tid, pid, thread_name, runtime_ns)."""
+    return [
+        {
+            "ts": ts,
+            "cpu": cpu,
+            "pid": pid,
+            "tid": tid,
+            "thread_name": name,
+            "runtime_ns": runtime_ns,
+        }
+        for ts, tid, pid, name, runtime_ns in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Canned trace data (served by the fake TraceProcessor)
+# ---------------------------------------------------------------------------
+
+# Three pods whose threads ALL share the name "stress-ng-cpu" (the collision
+# case) plus two system threads with the same name. tids 101/201/301
+# are pod a/b/c, 901/902 are unmapped. Durations per pod are [10..100] us (10
+# slices) so summary stats are the hand-computed constants in the tests.
+DIST_3POD_SLICES = (
+    dist_slice_rows(
+        [2_500_000 + i * 1_000_000 for i in range(10)],  # 2.5s .. 11.5s
+        [(i + 1) * 10 for i in range(10)],
+        tid=101,
+    )
+    + dist_slice_rows(
+        [30_000_000 + i * 1_000_000 for i in range(10)],
+        [(i + 1) * 10 for i in range(10)],
+        tid=201,
+    )
+    + dist_slice_rows(
+        [78_000_000 + i * 1_000_000 for i in range(10)],  # last ts 87.0s
+        [(i + 1) * 10 for i in range(10)],
+        tid=301,
+    )
+    + dist_slice_rows([50_000_000, 50_100_000], [5, 15], tid=901)
+    + dist_slice_rows([55_000_000], [100], tid=902)
+)
+
+DIST_3POD_RUNTIME = dist_runtime_rows(
+    [
+        (3_000_000, 101, 101, "stress-ng-cpu", 1_400_000),
+        (3_010_000, 101, 101, "stress-ng-cpu", 900_000),
+        (31_000_000, 201, 201, "stress-ng-cpu", 1_100_000),
+        (79_000_000, 301, 301, "stress-ng-cpu", 1_200_000),
+        (50_050_000, 901, 901, "stress-ng-cpu", 700_000),
+    ]
+)
+
+# Minimal slices for sanity-gate cells: 3 retained events spanning 2.5s..87s
+# of the 90s measurement -> coverage 0.9389 (good).
+DIST_SANITY_SLICES = dist_slice_rows(
+    [2_500_000, 40_000_000, 87_000_000], [100, 200, 150], tid=1001
+)
+DIST_SANITY_RUNTIME = dist_runtime_rows(
+    [(3_000_000, 1001, 1001, "stress-ng-cpu", 1_000_000)]
+)
+
+# Degraded cell: retained events cover only 2.5s..52.5s -> 50/90 = 0.5556.
+DIST_DEGRADED_SLICES = dist_slice_rows(
+    [2_500_000, 30_000_000, 52_500_000], [100, 200, 150], tid=1001
+)
+
+DIST_FAKE_BOUNDS = {"first_ts_ns": 2_000_000_000, "last_ts_ns": 88_000_000_000}
+
+
+def _dist_fake_trace_processor_source() -> str:
+    """Source of the fake perfetto.trace_processor package used by subprocess runs.
+
+    The TraceProcessor serves canned rows for the query patterns dist-analyze
+    runs: sched_slice per-slice extraction, sched_stat_runtime samples, and the
+    trace-bounds MIN/MAX query. Canned data is loaded from a JSON file named by
+    the DIST_FAKE_DATA environment variable.
+    """
+    return """
+import json
+import os
+import pandas as pd
+
+
+def _load():
+    with open(os.environ["DIST_FAKE_DATA"]) as f:
+        return json.load(f)
+
+
+class QueryResult:
+    def __init__(self, df):
+        self._df = df
+
+    def __iter__(self):
+        return iter(self._df.itertuples(index=False))
+
+    def as_pandas_dataframe(self):
+        return self._df
+
+
+class TraceProcessor:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def query(self, sql):
+        data = _load()
+        sql_lower = sql.lower()
+        if "sched_stat_runtime" in sql_lower:
+            return QueryResult(pd.DataFrame(data.get("runtime", [])))
+        if "sched_slice" in sql_lower and "min(ts)" in sql_lower:
+            return QueryResult(
+                pd.DataFrame(
+                    [data.get("bounds", {"first_ts_ns": 0, "last_ts_ns": 0})]
+                )
+            )
+        if "sched_slice" in sql_lower:
+            return QueryResult(pd.DataFrame(data.get("slices", [])))
+        return QueryResult(pd.DataFrame())
+"""
+
+
+def make_dist_fake_perfetto_env(
+    tmp_path: pathlib.Path,
+    slices_rows: list[dict],
+    runtime_rows: list[dict],
+    bounds: dict | None = None,
+) -> tuple[dict, pathlib.Path]:
+    """Write a fake perfetto package + canned data; return (env, data_path).
+
+    Same pattern as fake_perfetto_env in test_analyze.py: the subprocess needs
+    this fake package on PYTHONPATH to run past trace processing. The canned
+    slices/runtime are the "trace" the analyzer reads.
+    """
+    pkg_root = tmp_path / "fake-perfetto-dist"
+    pkg = pkg_root / "perfetto"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "trace_processor.py").write_text(_dist_fake_trace_processor_source())
+
+    data_path = tmp_path / "dist-fake-data.json"
+    data_path.write_text(
+        json.dumps(
+            {
+                "slices": slices_rows,
+                "runtime": runtime_rows,
+                "bounds": bounds or DIST_FAKE_BOUNDS,
+            }
+        )
+    )
+
+    env = {
+        "DIST_FAKE_DATA": str(data_path),
+        "MPLBACKEND": "Agg",
+    }
+    env.update(
+        {
+            "PYTHONPATH": str(pkg_root) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        }
+    )
+    return env, data_path
+
+
+def build_dist_three_pod_cell_dir(root: pathlib.Path) -> pathlib.Path:
+    """Fixture: three pods whose threads share identical names.
+
+    Cell ``co-located-a-b-c`` with pods a/b/c (tids 101/201/301 in the
+    eevdf pid CSVs) plus unmapped tids 901/902 that must be labelled system.
+    """
+    cell = "co-located-a-b-c"
+    rep_dir = root / cell / "replicate-1"
+    write_dist_trace(rep_dir)
+    write_eevdf_pids_csv(rep_dir / "eevdf-a-pids.csv", "a", [101])
+    write_eevdf_pids_csv(rep_dir / "eevdf-b-pids.csv", "b", [201])
+    write_eevdf_pids_csv(rep_dir / "eevdf-c-pids.csv", "c", [301])
+    write_dist_cgroup_csv(
+        rep_dir / "cgroup-a.csv",
+        "a",
+        nr_periods=1000,
+        nr_throttled=0,
+        cpu_weight=59,
+        cpu_max_quota=50000,
+        container="stress-ng",
+    )
+    write_dist_cgroup_csv(
+        rep_dir / "cgroup-b.csv",
+        "b",
+        nr_periods=1000,
+        nr_throttled=0,
+        cpu_weight=100,
+        cpu_max_quota=50000,
+        container="stress-ng",
+    )
+    write_dist_cgroup_csv(
+        rep_dir / "cgroup-c.csv",
+        "c",
+        nr_periods=1000,
+        nr_throttled=0,
+        cpu_weight=1,
+        cpu_max_quota=100000,
+        container="stress-ng",
+    )
+    write_dist_metadata_json(
+        rep_dir / "metadata.json",
+        cell=cell,
+        replicate=1,
+        pod_name="a",
+    )
+    return root
+
+
+def build_dist_cell(
+    root: pathlib.Path,
+    cell: str,
+    *,
+    pod: str,
+    pids: list[int],
+    nr_periods: int,
+    nr_throttled: int,
+    cpu_weight: int,
+    cpu_max_quota: int,
+    replicates: int = 1,
+) -> pathlib.Path:
+    """Write one single-pod cell (1..N replicates) with all per-cell inputs."""
+    for rep in range(1, replicates + 1):
+        rep_dir = root / cell / f"replicate-{rep}"
+        write_dist_trace(rep_dir)
+        write_eevdf_pids_csv(rep_dir / f"eevdf-{pod}-pids.csv", pod, pids)
+        write_dist_cgroup_csv(
+            rep_dir / f"cgroup-{pod}.csv",
+            pod,
+            nr_periods=nr_periods,
+            nr_throttled=nr_throttled,
+            cpu_weight=cpu_weight,
+            cpu_max_quota=cpu_max_quota,
+        )
+        write_dist_metadata_json(
+            rep_dir / "metadata.json",
+            cell=cell,
+            replicate=rep,
+            pod_name=pod,
+        )
+    return root
+
+
+def build_dist_stress_saturating_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Pass fixture: five saturating stress-ng cells (single pod).
+
+    limit<demand cells (100m/100m, 100m/1000m, 500m/500m) throttle at
+    0.99/0.97/0.96 (>= 0.95); limit>=demand cells (500m/2000m, 1000m/2000m)
+    at 0.01/0.02 (< 0.05). Weights/quota mirror the crun conversion table.
+    """
+    cells = [
+        ("request=100m-limit=100m", 1000, 990, 17, 10000),
+        ("request=100m-limit=1000m", 1000, 970, 17, 100000),
+        ("request=500m-limit=500m", 1000, 960, 59, 50000),
+        ("request=500m-limit=2000m", 1000, 10, 59, 200000),
+        ("request=1000m-limit=2000m", 1000, 20, 100, 200000),
+    ]
+    for cell, nr_periods, nr_throttled, weight, quota in cells:
+        build_dist_cell(
+            root,
+            cell,
+            pod="stress-ng",
+            pids=[1001],
+            nr_periods=nr_periods,
+            nr_throttled=nr_throttled,
+            cpu_weight=weight,
+            cpu_max_quota=quota,
+        )
+    return root
+
+
+def build_dist_cpu_burner_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Pass fixture: light cpu-burner cells, throttle ~0 at
+    limit >= 300m equivalent (500m/500m, 500m/2000m, 1000m/2000m)."""
+    cells = [
+        ("request=500m-limit=500m", 1000, 1, 59, 50000),
+        ("request=500m-limit=2000m", 1000, 1, 59, 200000),
+        ("request=1000m-limit=2000m", 1000, 1, 100, 200000),
+    ]
+    for cell, nr_periods, nr_throttled, weight, quota in cells:
+        build_dist_cell(
+            root,
+            cell,
+            pod="cpu-burner",
+            pids=[1001],
+            nr_periods=nr_periods,
+            nr_throttled=nr_throttled,
+            cpu_weight=weight,
+            cpu_max_quota=quota,
+        )
+    return root
+
+
+def build_dist_sanity_violation_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Fail fixture: a saturating stress-ng cell that under-throttles.
+
+    request=100m-limit=100m with ratio 0.90 (< 0.95) must fail the gate and
+    print a violation naming the cell and the measured ratio.
+    """
+    build_dist_cell(
+        root,
+        "request=100m-limit=100m",
+        pod="stress-ng",
+        pids=[1001],
+        nr_periods=1000,
+        nr_throttled=900,
+        cpu_weight=17,
+        cpu_max_quota=10000,
+    )
+    return root
+
+
+def build_dist_degraded_cell_dir(root: pathlib.Path) -> pathlib.Path:
+    """Fixture: two single-pod cells for coverage-quality runs.
+
+    The fixture itself is coverage-neutral; the test picks which retained-span
+    dataset the fake TraceProcessor serves. With DIST_SANITY_SLICES (events
+    span 2.5s..87s) coverage is 0.9389 (good); with DIST_DEGRADED_SLICES
+    (2.5s..52.5s) coverage is 0.5556 < 0.80 (degraded). Both exit 0 — a
+    degraded cell is a quality flag, not a sanity-gate failure.
+    """
+    build_dist_cell(
+        root,
+        "coverage-a",
+        pod="stress-ng",
+        pids=[1001],
+        nr_periods=1000,
+        nr_throttled=10,
+        cpu_weight=59,
+        cpu_max_quota=200000,
+    )
+    build_dist_cell(
+        root,
+        "coverage-b",
+        pod="stress-ng",
+        pids=[1001],
+        nr_periods=1000,
+        nr_throttled=10,
+        cpu_weight=59,
+        cpu_max_quota=200000,
+    )
+    return root
+
+
+def build_dist_two_replicate_cell_dir(root: pathlib.Path) -> pathlib.Path:
+    """Aggregation fixture: one cell, two replicates.
+
+    Summary must carry one row per (pod, replicate); dist-slices.csv is the
+    deterministic concatenation across replicates.
+    """
+    build_dist_cell(
+        root,
+        "request=100m-limit=100m",
+        pod="stress-ng",
+        pids=[1001],
+        nr_periods=1000,
+        nr_throttled=990,
+        cpu_weight=17,
+        cpu_max_quota=10000,
+        replicates=2,
+    )
+    return root
+
+
+def build_dist_empty_cell_dir(root: pathlib.Path) -> pathlib.Path:
+    """Edge: cell with NO eevdf-<pod>-pids.csv files.
+
+    Every sched_slice thread is unmapped and must be labelled system.
+    """
+    cell = "no-pids-cell"
+    rep_dir = root / cell / "replicate-1"
+    write_dist_trace(rep_dir)
+    write_dist_cgroup_csv(
+        rep_dir / "cgroup-x.csv",
+        "x",
+        nr_periods=1000,
+        nr_throttled=0,
+        cpu_weight=59,
+        cpu_max_quota=100000,
+    )
+    write_dist_metadata_json(
+        rep_dir / "metadata.json",
+        cell=cell,
+        replicate=1,
+        pod_name="x",
+    )
+    return root
+
+
+@pytest.fixture
+def dist_three_pod_cell_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Three-pod identical-thread-name fixture."""
+    return build_dist_three_pod_cell_dir(tmp_path / "dist-three-pod")
+
+
+@pytest.fixture
+def dist_stress_saturating_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Pass fixture: 5 saturating stress-ng cells."""
+    return build_dist_stress_saturating_data_dir(tmp_path / "dist-stress")
+
+
+@pytest.fixture
+def dist_cpu_burner_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Pass fixture: light cpu-burner cells."""
+    return build_dist_cpu_burner_data_dir(tmp_path / "dist-burner")
+
+
+@pytest.fixture
+def dist_sanity_violation_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Fail fixture: under-throttled saturating cell."""
+    return build_dist_sanity_violation_data_dir(tmp_path / "dist-violation")
+
+
+@pytest.fixture
+def dist_degraded_cell_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Fixture: good + degraded coverage cells."""
+    return build_dist_degraded_cell_dir(tmp_path / "dist-coverage")
+
+
+@pytest.fixture
+def dist_two_replicate_cell_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Aggregation fixture: one cell, two replicates."""
+    return build_dist_two_replicate_cell_dir(tmp_path / "dist-two-rep")
+
+
+@pytest.fixture
+def dist_empty_cell_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Edge fixture: no eevdf pid files anywhere."""
+    return build_dist_empty_cell_dir(tmp_path / "dist-empty")
+
+
+# ---------------------------------------------------------------------------
+# In-process mock TraceProcessor for the thin trace layer
+# ---------------------------------------------------------------------------
+
+
+def make_dist_mock_trace_processor(
+    slices_df: Any = None,
+    runtime_df: Any = None,
+    bounds_df: Any = None,
+    query_log: list | None = None,
+    fail_on_load: bool = False,
+) -> Any:
+    """Build a mock TraceProcessor serving dist-analyze's three query patterns.
+
+    Routing (checked in this order):
+      sched_stat_runtime            -> runtime_df
+      sched_slice + min(ts)         -> bounds_df (trace_event_bounds)
+      sched_slice (no group by)     -> slices_df
+    Unmatched queries return an empty result set.
+    """
+    import pandas as pd
+
+    if slices_df is None:
+        slices_df = pd.DataFrame(
+            {
+                "ts_start_us": pd.Series(dtype="int64"),
+                "ts_end_us": pd.Series(dtype="int64"),
+                "duration_us": pd.Series(dtype="int64"),
+                "cpu": pd.Series(dtype="int64"),
+                "tid": pd.Series(dtype="int64"),
+                "thread_name": pd.Series(dtype="str"),
+            }
+        )
+    if runtime_df is None:
+        runtime_df = pd.DataFrame(
+            {
+                "ts": pd.Series(dtype="int64"),
+                "cpu": pd.Series(dtype="int64"),
+                "pid": pd.Series(dtype="int64"),
+                "tid": pd.Series(dtype="int64"),
+                "thread_name": pd.Series(dtype="str"),
+                "runtime_ns": pd.Series(dtype="int64"),
+            }
+        )
+    if bounds_df is None:
+        bounds_df = pd.DataFrame([{"first_ts_ns": 0, "last_ts_ns": 0}])
+    if query_log is not None:
+        query_log = query_log  # caller-managed list, mutated in-place
+
+    class _QueryResult:
+        def __init__(self, df: pd.DataFrame):
+            self._df = df
+
+        def __iter__(self):
+            return iter(self._df.itertuples(index=False))
+
+        def as_pandas_dataframe(self) -> pd.DataFrame:
+            return self._df
+
+    class _MockTraceProcessor:
+        def __init__(self, *args, **kwargs):
+            if fail_on_load:
+                raise RuntimeError("simulated corrupt trace: cannot parse")
+
+        def query(self, sql: str) -> _QueryResult:
+            if query_log is not None:
+                query_log.append(sql)
+            sql_lower = sql.lower()
+            if "sched_stat_runtime" in sql_lower:
+                return _QueryResult(runtime_df)
+            if "sched_slice" in sql_lower and "min(ts)" in sql_lower:
+                return _QueryResult(bounds_df)
+            if "sched_slice" in sql_lower:
+                return _QueryResult(slices_df)
+            return _QueryResult(pd.DataFrame())
+
+    return _MockTraceProcessor
+
+
+@pytest.fixture
+def dist_mock_trace_processor(monkeypatch) -> Any:
+    """Install the dist mock TraceProcessor so the thin layer runs in-process.
+
+    Only ``sys.modules`` is patched: the script's ``from
+    perfetto.trace_processor import TraceProcessor`` consults ``sys.modules``
+    first, so replacing the entry is sufficient (a dotted-path
+    ``monkeypatch.setattr`` would fail when the real perfetto package is
+    installed, because perfetto lazily exposes its submodules).
+    """
+    import sys
+    from unittest import mock
+
+    fake_module = mock.MagicMock()
+    fake_module.TraceProcessor = make_dist_mock_trace_processor()
+    monkeypatch.setitem(sys.modules, "perfetto.trace_processor", fake_module)
+    return fake_module
+
+
+@pytest.fixture
+def dist_mock_trace_processor_factory():
+    """Returns the factory so tests can customize canned DataFrames."""
+    return make_dist_mock_trace_processor
+
+
+@pytest.fixture
+def dist_fake_perfetto_env(tmp_path: pathlib.Path):
+    """Factory for subprocess fake-perfetto envs (see make_dist_fake_perfetto_env)."""
+
+    def _make(
+        slices_rows: list[dict] | None = None,
+        runtime_rows: list[dict] | None = None,
+        bounds: dict | None = None,
+    ) -> dict:
+        env, _data = make_dist_fake_perfetto_env(
+            tmp_path,
+            slices_rows if slices_rows is not None else DIST_3POD_SLICES,
+            runtime_rows if runtime_rows is not None else DIST_3POD_RUNTIME,
+            bounds=bounds,
+        )
+        return env
+
+    return _make
+
+
+# ---------------------------------------------------------------------------
+# Fixtures — dist-steps.py (six step-by-step images)
+#
+# dist-steps.py consumes dist-analyze OUTPUT (no traces, no cluster, no
+# network):
+#   <analysis-root>/distribution/<family>/<cell>/dist-slices.csv
+#   <analysis-root>/distribution/<family>/<cell>/dist-summary.csv
+#   <analysis-root>/distribution/<family>/<cell>/dist-percentiles.json
+#
+# The family fixture mirrors the six Family A stress-ng cells: the same
+# labels, the crun CpuShares->cpu.weight conversion (1/17/59/100) and the
+# cpu.max quotas (100000/10000/100000/50000/200000/200000). Every cell carries
+# the D10 slice-duration set [10..100] us (hand-computed stats: mean 55,
+# p50 55, p95 95.5, p99 99.1, max 100) with deterministic 1s-spaced ts_start.
+# The throttle ratios differ per cell (0.0 / 0.99 / 0.97 / 0.96 / 0.01 / 0.02)
+# so step-4/step-6 annotations carry distinct measured numbers.
+# ---------------------------------------------------------------------------
+
+# The exactly-six pinned output names, in step order 1..6.
+DIST_STEPS_FILES = (
+    "step-1-declared-vs-enforced.png",
+    "step-2-weight-vs-quota.png",
+    "step-3-slice-distribution.png",
+    "step-4-throttle-pattern.png",
+    "step-5-config-comparison.png",
+    "step-6-guideline-summary.png",
+)
+
+# (cell label, cpu_weight, cpu_max_quota, nr_periods, nr_throttled)
+# Order IS the pinned six-cell order (cell 0 = no-limit saturating cell used
+# by step-3; cell 3 = the 500m/500m quota cell used by step-4).
+DIST_STEPS_CELL_SPECS = [
+    ("request=-limit=", 1, 100000, 1000, 0),
+    ("request=100m-limit=100m", 17, 10000, 1000, 990),
+    ("request=100m-limit=1000m", 17, 100000, 1000, 970),
+    ("request=500m-limit=500m", 59, 50000, 1000, 960),
+    ("request=500m-limit=2000m", 59, 200000, 1000, 10),
+    ("request=1000m-limit=2000m", 100, 200000, 1000, 20),
+]
+DIST_STEPS_CELLS = tuple(spec[0] for spec in DIST_STEPS_CELL_SPECS)
+
+# D10 durations -> hand-computed stats (pandas linear interpolation, pinned in
+# the dist-analyze tests): mean 55, p50 55, p95 95.5, p99 99.1, max 100.
+DIST_STEPS_D10 = [float(v) for v in range(10, 101, 10)]
+DIST_STEPS_ALT = [100.0, 200.0, 300.0, 400.0, 500.0]
+
+
+def _dist_steps_stats(durations: list[float]) -> dict[str, float]:
+    """Compute the dist-summary stats for a duration list (pandas method)."""
+    import pandas as pd
+
+    series = pd.Series(list(durations), dtype="float64")
+    return {
+        "mean_us": float(series.mean()),
+        "median_us": float(series.median()),
+        "p50_us": float(series.quantile(0.50)),
+        "p95_us": float(series.quantile(0.95)),
+        "p99_us": float(series.quantile(0.99)),
+        "max_us": float(series.max()),
+    }
+
+
+def write_dist_steps_cell_outputs(
+    cell_dir: pathlib.Path,
+    *,
+    cell: str,
+    durations: list[float],
+    cpu_weight: int,
+    cpu_max: int,
+    throttle_ratio: float,
+) -> pathlib.Path:
+    """Write one cell's dist-analyze OUTPUT files (dist-slices/summary/percentiles).
+
+    This is the exact layout dist-steps.py must read; the values are the
+    fixture's "measured" data the annotations must reflect.
+    """
+    import pandas as pd
+
+    cell_dir.mkdir(parents=True, exist_ok=True)
+    stats = _dist_steps_stats(durations)
+
+    # dist-slices.csv — one row per slice, 1s-spaced starts (deterministic).
+    slice_rows = []
+    for i, dur in enumerate(durations):
+        start = 2_500_000 + i * 1_000_000
+        slice_rows.append(
+            (start, start + int(dur), float(dur), 0, 1001, "stress-ng-cpu", "stress-ng")
+        )
+    pd.DataFrame(slice_rows, columns=DIST_SLICES_COLUMNS).to_csv(
+        cell_dir / "dist-slices.csv", index=False
+    )
+
+    # dist-summary.csv — the pinned 15-column schema, one pod row.
+    summary_row = [
+        cell,
+        1,
+        "stress-ng",
+        len(durations),
+        float(sum(durations)) / 1000.0,
+        stats["mean_us"],
+        stats["median_us"],
+        stats["p50_us"],
+        stats["p95_us"],
+        stats["p99_us"],
+        stats["max_us"],
+        throttle_ratio,
+        cpu_weight,
+        cpu_max,
+        "good",
+    ]
+    pd.DataFrame([summary_row], columns=DIST_SUMMARY_COLUMNS).to_csv(
+        cell_dir / "dist-summary.csv", index=False
+    )
+
+    # dist-percentiles.json — {replicate: {pod: {p<k>: value}}}, sorted keys.
+    series = pd.Series(list(durations), dtype="float64")
+    table = {f"p{k}": float(series.quantile(k / 100.0)) for k in DIST_PERCENTILE_STEPS}
+    (cell_dir / "dist-percentiles.json").write_text(
+        json.dumps({"1": {"stress-ng": table}}, indent=2, sort_keys=True) + "\n"
+    )
+    return cell_dir
+
+
+def build_dist_steps_family(
+    root: pathlib.Path, durations: list[float] | None = None
+) -> pathlib.Path:
+    """Write the six-cell Family A stress-ng dist-analyze OUTPUT tree."""
+    if durations is None:
+        durations = DIST_STEPS_D10
+    for cell, weight, quota, periods, throttled in DIST_STEPS_CELL_SPECS:
+        write_dist_steps_cell_outputs(
+            root / "distribution" / "dist-stress-ng" / cell,
+            cell=cell,
+            durations=durations,
+            cpu_weight=weight,
+            cpu_max=quota,
+            throttle_ratio=throttled / periods,
+        )
+    return root
+
+
+def build_dist_steps_missing_cell_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Family fixture missing the 500m/500m quota cell (step-4's source).
+
+    The renderer must fail loudly naming the missing cell instead of silently
+    producing five images.
+    """
+    for idx, (cell, weight, quota, periods, throttled) in enumerate(
+        DIST_STEPS_CELL_SPECS
+    ):
+        if idx == 3:  # request=500m-limit=500m — the step-4 quota cell
+            continue
+        write_dist_steps_cell_outputs(
+            root / "distribution" / "dist-stress-ng" / cell,
+            cell=cell,
+            durations=DIST_STEPS_D10,
+            cpu_weight=weight,
+            cpu_max=quota,
+            throttle_ratio=throttled / periods,
+        )
+    return root
+
+
+def build_dist_steps_empty_slices_data_dir(root: pathlib.Path) -> pathlib.Path:
+    """Family fixture where the no-limit cell's dist-slices.csv has no rows.
+
+    A distribution image needs measured slices; the renderer must fail loudly
+    naming the empty cell.
+    """
+    import pandas as pd
+
+    build_dist_steps_family(root)
+    no_limit = root / "distribution" / "dist-stress-ng" / DIST_STEPS_CELLS[0]
+    pd.DataFrame(columns=DIST_SLICES_COLUMNS).to_csv(
+        no_limit / "dist-slices.csv", index=False
+    )
+    return root
+
+
+@pytest.fixture
+def dist_steps_family_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Six-cell dist-analyze OUTPUT fixture for the step-by-step renderer."""
+    return build_dist_steps_family(tmp_path / "dist-steps-family")
+
+
+@pytest.fixture
+def dist_steps_missing_cell_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Family fixture with the 500m/500m quota cell missing."""
+    return build_dist_steps_missing_cell_data_dir(tmp_path / "dist-steps-missing")
+
+
+@pytest.fixture
+def dist_steps_empty_slices_data_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Family fixture where the no-limit cell has zero slice rows."""
+    return build_dist_steps_empty_slices_data_dir(tmp_path / "dist-steps-empty")

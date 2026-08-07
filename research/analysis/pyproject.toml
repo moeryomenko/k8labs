@@ -7,6 +7,7 @@ dependencies = [
     "matplotlib>=3.7",
     "numpy>=1.24",
     "pandas>=2.0",
+    "Pillow>=10.0",
     "scipy>=1.10",
 ]
 
@@ -16,3 +17,11 @@ perfetto = ["perfetto>=0.57"]
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.pytest.ini_options]
+# The peak-RSS budget tests are slow and high-RSS; exclude them
+# from the default suite (pytest -m memory runs them explicitly).
+addopts = "-m 'not memory'"
+markers = [
+    "memory: peak-RSS budget tests for the dist-* analysis stages; slow, high-RSS, run with -m memory",
+]
