@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Load generator for api-server — generates HTTP traffic with configurable
-# rate, endpoint mix, and concurrency.
+# Load generator for k8labs experiment workloads — generates HTTP traffic
+# with configurable rate, endpoint mix, and concurrency. Supports api-server
+# (users/orders/search/reports), cpu-burner (burn/fib/pi), and db-simulator
+# (select/insert/update/checkpoint) endpoint names; see --help for the
+# endpoint mapping table.
 #
 # Usage: load-generator.sh <target-url> [OPTIONS]
 #
@@ -33,10 +36,10 @@ show_help() {
 	cat <<'EOF'
 Usage: load-generator.sh <target-url> [OPTIONS]
 
-Generate HTTP load against the api-server.
+Generate HTTP load against a k8labs experiment workload.
 
 Positional:
-  target-url  Base URL of the api-server (e.g. http://localhost:8080)
+  target-url  Base URL of the workload (e.g. http://localhost:8080)
 
 Options:
   --rate N        Target requests per second (default: 50)
@@ -46,10 +49,27 @@ Options:
   --workers N     Number of parallel workers (default: 5)
   --help          Show this help and exit
 
+Endpoint names (--endpoints "name:weight[,name:weight...]"):
+
+  api-server:   users   -> GET /api/v1/users
+                orders  -> GET /api/v1/orders
+                search  -> GET /api/v1/search?q=kubernetes
+                reports -> POST /api/v1/reports {"period":"daily","dimension":"revenue"}
+  cpu-burner:   burn    -> GET /load?percent=30&duration=<experiment duration>
+                fib     -> GET /fibonacci?n=38
+                pi      -> GET /pi?digits=2000
+  db-simulator: select      -> GET  /query/select?rows=1000&complexity=medium
+                insert      -> POST /query/insert?rows=100
+                update      -> POST /query/update?rows=100&cols=1
+                checkpoint  -> GET  /query/checkpoint
+
+  Unknown endpoint names abort with an error.
+
 Examples:
   load-generator.sh http://localhost:8080
   load-generator.sh http://10.0.0.1:8080 --rate 100 --duration 30 --output results.csv
   load-generator.sh http://localhost:8080 --endpoints "users:50,search:50" --workers 10
+  load-generator.sh http://burner:8080 --endpoints "burn:100" --duration 90
 EOF
 	exit 0
 }
@@ -90,15 +110,26 @@ declare -a ENDPOINT_PATHS=()
 declare -a ENDPOINT_METHODS=()
 declare -a ENDPOINT_BODIES=()
 
+# One-shot cpu-burner state: when the mix contains the "burn" entry, the
+# generator issues a single /load request for the whole experiment window
+# instead of looping it at the configured rate (which would stack hundreds of
+# independent burners and saturate ~1 CPU). The burn entry is excluded from
+# the rate-loop arrays below; the main flow fires it once at start.
+HAS_BURN=0
+BURN_NAME=""
+BURN_PATH=""
+BURN_METHOD=""
+BURN_BODY=""
+
 TOTAL_WEIGHT=0
 IFS=',' read -ra ENTRIES <<< "$ENDPOINTS"
 for entry in "${ENTRIES[@]}"; do
 	name="${entry%%:*}"
 	weight="${entry#*:}"
-	ENDPOINT_NAMES+=("$name")
-	ENDPOINT_WEIGHTS+=("$weight")
-	TOTAL_WEIGHT=$((TOTAL_WEIGHT + weight))
 
+# Endpoint mappings: name -> (method, path, body). The cpu-burner "burn"
+# mapping embeds the experiment duration (--duration) so the /load burn
+# window equals the measurement window; db-simulator writes are POST.
 	case "$name" in
 		users)
 			ENDPOINT_PATHS+=("/api/v1/users")
@@ -120,14 +151,67 @@ for entry in "${ENTRIES[@]}"; do
 			ENDPOINT_METHODS+=("POST")
 			ENDPOINT_BODIES+=('{"period":"daily","dimension":"revenue"}')
 			;;
+		burn)
+			# One-shot: the /load burner runs for the whole experiment
+			# window, so it is issued exactly once at start rather than
+			# from the rate loop (which would stack ~rate*duration
+			# independent burners). Record it separately; it is excluded
+			# from the rate-loop arrays and the loop weight.
+			HAS_BURN=1
+			BURN_NAME="$name"
+			BURN_PATH="/load?percent=30&duration=${DURATION}"
+			BURN_METHOD="GET"
+			BURN_BODY=""
+			;;
+		fib)
+			ENDPOINT_PATHS+=("/fibonacci?n=38")
+			ENDPOINT_METHODS+=("GET")
+			ENDPOINT_BODIES+=("")
+			;;
+		pi)
+			ENDPOINT_PATHS+=("/pi?digits=2000")
+			ENDPOINT_METHODS+=("GET")
+			ENDPOINT_BODIES+=("")
+			;;
+		select)
+			ENDPOINT_PATHS+=("/query/select?rows=1000&complexity=medium")
+			ENDPOINT_METHODS+=("GET")
+			ENDPOINT_BODIES+=("")
+			;;
+		insert)
+			ENDPOINT_PATHS+=("/query/insert?rows=100")
+			ENDPOINT_METHODS+=("POST")
+			ENDPOINT_BODIES+=("")
+			;;
+		update)
+			ENDPOINT_PATHS+=("/query/update?rows=100&cols=1")
+			ENDPOINT_METHODS+=("POST")
+			ENDPOINT_BODIES+=("")
+			;;
+		checkpoint)
+			ENDPOINT_PATHS+=("/query/checkpoint")
+			ENDPOINT_METHODS+=("GET")
+			ENDPOINT_BODIES+=("")
+			;;
 		*)
-			echo "error: unknown endpoint '$name' (supported: users, orders, search, reports)" >&2
+			echo "error: unknown endpoint '$name' (supported: users, orders, search, reports, burn, fib, pi, select, insert, update, checkpoint)" >&2
 			exit 1
 			;;
 	esac
+
+	# Accumulate the rate-loop arrays only for non-burn entries; the
+	# cpu-burner "burn" endpoint is driven by the one-shot path instead.
+	if [[ "$name" != "burn" ]]; then
+		ENDPOINT_NAMES+=("$name")
+		ENDPOINT_WEIGHTS+=("$weight")
+		TOTAL_WEIGHT=$((TOTAL_WEIGHT + weight))
+	fi
 done
 
-if [[ "$TOTAL_WEIGHT" -eq 0 ]]; then
+# A burn-only mix has no rate loop (loop weight 0); that is valid as long as
+# the one-shot burn will fire. A mix without burn and with zero weight is an
+# error, unchanged from the original behavior.
+if [[ "$TOTAL_WEIGHT" -eq 0 && "$HAS_BURN" -eq 0 ]]; then
 	echo "error: total endpoint weight is zero" >&2
 	exit 1
 fi
@@ -171,6 +255,60 @@ echo 0 > "$TMPDIR/err_count"
 echo 0 > "$TMPDIR/latency_sum"
 
 # ---------------------------------------------------------------------------
+# send_request — Execute one HTTP request against a mapped endpoint and record
+# it (shared counters + latency CSV row), exactly as the rate loop does.
+#
+# Arguments:
+#   $1 — endpoint name (used as the CSV label, e.g. "burn")
+#   $2 — request path including query string (e.g. "/load?percent=30&duration=2")
+#   $3 — HTTP method (GET or POST)
+#   $4 — request body (empty for GET and body-less POSTs)
+#   $5 — curl --max-time in seconds (default: 10; the one-shot burn passes
+#        the experiment window so the request is not cut short)
+# ---------------------------------------------------------------------------
+send_request() {
+	local name="$1"
+	local path="$2"
+	local method="$3"
+	local body="$4"
+	local max_time="${5:-10}"
+
+	local start_ms
+	start_ms=$(date +%s%3N)
+
+	# Build curl command. Honor the mapped method: POST endpoints without
+	# a body (db-simulator insert/update) must still use POST.
+	local curl_args=(-s -o /dev/null -w '%{http_code}' --max-time "$max_time")
+	curl_args+=(-X "$method")
+	if [[ "$method" == "POST" && -n "$body" ]]; then
+		curl_args+=(-H 'Content-Type: application/json' -d "$body")
+	fi
+	curl_args+=("${TARGET_URL}${path}")
+
+	# Execute.
+	local status_code
+	status_code="$(curl "${curl_args[@]}" 2>/dev/null)" || true
+
+	local end_ms
+	end_ms=$(date +%s%3N)
+	local latency_ms=$(( end_ms - start_ms ))
+
+	# Update counters.
+	echo "$(($(cat "$TMPDIR/req_count") + 1))" > "$TMPDIR/req_count"
+	if [[ "$status_code" -lt 200 || "$status_code" -ge 400 ]]; then
+		echo "$(($(cat "$TMPDIR/err_count") + 1))" > "$TMPDIR/err_count"
+	fi
+	echo "$(($(cat "$TMPDIR/latency_sum") + latency_ms))" > "$TMPDIR/latency_sum"
+
+	# Write CSV row.
+	if [[ -n "$OUTPUT_FILE" ]]; then
+		local ts
+		ts="$(date --iso-8601=seconds)"
+		echo "${ts},${name},${latency_ms},${status_code}" >> "$OUTPUT_FILE"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Worker function
 # ---------------------------------------------------------------------------
 worker_loop() {
@@ -192,9 +330,6 @@ worker_loop() {
 	local end_time=$(( $(date +%s) + DURATION ))
 
 	while [[ $(date +%s) -lt "$end_time" ]]; do
-		local start_ms
-		start_ms=$(date +%s%3N)
-
 		# Pick random endpoint based on weights.
 		local ep_idx
 		ep_idx=$(pick_endpoint)
@@ -203,36 +338,7 @@ worker_loop() {
 		local body="${ENDPOINT_BODIES[$ep_idx]}"
 		local name="${ENDPOINT_NAMES[$ep_idx]}"
 
-		# Build curl command.
-		local curl_args=(-s -o /dev/null -w '%{http_code}' --max-time 10)
-		if [[ "$method" == "POST" && -n "$body" ]]; then
-			curl_args+=(-X POST -H 'Content-Type: application/json' -d "$body")
-		else
-			curl_args+=(-X GET)
-		fi
-		curl_args+=("${TARGET_URL}${path}")
-
-		# Execute.
-		local status_code
-		status_code="$(curl "${curl_args[@]}" 2>/dev/null)" || true
-
-		local end_ms
-		end_ms=$(date +%s%3N)
-		local latency_ms=$(( end_ms - start_ms ))
-
-		# Update counters.
-		echo "$(($(cat "$TMPDIR/req_count") + 1))" > "$TMPDIR/req_count"
-		if [[ "$status_code" -lt 200 || "$status_code" -ge 400 ]]; then
-			echo "$(($(cat "$TMPDIR/err_count") + 1))" > "$TMPDIR/err_count"
-		fi
-		echo "$(($(cat "$TMPDIR/latency_sum") + latency_ms))" > "$TMPDIR/latency_sum"
-
-		# Write CSV row.
-		if [[ -n "$OUTPUT_FILE" ]]; then
-			local ts
-			ts="$(date --iso-8601=seconds)"
-			echo "${ts},${name},${latency_ms},${status_code}" >> "$OUTPUT_FILE"
-		fi
+		send_request "$name" "$path" "$method" "$body"
 
 		# Rate-limit sleep.
 		sleep "$per_worker_sleep"
@@ -255,12 +361,24 @@ echo >&2
 
 START_TIME=$(date +%s)
 
-# Launch workers in background.
+# Launch the one-shot cpu-burner /load request first (in the background so a
+# long-running burn window does not delay the rate loop), then the rate-loop
+# workers for the remaining endpoints. The one-shot fires exactly once at
+# start regardless of --rate and is recorded like any other request.
 declare -a WORKER_PIDS=()
-for ((w = 0; w < WORKERS; w++)); do
-	worker_loop "$w" &
+if [[ "$HAS_BURN" -eq 1 ]]; then
+	send_request "$BURN_NAME" "$BURN_PATH" "$BURN_METHOD" "$BURN_BODY" "$((DURATION + 10))" &
 	WORKER_PIDS+=($!)
-done
+fi
+
+# Launch workers in background. Skipped for burn-only mixes: their /load
+# request is the one-shot above, so there is no rate loop to run.
+if [[ "$TOTAL_WEIGHT" -gt 0 ]]; then
+	for ((w = 0; w < WORKERS; w++)); do
+		worker_loop "$w" &
+		WORKER_PIDS+=($!)
+	done
+fi
 
 # Status reporting loop (every second).
 while true; do
@@ -313,17 +431,20 @@ if [[ -n "$OUTPUT_FILE" && -f "$OUTPUT_FILE" ]]; then
 	if [[ "$COUNT" -gt 0 ]]; then
 		# bc may be absent on nodes; fall back to line 1 (the minimum) so the
 		# summary still prints instead of aborting after the CSV was written.
-		p50=$(echo "$LATENCIES" | sed -n "$(printf '%.0f' "$(echo "$COUNT * 0.50" | bc -l 2>/dev/null | cut -d. -f1 || echo 1)")p" 2>/dev/null || echo 0)
+		# bc -l strips the leading zero from products < 1 (".50"), so
+		# normalize it back before cutting the integer part; otherwise the
+		# percentile line is empty and printf below fails under set -e.
+		p50=$(echo "$LATENCIES" | sed -n "$(printf '%.0f' "$(echo "$COUNT * 0.50" | bc -l 2>/dev/null | sed 's/^\./0./' | cut -d. -f1 || echo 1)")p" 2>/dev/null || echo 0)
 		# If sed doesn't capture it, try head/tail.
 		if [[ -z "$p50" || "$p50" -eq 0 ]]; then
 			half=$((COUNT / 2))
 			[[ "$half" -lt 1 ]] && half=1
 			p50=$(echo "$LATENCIES" | head -n "$half" | tail -n 1)
 		fi
-		p95_line=$(printf '%.0f' "$(echo "$COUNT * 0.95" | bc -l 2>/dev/null | cut -d. -f1 || echo 1)")
+		p95_line=$(printf '%.0f' "$(echo "$COUNT * 0.95" | bc -l 2>/dev/null | sed 's/^\./0./' | cut -d. -f1 || echo 1)")
 		[[ "$p95_line" -lt 1 ]] && p95_line=1
 		p95=$(echo "$LATENCIES" | sed -n "${p95_line}p" 2>/dev/null || echo 0)
-		p99_line=$(printf '%.0f' "$(echo "$COUNT * 0.99" | bc -l 2>/dev/null | cut -d. -f1 || echo 1)")
+		p99_line=$(printf '%.0f' "$(echo "$COUNT * 0.99" | bc -l 2>/dev/null | sed 's/^\./0./' | cut -d. -f1 || echo 1)")
 		[[ "$p99_line" -lt 1 ]] && p99_line=1
 		p99=$(echo "$LATENCIES" | sed -n "${p99_line}p" 2>/dev/null || echo 0)
 	fi
