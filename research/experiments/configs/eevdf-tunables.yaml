@@ -1,6 +1,6 @@
 experiment:
   name: eevdf-tunables
-  description: "Scheduler tunable sweep — requires tunable-sweep.sh to modify sysctl before each cell (REFERENCE ONLY, for TASK-EEVDF-014)"
+  description: "Scheduler tunable sweep — requires tunable-sweep.sh to modify sysctl before each cell (REFERENCE ONLY)"
 replicates: 3
 pre_warm: 10
 duration: 90

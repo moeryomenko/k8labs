@@ -1,42 +1,40 @@
 #!/usr/bin/env bats
 # test-cgroup-hierarchy.bats — Tests for research/bin/cgroup-hierarchy-snapshot.sh
 #
-# These tests encode the target behavior of TASK-009 (a new script that dumps
+# These tests encode the target behavior of a new script that dumps
 # the node cgroup v2 hierarchy: kubepods.slice cpu.weight, per-QoS-slice
-# cpu.weight, and per-pod-slice cpu.weight/cpu.max, read over SSH). They are
+# cpu.weight, and per-pod-slice cpu.weight/cpu.max, read over SSH. They are
 # written test-first: every test FAILS (red phase) today because the script
 # does not exist yet.
 #
 # No live cluster and no SSH are required. SSH is stubbed by a fake `ssh`
 # binary placed at the front of PATH (created in setup()): it serves a
 # virtual /sys/fs/cgroup tree from $BATS_TEST_TMPDIR, logs every invocation,
-# and refuses any non-read-only command. TASK-009's script must reach the
+# and refuses any non-read-only command. The script must reach the
 # node via an `ssh` command (the repo convention, cgroup-common.sh ssh_node)
 # so the fake ssh intercepts it.
 #
-# Requirements covered (full mapping in TEST-DESIGN.md):
-#   REQ-1 -> VC-CH-01 (CH-01, CH-02, CH-03)
-#   REQ-2 -> VC-CH-02 (CH-04, CH-16, CH-17, CH-18)
-#   REQ-3 -> VC-CH-03 (CH-05..CH-11)
-#   REQ-4 -> VC-CH-04 (CH-12, CH-13, CH-14)
-#   REQ-5 -> VC-CH-05 (CH-15)
-#   REQ-6 -> VC-CH-06 (CH-20)
+# Covered behaviors:
+#   script exists and is executable; --help/-h print usage
+#   node required (--node <ip> or positional <ip>)
+#   output is valid JSON with the deterministic schema
+#   data read over SSH; ssh failure yields a clear error
+#   snapshot is read-only
+#   JSON is jq-parseable
 #
 # FIX-3 additions (TRUE Guaranteed pod support):
-#   REQ-1(FIX-3) -> VC-CH-G-01 (CH-G-01, CH-G-02) — direct guaranteed pod slice
-#                   emitted as a slice entry with ONE self-representing pod
-#                   entry (name = slice name, cpu_weight = slice cpu.weight,
-#                   cpu_max = slice cpu.max), never a weight-losing entry.
-#   REQ-1 compat  -> VC-CH-G-02 (CH-G-03, CH-G-04) — burstable/besteffort
-#                   output byte-compatible with and without the guaranteed
-#                   slice present.
-#   REQ-1 read-only -> VC-CH-G-03 (CH-G-05) — additive change stays read-only.
+#   direct guaranteed pod slice emitted as a slice entry with ONE
+#   self-representing pod entry (name = slice name, cpu_weight = slice
+#   cpu.weight, cpu_max = slice cpu.max), never a weight-losing entry.
+#   burstable/besteffort output byte-compatible with and without the
+#   guaranteed slice present.
+#   additive change stays read-only.
 #
 # Run from project root:
 #   bats research/experiments/tests/test-cgroup-hierarchy.bats
 #
-# Run a specific test:
-#   bats --filter "CH-05" research/experiments/tests/test-cgroup-hierarchy.bats
+# Run a specific test (filter by any substring of the test description):
+#   bats --filter "--help prints usage" research/experiments/tests/test-cgroup-hierarchy.bats
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -71,18 +69,18 @@ setup() {
     write_cg "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod789abc.slice/cpu.weight" "2"
     write_cg "$FAKE_CGROUP_ROOT/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod789abc.slice/cpu.max" "max 100000"
     # Make the virtual node read-only: any write the future script attempts
-    # would fail here (VC-CH-05 enforcement).
+    # would fail here (read-only enforcement).
     chmod -R a-w "$FAKE_CGROUP_ROOT"
 
     # --- Fake ssh ----------------------------------------------------------
-    # Contract (see TEST-DESIGN.md): invoked as
+    # Contract: invoked as
     #   ssh [-o <opt>]... "root@<ip>" <remote-command>
     # It serves any read-only command that touches /sys/fs/cgroup by
     # transparently rewriting that prefix to $FAKE_CGROUP_ROOT and executing
     # locally. Commands outside the read-only allowlist, or containing write
     # intents, are logged as REFUSED and fail. Every invocation is logged to
     # $FAKE_SSH_LOG (one INVOKE line + one CMD line). FAKE_SSH_MODE=refuse
-    # makes ssh fail like "connection refused" (VC-CH-04).
+    # makes ssh fail like "connection refused".
     mkdir -p "$FAKE_BIN"
     cat > "$FAKE_BIN/ssh" <<'FAKESSH'
 #!/usr/bin/env bash
@@ -131,7 +129,7 @@ cmdstr="${args[*]}"
 cmdstr="${cmdstr#"${cmdstr%%[![:space:]]*}"}"
 printf 'CMD %s\n' "$cmdstr" >> "$FAKE_SSH_LOG"
 
-# Read-only enforcement (VC-CH-05): no redirects except stderr/stdout
+# Read-only enforcement: no redirects except stderr/stdout
 # suppression (>/dev/null, >1, >2, >&1, >&2), no mutating tools.
 if printf '%s' "$cmdstr" | grep -qE '>[^/12&]' \
    || printf '%s' "$cmdstr" | grep -qE '(^|[^A-Za-z])(tee|touch|mkdir|rm|mv|cp|dd|truncate|chmod|chown|install|mknod)([^A-Za-z]|$)' \
@@ -182,23 +180,23 @@ assert_captured_ok() {
 }
 
 # =============================================================================
-# VC-CH-01 (REQ-1): Script exists, is executable, and --help/-h print usage
+# Script exists, is executable, and --help/-h print usage
 # and exit 0.
 # =============================================================================
 
-@test "CH-01: script exists at research/bin/cgroup-hierarchy-snapshot.sh and is executable" {
+@test "script exists at research/bin/cgroup-hierarchy-snapshot.sh and is executable" {
     [ -f "$SCRIPT" ]
     [ -x "$SCRIPT" ]
 }
 
-@test "CH-02: --help prints usage and exits 0" {
+@test "--help prints usage and exits 0" {
     run "$SCRIPT" --help
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"sage"* ]]
 }
 
-@test "CH-03: -h prints usage and exits 0" {
+@test "-h prints usage and exits 0" {
     run "$SCRIPT" -h
 
     [ "$status" -eq 0 ]
@@ -206,33 +204,33 @@ assert_captured_ok() {
 }
 
 # =============================================================================
-# VC-CH-02 (REQ-2): A node is required (--node <ip> or positional <ip>).
+# A node is required (--node <ip> or positional <ip>).
 # Missing/invalid node arguments fail with a non-zero exit and an error
 # message; the positional form is accepted.
 # =============================================================================
 
-@test "CH-04: missing node argument exits non-zero with an error message" {
+@test "missing node argument exits non-zero with an error message" {
     run "$SCRIPT"
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"sage"* ]] || [[ "$output" == *"node"* ]] || [[ "$output" == *"rror"* ]]
 }
 
-@test "CH-16: --node without a value exits non-zero" {
+@test "--node without a value exits non-zero" {
     run "$SCRIPT" --node
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"node"* ]] || [[ "$output" == *"equire"* ]] || [[ "$output" == *"sage"* ]]
 }
 
-@test "CH-17: unknown option is rejected" {
+@test "unknown option is rejected" {
     run "$SCRIPT" --bogus-flag
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"nknown"* ]] || [[ "$output" == *"nrecognized"* ]] || [[ "$output" == *"nvalid"* ]] || [[ "$output" == *"sage"* ]]
 }
 
-@test "CH-18: positional <ip> is accepted and produces the same snapshot" {
+@test "positional <ip> is accepted and produces the same snapshot" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured "$NODE"
     assert_captured_ok
@@ -242,12 +240,12 @@ assert_captured_ok() {
 }
 
 # =============================================================================
-# VC-CH-03 (REQ-3): Output is valid JSON with the deterministic schema
+# Output is valid JSON with the deterministic schema
 # { node, timestamp, kubepods_slice_weight, slices[ {name, cpu_weight,
 # pods[{name, cpu_weight, cpu_max}]} ] }.
 # =============================================================================
 
-@test "CH-05: --node snapshot succeeds; output is valid JSON with node and kubepods_slice_weight" {
+@test "--node snapshot succeeds; output is valid JSON with node and kubepods_slice_weight" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -258,7 +256,7 @@ assert_captured_ok() {
     [ "$(jq -r '.kubepods_slice_weight' "$STDOUT_FILE")" = "100" ]
 }
 
-@test "CH-06: slices array contains exactly the two QoS slices of the golden tree" {
+@test "slices array contains exactly the two QoS slices of the golden tree" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -267,7 +265,7 @@ assert_captured_ok() {
     [ "$(jq -r '[.slices[].name] | sort | join(",")' "$STDOUT_FILE")" = "kubepods-besteffort.slice,kubepods-burstable.slice" ]
 }
 
-@test "CH-07: burstable slice has name, cpu_weight 46, and 2 pod entries" {
+@test "burstable slice has name, cpu_weight 46, and 2 pod entries" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -276,7 +274,7 @@ assert_captured_ok() {
     [ "$(jq -r '.slices[] | select(.name == "kubepods-burstable.slice") | .pods | length' "$STDOUT_FILE")" = "2" ]
 }
 
-@test "CH-08: besteffort slice has name, cpu_weight 2, and 1 pod entry" {
+@test "besteffort slice has name, cpu_weight 2, and 1 pod entry" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -285,7 +283,7 @@ assert_captured_ok() {
     [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .pods | length' "$STDOUT_FILE")" = "1" ]
 }
 
-@test "CH-09: per-pod slice entries carry the fixture cpu_weight and cpu_max values" {
+@test "per-pod slice entries carry the fixture cpu_weight and cpu_max values" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -297,7 +295,7 @@ assert_captured_ok() {
     [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .pods[] | select(.name == "kubepods-besteffort-pod789abc.slice") | .cpu_max' "$STDOUT_FILE")" = "max 100000" ]
 }
 
-@test "CH-10: every slice has name/cpu_weight/pods and every pod has name/cpu_weight/cpu_max" {
+@test "every slice has name/cpu_weight/pods and every pod has name/cpu_weight/cpu_max" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -310,7 +308,7 @@ assert_captured_ok() {
     jq -e '.kubepods_slice_weight | type == "string" or type == "number"' "$STDOUT_FILE" >/dev/null
 }
 
-@test "CH-11: timestamp field is present and non-empty" {
+@test "timestamp field is present and non-empty" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -320,11 +318,11 @@ assert_captured_ok() {
 }
 
 # =============================================================================
-# VC-CH-04 (REQ-4): Data is read over SSH to root@<node>. SSH failure yields
+# Data is read over SSH to root@<node>. SSH failure yields
 # a non-zero exit with a clear message.
 # =============================================================================
 
-@test "CH-12: snapshot reaches ssh as root@<node> and issues remote commands" {
+@test "snapshot reaches ssh as root@<node> and issues remote commands" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -333,7 +331,7 @@ assert_captured_ok() {
     grep -q "root@$NODE" "$FAKE_SSH_LOG"
 }
 
-@test "CH-13: ssh failure exits non-zero with a clear message" {
+@test "ssh failure exits non-zero with a clear message" {
     export PATH="$FAKE_BIN:$PATH"
     export FAKE_SSH_MODE=refuse
     export FAKE_SSH_HOST="$NODE"
@@ -344,7 +342,7 @@ assert_captured_ok() {
     [[ "$output" == *"ssh"* ]] || [[ "$output" == *"SSH"* ]] || [[ "$output" == *"connect"* ]] || [[ "$output" == *"fail"* ]] || [[ "$output" == *"node"* ]]
 }
 
-@test "CH-14: ssh unavailable on PATH exits non-zero (edge)" {
+@test "ssh unavailable on PATH exits non-zero (edge)" {
     mkdir -p "$BATS_TEST_TMPDIR/no-ssh"
     touch "$BATS_TEST_TMPDIR/no-ssh/ssh"
     chmod 644 "$BATS_TEST_TMPDIR/no-ssh/ssh"   # present but not executable
@@ -356,11 +354,11 @@ assert_captured_ok() {
 }
 
 # =============================================================================
-# VC-CH-05 (REQ-5): The snapshot is read-only — the fake node sees only
+# The snapshot is read-only — the fake node sees only
 # read-only ssh commands and its fixture tree is byte-for-byte unchanged.
 # =============================================================================
 
-@test "CH-15: snapshot issues only read-only remote commands and leaves the node untouched" {
+@test "snapshot issues only read-only remote commands and leaves the node untouched" {
     export PATH="$FAKE_BIN:$PATH"
 
     local before after
@@ -377,11 +375,11 @@ assert_captured_ok() {
 }
 
 # =============================================================================
-# VC-CH-06 (REQ-6): The JSON is jq-parseable; .kubepods_slice_weight and the
+# The JSON is jq-parseable; .kubepods_slice_weight and the
 # slices array length are accessible via jq.
 # =============================================================================
 
-@test "CH-20: output parses with jq and exposes .kubepods_slice_weight and .slices length" {
+@test "output parses with jq and exposes .kubepods_slice_weight and .slices length" {
     export PATH="$FAKE_BIN:$PATH"
     snapshot_captured --node "$NODE"
     assert_captured_ok
@@ -392,7 +390,7 @@ assert_captured_ok() {
 }
 
 # =============================================================================
-# FIX-3: TRUE Guaranteed pod support (VC-CH-G)
+# FIX-3: TRUE Guaranteed pod support
 #
 # With the systemd cgroup driver a TRUE Guaranteed pod (memory
 # requests==limits) has NO kubepods-guaranteed.slice wrapper: its pod slice
@@ -403,7 +401,8 @@ assert_captured_ok() {
 # weight-losing empty entry. The change is additive: fixtures without a
 # direct pod slice must stay byte-compatible.
 #
-# The fake-ssh tree is created read-only in setup(); CH-G tests extend it
+# The fake-ssh tree is created read-only in setup(); the guaranteed-slice
+# tests extend it
 # with the direct pod slices before running the snapshot.
 # =============================================================================
 
@@ -425,7 +424,7 @@ add_guaranteed_slice_fixture() {
     chmod -R a-w "$FAKE_CGROUP_ROOT"
 }
 
-@test "CH-G-01: direct guaranteed pod slice is emitted with ONE self-representing pod entry (VC-CH-G-01)" {
+@test "direct guaranteed pod slice is emitted with ONE self-representing pod entry" {
     export PATH="$FAKE_BIN:$PATH"
     add_guaranteed_slice_fixture
     snapshot_captured --node "$NODE"
@@ -443,7 +442,7 @@ add_guaranteed_slice_fixture() {
     [ "$(jq -r '.slices[] | select(.name == "kubepods-podABC.slice") | .pods[0].cpu_max' "$STDOUT_FILE")" = "50000 100000" ]
 }
 
-@test "CH-G-02: unlimited guaranteed slice mirrors cpu.max 'max 100000' (VC-CH-G-01 edge)" {
+@test "unlimited guaranteed slice mirrors cpu.max 'max 100000'" {
     export PATH="$FAKE_BIN:$PATH"
     add_guaranteed_slice_fixture
     snapshot_captured --node "$NODE"
@@ -455,7 +454,7 @@ add_guaranteed_slice_fixture() {
     [ "$(jq -r '.slices[] | select(.name == "kubepods-podDEF.slice") | .pods[0].cpu_max' "$STDOUT_FILE")" = "max 100000" ]
 }
 
-@test "CH-G-03: burstable/besteffort slices stay byte-compatible when a guaranteed slice is present (VC-CH-G-02)" {
+@test "burstable/besteffort slices stay byte-compatible when a guaranteed slice is present" {
     export PATH="$FAKE_BIN:$PATH"
     add_guaranteed_slice_fixture
     snapshot_captured --node "$NODE"
@@ -471,7 +470,7 @@ add_guaranteed_slice_fixture() {
     [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .pods[0].cpu_weight' "$STDOUT_FILE")" = "2" ]
 }
 
-@test "CH-G-04: tree without a guaranteed slice still emits exactly the two QoS slices (VC-CH-G-02 byte-compat)" {
+@test "tree without a guaranteed slice still emits exactly the two QoS slices" {
     # Regression pin for the additive FIX-3 change: with NO kubepods-pod*.slice
     # directly under kubepods.slice, the snapshot output keeps the pre-fix
     # shape (2 slices, burstable 2 pods, besteffort 1 pod).
@@ -485,7 +484,7 @@ add_guaranteed_slice_fixture() {
     [ "$(jq -r '.slices[] | select(.name == "kubepods-besteffort.slice") | .pods | length' "$STDOUT_FILE")" = "1" ]
 }
 
-@test "CH-G-05: guaranteed-slice snapshot stays read-only and leaves the node untouched (VC-CH-G-03)" {
+@test "guaranteed-slice snapshot stays read-only and leaves the node untouched" {
     export PATH="$FAKE_BIN:$PATH"
     add_guaranteed_slice_fixture
 

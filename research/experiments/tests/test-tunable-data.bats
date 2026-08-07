@@ -4,17 +4,17 @@
 # research/data/tunable-baseline.json).
 #
 # These tests assert the tunable scripts work with the new JSON data files:
-#   REQ-1  tunable-sweep.sh list --file <sets.json> exits 0, prints set names
-#   REQ-2  tunable-sweep.sh apply <key> --file <sets.json> --dry-run exits 0,
+#   tunable-sweep.sh list --file <sets.json> exits 0, prints set names
+#   tunable-sweep.sh apply <key> --file <sets.json> --dry-run exits 0,
 #          prints tunable=value lines, and performs NO ssh
-#   REQ-3  tunable-sweep.sh apply unknown-key --file <sets.json> exits non-zero
+#   tunable-sweep.sh apply unknown-key --file <sets.json> exits non-zero
 #          and prints "not found"
-#   REQ-4  tunable-sweep.sh restore --file <baseline.json> [--dry-run]:
+#   tunable-sweep.sh restore --file <baseline.json> [--dry-run]:
 #          missing baseline -> non-zero "Baseline file not found";
 #          present baseline + --dry-run -> exits 0 and prints would-restore
-#   REQ-5  tunable-defaults.sh list is safe with or without debugfs mounted
-#   REQ-6  jq empty <file> succeeds for both JSON fixtures
-#   REQ-7  schema contract: exactly the documented set keys; values map only
+#   tunable-defaults.sh list is safe with or without debugfs mounted
+#   jq empty <file> succeeds for both JSON fixtures
+#   schema contract: exactly the documented set keys; values map only
 #          to {base_slice_ns, migration_cost_ns, nr_migrate} within
 #          TUNABLE_RANGES (base_slice_ns 500000-50000000,
 #          migration_cost_ns 0-5000000, nr_migrate 0-10000)
@@ -36,8 +36,8 @@
 # Run from project root:
 #   bats research/experiments/tests/test-tunable-data.bats
 #
-# Run a specific test:
-#   bats --filter "TUN-D03-02" research/experiments/tests/test-tunable-data.bats
+# Run a specific test (filter by any substring of the test description):
+#   bats --filter "apply default" research/experiments/tests/test-tunable-data.bats
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -173,10 +173,10 @@ STUB
 }
 
 # =============================================================================
-# VC-TUN-D03-01 (REQ-1): list prints the documented set names
+# list prints the documented set names
 # =============================================================================
 
-@test "TUN-D03-01: list --file prints all 9 documented set names and exits 0" {
+@test "list --file prints all 9 documented set names and exits 0" {
     run bash "$TUNABLE_SWEEP_SH" list --file "$FIXTURE_SETS"
 
     [ "$status" -eq 0 ]
@@ -192,10 +192,10 @@ STUB
 }
 
 # =============================================================================
-# VC-TUN-D03-02 (REQ-2): apply --dry-run prints tunable=value lines, no ssh
+# apply --dry-run prints tunable=value lines, no ssh
 # =============================================================================
 
-@test "TUN-D03-02: apply default --file fixture --dry-run exits 0 and prints tunable=value lines" {
+@test "apply default --file fixture --dry-run exits 0 and prints tunable=value lines" {
     run bash "$TUNABLE_SWEEP_SH" apply default --file "$FIXTURE_SETS" --dry-run
 
     [ "$status" -eq 0 ]
@@ -205,14 +205,14 @@ STUB
     [[ "$output" == *"nr_migrate=32"* ]]
 }
 
-@test "TUN-D03-03: apply --dry-run performs no ssh (stub records zero calls)" {
+@test "apply --dry-run performs no ssh (stub records zero calls)" {
     run bash "$TUNABLE_SWEEP_SH" apply default --file "$FIXTURE_SETS" --dry-run
 
     [ "$status" -eq 0 ]
     [ ! -f "$SSH_MARKER" ]
 }
 
-@test "TUN-D03-04: every documented set applies cleanly under --dry-run" {
+@test "every documented set applies cleanly under --dry-run" {
     local -a sets=(default base-slice-low base-slice-high migration-cost-zero migration-cost-high nr-migrate-low nr-migrate-high all-low all-high)
     local set
     for set in "${sets[@]}"; do
@@ -222,7 +222,7 @@ STUB
     done
 }
 
-@test "TUN-D03-16: apply of an empty set fails with a clear error" {
+@test "apply of an empty set fails with a clear error" {
     local empty="$BATS_TEST_TMPDIR/empty-set.json"
     printf '{ "default": {} }\n' > "$empty"
 
@@ -233,10 +233,10 @@ STUB
 }
 
 # =============================================================================
-# VC-TUN-D03-03 (REQ-3): unknown key rejected
+# unknown key rejected
 # =============================================================================
 
-@test "TUN-D03-05: apply unknown-key --file exits non-zero and prints not found" {
+@test "apply unknown-key --file exits non-zero and prints not found" {
     run bash "$TUNABLE_SWEEP_SH" apply unknown-key --file "$FIXTURE_SETS"
 
     [ "$status" -ne 0 ]
@@ -244,17 +244,17 @@ STUB
 }
 
 # =============================================================================
-# VC-TUN-D03-04 (REQ-4): restore behavior
+# restore behavior
 # =============================================================================
 
-@test "TUN-D03-06: restore with missing baseline exits non-zero and prints Baseline file not found" {
+@test "restore with missing baseline exits non-zero and prints Baseline file not found" {
     run bash "$TUNABLE_SWEEP_SH" restore --file "$BATS_TEST_TMPDIR/does-not-exist.json" --dry-run
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"Baseline file not found"* ]]
 }
 
-@test "TUN-D03-07: restore with present baseline --dry-run exits 0 and prints would-restore" {
+@test "restore with present baseline --dry-run exits 0 and prints would-restore" {
     run bash "$TUNABLE_SWEEP_SH" restore --file "$FIXTURE_BASELINE" --dry-run
 
     [ "$status" -eq 0 ]
@@ -263,10 +263,10 @@ STUB
 }
 
 # =============================================================================
-# VC-TUN-D03-05 (REQ-5): tunable-defaults.sh list is safe with/without debugfs
+# tunable-defaults.sh list is safe with/without debugfs
 # =============================================================================
 
-@test "TUN-D03-08: tunable-defaults.sh list is safe with or without debugfs" {
+@test "tunable-defaults.sh list is safe with or without debugfs" {
     run bash "$TUNABLE_DEFAULTS_SH" list
 
     if [[ -d /sys/kernel/debug/sched ]]; then
@@ -279,20 +279,20 @@ STUB
 }
 
 # =============================================================================
-# VC-TUN-D03-06 (REQ-6): JSON fixtures are valid
+# JSON fixtures are valid
 # =============================================================================
 
-@test "TUN-D03-09: jq empty succeeds on the tunable-sets fixture" {
+@test "jq empty succeeds on the tunable-sets fixture" {
     run jq empty < "$FIXTURE_SETS"
     [ "$status" -eq 0 ]
 }
 
-@test "TUN-D03-10: jq empty succeeds on the tunable-baseline fixture" {
+@test "jq empty succeeds on the tunable-baseline fixture" {
     run jq empty < "$FIXTURE_BASELINE"
     [ "$status" -eq 0 ]
 }
 
-@test "TUN-D03-15: apply with malformed JSON fixture fails gracefully" {
+@test "apply with malformed JSON fixture fails gracefully" {
     local bad="$BATS_TEST_TMPDIR/malformed.json"
     printf '{ not valid json\n' > "$bad"
 
@@ -303,10 +303,10 @@ STUB
 }
 
 # =============================================================================
-# VC-TUN-D03-07 (REQ-7): schema contract on the fixture
+# schema contract on the fixture
 # =============================================================================
 
-@test "TUN-D03-11: fixture tunable-sets.json has exactly the 9 documented keys" {
+@test "fixture tunable-sets.json has exactly the 9 documented keys" {
     run jq -r 'keys[]' "$FIXTURE_SETS"
 
     [ "$status" -eq 0 ]
@@ -316,12 +316,12 @@ STUB
     [ "$joined" = "all-high all-low base-slice-high base-slice-low default migration-cost-high migration-cost-zero nr-migrate-high nr-migrate-low " ]
 }
 
-@test "TUN-D03-12: fixture set values map only to kernel-7.1 tunables" {
+@test "fixture set values map only to kernel-7.1 tunables" {
     run jq -e 'all(.[] | keys[]; . == "base_slice_ns" or . == "migration_cost_ns" or . == "nr_migrate")' "$FIXTURE_SETS"
     [ "$status" -eq 0 ]
 }
 
-@test "TUN-D03-13: fixture set values are within TUNABLE_RANGES" {
+@test "fixture set values are within TUNABLE_RANGES" {
     run jq -e '
         all(.[];
             ((.base_slice_ns      | tonumber) >= 500000)
@@ -334,7 +334,7 @@ STUB
     [ "$status" -eq 0 ]
 }
 
-@test "TUN-D03-14: apply with out-of-range value fails range validation" {
+@test "apply with out-of-range value fails range validation" {
     local bad="$BATS_TEST_TMPDIR/out-of-range.json"
     printf '{ "default": { "base_slice_ns": "1" } }\n' > "$bad"
 
@@ -348,7 +348,7 @@ STUB
 # Real data files — red phase until the implementer creates them
 # =============================================================================
 
-@test "TUN-D03-17: real tunable-sets.json exists at research/data/" {
+@test "real tunable-sets.json exists at research/data/" {
     if [[ ! -f "$REAL_SETS_FILE" ]]; then
         echo "MISSING: $REAL_SETS_FILE (implementer must create it)" >&2
         return 1
@@ -356,7 +356,7 @@ STUB
     [ -s "$REAL_SETS_FILE" ]
 }
 
-@test "TUN-D03-18: real tunable-baseline.json exists at research/data/" {
+@test "real tunable-baseline.json exists at research/data/" {
     if [[ ! -f "$REAL_BASELINE_FILE" ]]; then
         echo "MISSING: $REAL_BASELINE_FILE (implementer must create it)" >&2
         return 1
@@ -364,7 +364,7 @@ STUB
     [ -s "$REAL_BASELINE_FILE" ]
 }
 
-@test "TUN-D03-19: real tunable-sets.json satisfies the full schema when present" {
+@test "real tunable-sets.json satisfies the full schema when present" {
     if [[ ! -f "$REAL_SETS_FILE" ]]; then
         echo "MISSING: $REAL_SETS_FILE (implementer must create it before this test passes)" >&2
         return 1

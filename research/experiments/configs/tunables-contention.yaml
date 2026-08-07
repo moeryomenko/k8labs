@@ -12,16 +12,17 @@ cooldown: 20
 # the scheduler tunable set to apply for the cell, so the tunable sweep is the
 # only variable across cells.
 #
-# Pod names are deliberately NOT latency-sensitive/batch (TASK-010 contract
-# T-LEGACY-TRAP: those exact names trigger the runner's legacy 2-pod path and
-# suppress the generic N-pod deployment lines that CV-04d asserts).
+# Pod names are deliberately NOT latency-sensitive/batch (workload types
+# contract: those exact names trigger the runner's legacy 2-pod path and
+# suppress the generic N-pod deployment lines that the deployment-count
+# assertion checks).
 #
 # MATRIX KEY: `tunables` is passed through by the runner as an unknown key
 # (resolve_cell_params collects every key=value pair; validation only checks
 # request/limit), so the cell carries the tunable-set label for the analysis
-# and for TASK-020's helper.
+# and for the tunable-set helper.
 #
-# TASK-020 / HELPER CONTRACT (manual, per cell): before each cell, apply the
+# HELPER CONTRACT (manual, per cell): before each cell, apply the
 # named tunable set on the workers and restore it after the cell:
 #   research/scripts/tunable-sweep.sh apply <tunables>    # e.g. base-slice-low
 #   ... run the cell ...
@@ -31,7 +32,7 @@ cooldown: 20
 #
 # The TOP-LEVEL latency_load block (NOT per-pod; per-pod latency_load is not
 # parsed) drives the latency-recording generator. The runner resolves the
-# api-server pod as the latency target (REQ-4/TASK-013), so latency.csv is
+# api-server pod as the latency target, so latency.csv is
 # captured against ls-api in real runs.
 #
 # RUN MODE: default Makefile target runs WITHOUT --eevdf (lighter). For

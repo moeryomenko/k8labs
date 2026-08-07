@@ -364,13 +364,13 @@ start_load_generation() {
 # start_latency_load_generation — Run the latency-recording load generator on
 # the pod's node and save the per-request latency CSV into the cell dir.
 #
-# REQ-2: the host has no route to the pod CIDR, so generation runs on the node
+# The host has no route to the pod CIDR, so generation runs on the node
 # that hosts the pod (SSH), mirroring start_load_generation. latency-loadgen.sh
 # streams load-generator.sh to the node and captures the CSV rows
 # (timestamp,endpoint,latency_ms,status) back into the local output file.
 # Any failure (script missing, pod/node resolution, SSH, generator error)
-# returns non-zero so the caller can log a warning and continue (REQ-5) —
-# never fatal.
+# returns non-zero so the caller can log a warning and continue — never
+# fatal.
 #
 # Arguments:
 #   $1 — pod name
@@ -478,7 +478,7 @@ resolve_latency_load_target() {
 # wait_latency_generation — Wait for a background latency generation job and
 # report whether latency.csv landed in the cell dir.
 #
-# REQ-5: the cell continues regardless. A completed job with a usable CSV is
+# The cell continues regardless. A completed job with a usable CSV is
 # logged as saved; a failed job or missing CSV is logged as a WARNING. The
 # runner never hard-fails because of latency load generation.
 #

@@ -8,7 +8,7 @@
 # against the pod IP, and captures the per-request CSV rows it writes back
 # into the local output file.
 #
-# Failure semantics (REQ-5): any failure — SSH error, unreachable target,
+# Failure semantics: any failure — SSH error, unreachable target,
 # generator error — leaves the output file absent (or partial) and exits
 # non-zero so the caller can log a warning and continue; the run never
 # hard-fails because of load generation.

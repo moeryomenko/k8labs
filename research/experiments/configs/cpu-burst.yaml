@@ -1,12 +1,12 @@
 experiment:
   name: cpu-burst
-  description: "CPU burst — db-simulator at a 250m limit, with and without cpu.max.burst. Run without --eevdf by default (lighter); burst application is manual via helper (TASK-020)."
+  description: "CPU burst — db-simulator at a 250m limit, with and without cpu.max.burst. Run without --eevdf by default (lighter); burst application is manual via helper."
 replicates: 3
 pre_warm: 10
 duration: 90
 cooldown: 15
 # Family E (cpu-burst): a single db-simulator pod pinned to a LOW CPU limit
-# (250m) so CFS bandwidth throttling is visible. The probe (TASK-001) found
+# (250m) so CFS bandwidth throttling is visible. The probe found
 # cpu.burst IS supported on this cluster (CONFIG_CFS_BANDWIDTH=y; cpu.max.burst
 # present at every cgroup level, default 0; writable from the node via SSH,
 # NOT from inside the pod — cgroupfs is RO in containers). burst is inert
@@ -15,7 +15,7 @@ cooldown: 15
 # MATRIX KEY: `burst` is a NEW cell key. The runner's resolve_cell_params
 # collects every key=value pair and ignores unknown keys (validation only
 # checks request/limit), so the cell carries `burst` purely as a label for
-# the analysis and for TASK-020's helper. Units are MICROSECONDS (same as the
+# the analysis and for the burst helper. Units are MICROSECONDS (same as the
 # quota field of cpu.max).
 #
 # BURST VALUE DECISION: the kernel enforces burst <= quota (EINVAL otherwise).
@@ -28,7 +28,7 @@ cooldown: 15
 # needs only the with/without-burst distinction, so the exact value does not
 # change the comparison.
 #
-# TASK-020 / HELPER CONTRACT (manual, after pod start): for burst cells the
+# HELPER CONTRACT (manual, after pod start): for burst cells the
 # helper must write cpu.max.burst on the pod's node via SSH (host-root
 # writable per probe) and restore it to 0 after the cell. Write path pattern:
 #   ssh root@<node> "echo 25000 > <container-cgroup>/cpu.max.burst"

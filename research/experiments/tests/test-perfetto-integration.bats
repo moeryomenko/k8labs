@@ -11,8 +11,8 @@
 # Run from project root:
 #   bats research/experiments/tests/test-perfetto-integration.bats
 #
-# Run a specific test:
-#   bats --filter "PI-02" research/experiments/tests/test-perfetto-integration.bats
+# Run a specific test (filter by any substring of the test description):
+#   bats --filter "--perfetto flag is accepted" research/experiments/tests/test-perfetto-integration.bats
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -27,10 +27,10 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-01: Existing behavior unchanged without --perfetto
+# Existing behavior unchanged without --perfetto
 # =============================================================================
 
-@test "PI-01: dry-run without --perfetto succeeds and produces expected output" {
+@test "dry-run without --perfetto succeeds and produces expected output" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -41,24 +41,24 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-02: --perfetto flag is accepted
+# --perfetto flag is accepted
 # =============================================================================
 
-@test "PI-02: --perfetto flag is accepted with --dry-run" {
+@test "--perfetto flag is accepted with --dry-run" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     # RED PHASE: This will fail (exit 1) until --perfetto is implemented
     [ "$status" -eq 0 ]
 }
 
-@test "PI-03: --perfetto flag is accepted (long form only)" {
+@test "--perfetto flag is accepted (long form only)" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"perfetto"* ]] || [[ "$output" == *"Perfetto"* ]] || [[ "$output" == *"PERFETTO"* ]]
 }
 
-@test "PI-04: --perfetto does not break existing --output-dir" {
+@test "--perfetto does not break existing --output-dir" {
     local test_outdir="$BATS_TEST_TMPDIR/experiment-output"
     mkdir -p "$test_outdir"
 
@@ -69,33 +69,33 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-03: --perfetto-config flag is accepted
+# --perfetto-config flag is accepted
 # =============================================================================
 
-@test "PI-05: --perfetto-config flag is accepted with valid config name" {
+@test "--perfetto-config flag is accepted with valid config name" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config scheduling
 
     [ "$status" -eq 0 ]
 }
 
-@test "PI-06: --perfetto-config with explicit config name appears in output" {
+@test "--perfetto-config with explicit config name appears in output" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config syscalls
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"syscalls"* ]]
 }
 
-@test "PI-07: --perfetto-config can be passed before --perfetto" {
+@test "--perfetto-config can be passed before --perfetto" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto-config scheduling --perfetto
 
     [ "$status" -eq 0 ]
 }
 
 # =============================================================================
-# VC-PI-04: --perfetto-config requires a value
+# --perfetto-config requires a value
 # =============================================================================
 
-@test "PI-08: --perfetto-config without value exits with error" {
+@test "--perfetto-config without value exits with error" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config
 
     [ "$status" -ne 0 ]
@@ -103,10 +103,10 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-05: --perfetto defaults to "scheduling" config
+# --perfetto defaults to "scheduling" config
 # =============================================================================
 
-@test "PI-09: --perfetto without --perfetto-config defaults to scheduling" {
+@test "--perfetto without --perfetto-config defaults to scheduling" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
@@ -114,31 +114,31 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-06: Dry-run with --perfetto shows tracing plan
+# Dry-run with --perfetto shows tracing plan
 # =============================================================================
 
-@test "PI-10: --dry-run --perfetto mentions trace start step" {
+@test "--dry-run --perfetto mentions trace start step" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"trace"* ]] || [[ "$output" == *"Trace"* ]]
 }
 
-@test "PI-11: --dry-run --perfetto mentions trace capture config" {
+@test "--dry-run --perfetto mentions trace capture config" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config scheduling
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"scheduling"* ]] || [[ "$output" == *"cfg"* ]]
 }
 
-@test "PI-12: --dry-run --perfetto mentions node resolution for tracing" {
+@test "--dry-run --perfetto mentions node resolution for tracing" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"node"* ]] || [[ "$output" == *"Node"* ]]
 }
 
-@test "PI-13: --dry-run --perfetto download/output path is mentioned" {
+@test "--dry-run --perfetto download/output path is mentioned" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
@@ -146,10 +146,10 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-07: Normal experiment without --perfetto runs unchanged
+# Normal experiment without --perfetto runs unchanged
 # =============================================================================
 
-@test "PI-14: without --perfetto, output is identical to baseline (no trace references)" {
+@test "without --perfetto, output is identical to baseline (no trace references)" {
     # Run without --perfetto — capture the output
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run
 
@@ -161,33 +161,33 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-08: Error handling for bad --perfetto-config values
+# Error handling for bad --perfetto-config values
 # =============================================================================
 
-@test "PI-15: --perfetto-config with non-existent config prints error" {
+@test "--perfetto-config with non-existent config prints error" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config nonexistent-config
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"not found"* ]] || [[ "$output" == *"no such"* ]] || [[ "$output" == *"rror"* ]] || [[ "$output" == *"nknown"* ]]
 }
 
-@test "PI-16: --perfetto-config with empty config name prints error" {
+@test "--perfetto-config with empty config name prints error" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config ""
 
     [ "$status" -ne 0 ]
 }
 
-@test "PI-17: --perfetto-config with special characters prints error" {
+@test "--perfetto-config with special characters prints error" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config "../../etc/passwd"
 
     [ "$status" -ne 0 ]
 }
 
 # =============================================================================
-# VC-PI-09: Graceful degradation when tracebox is unavailable
+# Graceful degradation when tracebox is unavailable
 # =============================================================================
 
-@test "PI-18: script does not crash when tracebox is not on node (graceful degradation path exists)" {
+@test "script does not crash when tracebox is not on node (graceful degradation path exists)" {
     # Source common.sh and verify that functions handle tracebox absence gracefully.
     # In the experiment runner, when --perfetto is enabled but tracebox can't be
     # found on the target node, the script should warn and continue, not crash.
@@ -202,7 +202,7 @@ setup() {
     [[ "$output" == *"function"* ]]
 }
 
-@test "PI-19: graceful degradation — warn but continue on tracebox failure" {
+@test "graceful degradation — warn but continue on tracebox failure" {
     # The experiment runner should NOT call 'die' when tracebox is missing.
     # Instead it should log a warning and continue the experiment without tracing.
     # This test verifies the error path by running 'check_tracebox_available'
@@ -216,17 +216,17 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-10: Perfetto trace metadata is captured
+# Perfetto trace metadata is captured
 # =============================================================================
 
-@test "PI-20: --dry-run --perfetto mentions trace file saved to cell directory" {
+@test "--dry-run --perfetto mentions trace file saved to cell directory" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
     [[ "$output" == *".perfetto"* ]] || [[ "$output" == *".trace"* ]] || [[ "$output" == *"perfetto"* ]]
 }
 
-@test "PI-21: --dry-run --perfetto references trace metadata in metadata.json" {
+@test "--dry-run --perfetto references trace metadata in metadata.json" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
@@ -234,41 +234,41 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-11: Unknown perfetto-related flags are rejected
+# Unknown perfetto-related flags are rejected
 # =============================================================================
 
-@test "PI-22: unknown --perfetto-<subflag> is rejected" {
+@test "unknown --perfetto-<subflag> is rejected" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-unknown-flag
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"nknown"* ]] || [[ "$output" == *"nrecognized"* ]] || [[ "$output" == *"nvalid"* ]]
 }
 
-@test "PI-23: --perfetto with trailing garbage after value is rejected" {
+@test "--perfetto with trailing garbage after value is rejected" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto --perfetto-config=invalid=chars
 
     [ "$status" -ne 0 ]
 }
 
 # =============================================================================
-# VC-PI-12: Integration with workload lifecycle
+# Integration with workload lifecycle
 # =============================================================================
 
-@test "PI-24: --perfetto flag is visible in dry-run experiment summary" {
+@test "--perfetto flag is visible in dry-run experiment summary" {
     run bash "$RUN_EXPERIMENT_SH" "$TEST_CONFIG" --dry-run --perfetto
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"perfetto"* ]] || [[ "$output" == *"Perfetto"* ]] || [[ "$output" == *"tracing"* ]]
 }
 
-@test "PI-25: --help output mentions --perfetto flag" {
+@test "--help output mentions --perfetto flag" {
     run bash "$RUN_EXPERIMENT_SH" --help
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"--perfetto"* ]]
 }
 
-@test "PI-26: --help output mentions --perfetto-config flag" {
+@test "--help output mentions --perfetto-config flag" {
     run bash "$RUN_EXPERIMENT_SH" --help
 
     [ "$status" -eq 0 ]
@@ -276,10 +276,10 @@ setup() {
 }
 
 # =============================================================================
-# VC-PI-13: Function-level tests for the integration helpers
+# Function-level tests for the integration helpers
 # =============================================================================
 
-@test "PI-27: common.sh can source without error" {
+@test "common.sh can source without error" {
     run bash -c "
         source '$COMMON_SH'
         echo OK
@@ -288,7 +288,7 @@ setup() {
     [ "$output" = "OK" ]
 }
 
-@test "PI-28: experiment runner can source perfetto-common.sh for node-aware tracing" {
+@test "experiment runner can source perfetto-common.sh for node-aware tracing" {
     # The experiment runner should be able to source perfetto-common.sh
     # to access resolve_node_ip, check_tracebox_available, etc.
     run bash -c "

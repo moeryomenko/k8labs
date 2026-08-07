@@ -14,19 +14,20 @@ cooldown: 20
 #   3. ls 500m/1000m   (Burstable)   batch 1000m/2000m
 #   4. ls none/none    (BestEffort)  batch 1000m/2000m
 #
-# Pod names are deliberately NOT latency-sensitive/batch (TASK-010 contract
-# T-LEGACY-TRAP: those exact names trigger the runner's legacy 2-pod path and
-# suppress the generic N-pod deployment lines that CV-04c asserts).
+# Pod names are deliberately NOT latency-sensitive/batch (workload types
+# contract: those exact names trigger the runner's legacy 2-pod path and
+# suppress the generic N-pod deployment lines that the deployment-count
+# assertion checks).
 #
 # The TOP-LEVEL latency_load block (NOT per-pod; per-pod latency_load is not
-# parsed) drives the latency-recording generator (TASK-007 wiring). Keys:
+# parsed) drives the latency-recording generator wiring. Keys:
 #   rate / duration / endpoints   (rate is the presence probe)
 # The runner writes latency.csv into each replicate dir when the block exists.
 #
 # RUN MODE: the Makefile target runs this WITHOUT --eevdf (lighter). For
 # scheduler metrics add --eevdf; for kernel tracing use
 #   --perfetto --perfetto-config eevdf-deep
-# The latency analysis (TASK-016 latency-analyze.py) needs latency.csv plus
+# The latency analysis (latency-analyze.py) needs latency.csv plus
 # optional eevdf/perfetto data.
 workloads:
   ls-api:

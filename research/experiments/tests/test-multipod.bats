@@ -1,28 +1,28 @@
 #!/usr/bin/env bats
 # multipod.bats — Tests for N-pod (multi-pod) co-located runner generalization
 #
-# These tests encode the target behavior of TASK-003 (generalizing the
+# These tests encode the target behavior of generalizing the
 # co-located experiment path in research/experiments/run-experiment.sh from
-# exactly 2 pods to N pods). They are written test-first: the REQ-1/REQ-3/
-# REQ-4/REQ-5 tests FAIL (red phase) against the current runner, while the
-# REQ-2 backward-compatibility tests are regression guards that already pass
-# and must stay green after TASK-003 lands.
+# exactly 2 pods to N pods. They are written test-first: the N-pod tests
+# FAIL (red phase) against the current runner, while the
+# backward-compatibility tests are regression guards that already pass
+# and must stay green after the generalization lands.
 #
 # No running cluster is required — every assertion targets --dry-run
 # stdout/stderr and exit codes.
 #
-# Requirements covered (full mapping in TEST-DESIGN.md):
-#   REQ-1 -> VC-MP-01 (MP-01, MP-02)
-#   REQ-2 -> VC-MP-02 (MP-08, MP-09)
-#   REQ-3 -> VC-MP-03 (MP-03)
-#   REQ-4 -> VC-MP-04 (MP-04)
-#   REQ-5 -> VC-MP-05 (MP-05, MP-06, MP-07)
+# Covered behaviors:
+#   N-pod config recognized; all N pod names printed
+#   per-pod data-collection streams
+#   per-pod manifest/substitution values with no unresolved markers
+#   unknown workload type errors clearly
+#   backward compat: 2-pod and single-pod configs unchanged
 #
 # Run from project root:
 #   bats research/experiments/tests/test-multipod.bats
 #
-# Run a specific test:
-#   bats --filter "MP-03" research/experiments/tests/test-multipod.bats
+# Run a specific test (filter by any substring of the test description):
+#   bats --filter "3-pod config" research/experiments/tests/test-multipod.bats
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -113,37 +113,37 @@ EOF
 }
 
 # =============================================================================
-# VC-MP-01 (REQ-1): A config with workloads: mapping N pods is recognized and
+# A config with workloads: mapping N pods is recognized and
 # the runner prints all N pod deployments in --dry-run output.
 # =============================================================================
 
-@test "MP-01: 3-pod config dry-run succeeds and lists all three pod names" {
+@test "3-pod config dry-run succeeds and lists all three pod names" {
     run bash "$RUN_EXPERIMENT_SH" "$THREE_PODS_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
-    # REQ-1: every pod from the workloads: mapping must appear in dry-run output
+    # Every pod from the workloads: mapping must appear in dry-run output
     # (currently absent — red phase)
     [[ "$output" == *"pod-a"* ]]
     [[ "$output" == *"pod-b"* ]]
     [[ "$output" == *"pod-c"* ]]
 }
 
-@test "MP-02: dry-run prints exactly N (=3) distinct pod names for an N-pod config" {
+@test "dry-run prints exactly N (=3) distinct pod names for an N-pod config" {
     run bash "$RUN_EXPERIMENT_SH" "$THREE_PODS_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
     local distinct
     distinct="$(printf '%s\n' "$output" | grep -oE 'pod-[abc]' | sort -u | sed '/^$/d' | wc -l)"
-    # REQ-1 generality: all N pods are printed, not a fixed subset
+    # Generality: all N pods are printed, not a fixed subset
     [ "$distinct" -eq 3 ]
 }
 
 # =============================================================================
-# VC-MP-03 (REQ-3): For a 3-pod config, --dry-run output shows 3 pod
+# For a 3-pod config, --dry-run output shows 3 pod
 # deployments and 3 data-collection streams (cgroup-watch per pod).
 # =============================================================================
 
-@test "MP-03: 3-pod config shows 3 data-collection streams, one per pod" {
+@test "3-pod config shows 3 data-collection streams, one per pod" {
     run bash "$RUN_EXPERIMENT_SH" "$THREE_PODS_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -153,23 +153,23 @@ EOF
             streams=$((streams + 1))
         fi
     done
-    # REQ-3: one cgroup data-collection stream per pod
+    # One cgroup data-collection stream per pod
     [ "$streams" -eq 3 ]
 }
 
 # =============================================================================
-# VC-MP-04 (REQ-4): Pod manifest generation substitutes per-pod request/limit
+# Pod manifest generation substitutes per-pod request/limit
 # template markers correctly (dry-run prints the substitution OR the manifest
 # filenames; per-pod markers resolved).
 # =============================================================================
 
-@test "MP-04: per-pod manifests or per-pod substitution values are printed, with no unresolved markers" {
+@test "per-pod manifests or per-pod substitution values are printed, with no unresolved markers" {
     run bash "$RUN_EXPERIMENT_SH" "$THREE_PODS_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
 
     if printf '%s\n' "$output" | grep -q '\.yaml'; then
-        # Branch A — REQ-4 "manifest filenames": one manifest per pod
+        # Branch A — "manifest filenames": one manifest per pod
         local yamls
         yamls="$(printf '%s\n' "$output" | grep -oE '[A-Za-z0-9_.-]+\.ya?ml' | sed '/^$/d' | wc -l)"
         [ "$yamls" -ge 3 ]
@@ -177,7 +177,7 @@ EOF
             printf '%s\n' "$output" | grep -qE "${pod}[A-Za-z0-9_.-]*\.ya?ml"
         done
     else
-        # Branch B — REQ-4 "substitution": per-pod request values resolved next
+        # Branch B — "substitution": per-pod request values resolved next
         # to their pod (matrix line alone is not enough)
         printf '%s\n' "$output" | grep -qE 'pod-a.*500m|500m.*pod-a'
         printf '%s\n' "$output" | grep -qE 'pod-b.*1000m|1000m.*pod-b'
@@ -188,27 +188,27 @@ EOF
 }
 
 # =============================================================================
-# VC-MP-05 (REQ-5): The runner errors clearly on a config with an unknown
+# The runner errors clearly on a config with an unknown
 # workload type under workloads: (validation fails, message names the type).
 # =============================================================================
 
-@test "MP-05: config with unknown workload type under workloads: fails" {
+@test "config with unknown workload type under workloads: fails" {
     run bash "$RUN_EXPERIMENT_SH" "$UNKNOWN_TYPE_CONFIG" --dry-run
 
     [ "$status" -ne 0 ]
 }
 
-@test "MP-06: unknown workload type error names the offending type" {
+@test "unknown workload type error names the offending type" {
     run bash "$RUN_EXPERIMENT_SH" "$UNKNOWN_TYPE_CONFIG" --dry-run
 
     [ "$status" -ne 0 ]
-    # REQ-5: the message must identify the unknown type
+    # The message must identify the unknown type
     [[ "$output" == *"futuristic-workload"* ]]
     [[ "$output" == *"nknown"* ]]
 }
 
-@test "MP-07: pod entry missing type under workloads: fails validation" {
-    # Edge case of REQ-5: a pod without a type cannot be templated, so the
+@test "pod entry missing type under workloads: fails validation" {
+    # Edge case: a pod without a type cannot be templated, so the
     # runner must reject it rather than silently continuing.
     run bash "$RUN_EXPERIMENT_SH" "$MISSING_TYPE_CONFIG" --dry-run
 
@@ -216,13 +216,13 @@ EOF
 }
 
 # =============================================================================
-# VC-MP-02 (REQ-2): Backward compatibility — existing co-located.yaml (2 pods)
+# Backward compatibility — existing co-located.yaml (2 pods)
 # and single-pod configs still dry-run successfully with unchanged output
 # shape. These are regression guards: they pass today and must stay green after
-# TASK-003.
+# the generalization lands.
 # =============================================================================
 
-@test "MP-08: existing co-located.yaml (2 pods) dry-runs with unchanged output shape" {
+@test "existing co-located.yaml (2 pods) dry-runs with unchanged output shape" {
     run bash "$RUN_EXPERIMENT_SH" "$CO_LOCATED_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -235,7 +235,7 @@ EOF
     [[ "$output" == *"Prerequisites check passed"* ]]
 }
 
-@test "MP-09: existing single-pod throttling-baseline.yaml dry-runs with unchanged output shape" {
+@test "existing single-pod throttling-baseline.yaml dry-runs with unchanged output shape" {
     run bash "$RUN_EXPERIMENT_SH" "$BASELINE_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]

@@ -1,13 +1,13 @@
 #!/usr/bin/env bats
-# test-weight-share-4v.bats — Tests for the 4-vCPU weight-share config + w2 variants (TASK-V05)
+# test-weight-share-4v.bats — Tests for the 4-vCPU weight-share config + w2 variants
 #
-# These tests encode the target behavior of TASK-V05 (adding a 4-vCPU
+# These tests encode the target behavior of adding a 4-vCPU
 # weight-share config and w2-pinned variants to the requests-vs-limits
-# scheduler-interaction study). They are written test-first: the two new
+# scheduler-interaction study. They are written test-first: the two new
 # config files DO NOT exist yet, so every test that asserts their presence or
 # dry-run behavior FAILS (red phase) against the current tree. The regression
-# guards (W4-07..W4-09) assert the existing w1 behavior and the node: w2
-# mechanism (TASK-V03) and PASS today.
+# guards assert the existing w1 behavior and the node: w2
+# mechanism and PASS today.
 #
 # No running cluster is required — every assertion targets --dry-run
 # stdout/stderr and exit codes.
@@ -18,21 +18,21 @@
 #                          (pod-a/pod-b/pod-c), 6 cells, node: w2, per-cell
 #                          request sum <= 3600m (4 cores minus system headroom)
 #   weight-share-w2.yaml   Family A rerun pinned to w2: 6 cells, node: w2;
-#                          weight-share.yaml stays the w1 default (REQ-5)
+#                          weight-share.yaml stays the w1 default
 #
-# Requirements covered (full mapping in TEST-DESIGN.md):
-#   REQ-1 -> VC-W4-V05-01 (W4-01, W4-02)
-#   REQ-2 -> VC-W4-V05-02 (W4-03)
-#   REQ-3 -> VC-W4-V05-03 (W4-04)
-#   REQ-4 -> VC-W4-V05-04 (W4-05, W4-06)
-#   REQ-5 -> VC-W4-V05-05 (W4-07)
-#   REQ-6 -> VC-W4-V05-06 (W4-08, W4-09)
+# Covered behaviors:
+#   weight-share-4v.yaml exists; dry-run exit 0 with 6 cells
+#   every pod pinned to w2 with no stale w1 marker
+#   every cell fits the 4-vCPU request budget (<= 3600m)
+#   weight-share-w2.yaml exists and dry-runs with 6 cells and nodeName: w2
+#   backward compat: weight-share.yaml stays the w1 default
+#   other multi-pod families compose with node: w2
 #
 # Run from project root:
 #   bats research/experiments/tests/test-weight-share-4v.bats
 #
-# Run a specific test:
-#   bats --filter "W4-04" research/experiments/tests/test-weight-share-4v.bats
+# Run a specific test (filter by any substring of the test description):
+#   bats --filter "3600m" research/experiments/tests/test-weight-share-4v.bats
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -40,18 +40,18 @@ setup() {
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
     export CONFIGS_DIR="$EXPERIMENTS_DIR/configs"
 
-    # TASK-V05 targets — created by the engineer later. Presence is what the
-    # REQ-1/REQ-4 tests assert; they are RED until those files land.
+    # Targets — created by the engineer later. Presence is what the
+    # existence tests assert; they are RED until those files land.
     export WEIGHT_SHARE_4V_CONFIG="$CONFIGS_DIR/weight-share-4v.yaml"
     export WEIGHT_SHARE_W2_CONFIG="$CONFIGS_DIR/weight-share-w2.yaml"
 
-    # Existing configs used by the REQ-5 backward-compat guard and the REQ-6
+    # Existing configs used by the backward-compat guard and the
     # node: w2 composition checks (temp sed variants).
     export WEIGHT_SHARE_CONFIG="$CONFIGS_DIR/weight-share.yaml"
     export QOS_HIERARCHY_CONFIG="$CONFIGS_DIR/qos-hierarchy.yaml"
     export LATENCY_INTERFERENCE_CONFIG="$CONFIGS_DIR/latency-interference.yaml"
 
-    # REQ-6 fixtures: sed-copied real configs with one top-level node: w2 key
+    # Fixtures: sed-copied real configs with one top-level node: w2 key
     # (same technique as test-node-pinning.bats). The flat-YAML parser reads
     # top-level keys in any order, so inserting the key at line 1 is faithful.
     export QOS_W2_CONFIG="$BATS_TEST_TMPDIR/w4-qos-w2.yaml"
@@ -106,15 +106,15 @@ cell_request_mc() {
 }
 
 # =============================================================================
-# VC-W4-V05-01 (REQ-1): weight-share-4v.yaml exists; dry-run exit 0 and prints
+# weight-share-4v.yaml exists; dry-run exit 0 and prints
 # 6 matrix cells. RED until the engineer creates the config.
 # =============================================================================
 
-@test "W4-01: config weight-share-4v.yaml exists (REQ-1)" {
+@test "config weight-share-4v.yaml exists" {
     [ -f "$WEIGHT_SHARE_4V_CONFIG" ]
 }
 
-@test "W4-02: weight-share-4v.yaml dry-runs exit 0 with 6 matrix cells (REQ-1)" {
+@test "weight-share-4v.yaml dry-runs exit 0 with 6 matrix cells" {
     run bash "$RUN_EXPERIMENT_SH" "$WEIGHT_SHARE_4V_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -130,11 +130,11 @@ cell_request_mc() {
 }
 
 # =============================================================================
-# VC-W4-V05-02 (REQ-2): weight-share-4v.yaml pins every pod to w2 — the dry-run
+# weight-share-4v.yaml pins every pod to w2 — the dry-run
 # shows nodeName: w2 for all 3 pods and no stale w1 marker.
 # =============================================================================
 
-@test "W4-03: weight-share-4v.yaml dry-run shows nodeName: w2 for all 3 pods (REQ-2)" {
+@test "weight-share-4v.yaml dry-run shows nodeName: w2 for all 3 pods" {
     run bash "$RUN_EXPERIMENT_SH" "$WEIGHT_SHARE_4V_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -153,13 +153,13 @@ cell_request_mc() {
 }
 
 # =============================================================================
-# VC-W4-V05-03 (REQ-3): every weight-share-4v cell fits the 4-vCPU request
+# every weight-share-4v cell fits the 4-vCPU request
 # budget — a_request + b_request (+ c_request when set) <= 3600m per cell, with
 # non-empty a/b requests. The suggested ratios are a starting point; the bound
-# (not the exact values) is the pinned contract (see TEST-DESIGN.md §7).
+# (not the exact values) is the pinned contract.
 # =============================================================================
 
-@test "W4-04: every weight-share-4v cell sums to <= 3600m with non-empty a/b (REQ-3)" {
+@test "every weight-share-4v cell sums to <= 3600m with non-empty a/b" {
     run bash "$RUN_EXPERIMENT_SH" "$WEIGHT_SHARE_4V_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -183,16 +183,16 @@ cell_request_mc() {
 }
 
 # =============================================================================
-# VC-W4-V05-04 (REQ-4): the w2 rerun variant of weight-share — a NEW file
-# weight-share-w2.yaml (design decision, TEST-DESIGN.md §5) — exists and
+# the w2 rerun variant of weight-share — a NEW file
+# weight-share-w2.yaml (design decision) — exists and
 # dry-runs exit 0 with 6 cells and nodeName: w2.
 # =============================================================================
 
-@test "W4-05: config weight-share-w2.yaml exists (REQ-4)" {
+@test "config weight-share-w2.yaml exists" {
     [ -f "$WEIGHT_SHARE_W2_CONFIG" ]
 }
 
-@test "W4-06: weight-share-w2.yaml dry-runs exit 0 with 6 cells and nodeName: w2 (REQ-4)" {
+@test "weight-share-w2.yaml dry-runs exit 0 with 6 cells and nodeName: w2" {
     run bash "$RUN_EXPERIMENT_SH" "$WEIGHT_SHARE_W2_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -207,13 +207,14 @@ cell_request_mc() {
 }
 
 # =============================================================================
-# VC-W4-V05-05 (REQ-5): backward compat — weight-share.yaml (no node: key,
+# backward compat — weight-share.yaml (no node: key,
 # w1 default) still dry-runs exit 0 with 6 cells and nodeName: w1. This
-# mirrors NP-04 and keeps CV-03a green: the w2 rerun lives in a SEPARATE file
+# mirrors the node-pinning default and keeps the config-existence test green:
+# the w2 rerun lives in a SEPARATE file
 # so the 2-vCPU w1 config is untouched.
 # =============================================================================
 
-@test "W4-07: weight-share.yaml (w1 default) still dry-runs with nodeName: w1 (REQ-5)" {
+@test "weight-share.yaml (w1 default) still dry-runs with nodeName: w1" {
     run bash "$RUN_EXPERIMENT_SH" "$WEIGHT_SHARE_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -228,12 +229,12 @@ cell_request_mc() {
 }
 
 # =============================================================================
-# VC-W4-V05-06 (REQ-6): the other multi-pod families compose with node: w2 via
-# the same top-level-key mechanism (TASK-V03). Light regression check: temp
+# the other multi-pod families compose with node: w2 via
+# the same top-level-key mechanism. Light regression check: temp
 # sed variants of the real configs must show one w2 marker per pod and no w1.
 # =============================================================================
 
-@test "W4-08: qos-hierarchy.yaml composes with node: w2 (3 pods pinned, REQ-6)" {
+@test "qos-hierarchy.yaml composes with node: w2 (3 pods pinned)" {
     run bash "$RUN_EXPERIMENT_SH" "$QOS_W2_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -244,7 +245,7 @@ cell_request_mc() {
     [ "$stale" -eq 0 ]
 }
 
-@test "W4-09: latency-interference.yaml composes with node: w2 (2 pods pinned, REQ-6)" {
+@test "latency-interference.yaml composes with node: w2 (2 pods pinned)" {
     run bash "$RUN_EXPERIMENT_SH" "$LATENCY_W2_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]

@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
 # test-latency-loadgen.bats — Tests for latency-recording load generation wiring
 #
-# These tests encode the target behavior of TASK-007 (wiring the latency
-# load generator into run-experiment.sh when the config declares
-# workload.params.latency_load). They are written test-first: the REQ-2 and
-# REQ-5 wiring tests FAIL (red phase) against the current runner, while the
-# REQ-1 CSV-contract tests and REQ-4 backward-compat tests are regression
-# guards that already pass and must stay green after TASK-007 lands.
+# These tests encode the target behavior of wiring the latency load generator
+# into run-experiment.sh when the config declares
+# workload.params.latency_load. They are written test-first: the wiring tests
+# FAIL (red phase) against the current runner, while the CSV-contract tests and
+# backward-compat tests are regression guards that already pass and must stay
+# green after the wiring lands.
 #
 # No running cluster is required. The host has no route to the pod CIDR, so
 # real generation runs on the pod's node via SSH (existing pattern); these
@@ -14,17 +14,17 @@
 #   1. the load-generator.sh CSV contract (against a local 200 HTTP server)
 #   2. the runner's --dry-run wiring contract (config -> dry-run output)
 #
-# Requirements covered (full mapping in TEST-DESIGN.md):
-#   REQ-1 -> VC-LL-01 (LL-01, LL-02, LL-03, LL-04)
-#   REQ-2 -> VC-LL-02 (LL-10, LL-11, LL-12, LL-13)
-#   REQ-4 -> VC-LL-04 (LL-20, LL-21, LL-22)
-#   REQ-5 -> VC-LL-05 (LL-30, LL-31, LL-32)
+# Covered behaviors:
+#   CSV-contract: generator writes timestamp,endpoint,latency_ms,status rows
+#   wiring: a config declaring workload.params.latency_load is planned in
+#   backward compat: endpoint-based and plain configs unchanged
+#   graceful degradation: unreachable target fails the generator, not the cell
 #
 # Run from project root:
 #   bats research/experiments/tests/test-latency-loadgen.bats
 #
-# Run a specific test:
-#   bats --filter "LL-10" research/experiments/tests/test-latency-loadgen.bats
+# Run a specific test (filter by any substring of the test description):
+#   bats --filter "latency_load config dry-run" research/experiments/tests/test-latency-loadgen.bats
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -42,7 +42,7 @@ setup() {
     cat > "$LATENCY_CONFIG" <<'EOF'
 experiment:
   name: ll-loadgen
-  description: "Load generation fixture (REQ-2/REQ-5)"
+  description: "Load generation fixture (latency_load wiring)"
 replicates: 1
 pre_warm: 1
 duration: 3
@@ -64,7 +64,7 @@ EOF
     cat > "$ENDPOINT_CONFIG" <<'EOF'
 experiment:
   name: ll-endpoint
-  description: "Backward-compat endpoint-based load fixture (REQ-4)"
+  description: "Backward-compat endpoint-based load fixture"
 replicates: 1
 pre_warm: 1
 duration: 3
@@ -80,7 +80,7 @@ matrix:
     limit: ""
 EOF
 
-    # Local HTTP server state for the REQ-1 CSV-contract tests.
+    # Local HTTP server state for the CSV-contract tests.
     export LL_SERVER_PID=""
     export LL_SERVER_PORT=""
 
@@ -142,22 +142,22 @@ run_generator_local() {
 }
 
 # =============================================================================
-# VC-LL-01 (REQ-1): A latency-recording load loop writes per-request CSV
+# A latency-recording load loop writes per-request CSV
 # (timestamp,endpoint,latency_ms,status) with usable rows.
 #
 # These are GREEN regression guards today: load-generator.sh already implements
-# the CSV contract. TASK-007 may extend it or add a helper; either way the CSV
-# contract must survive.
+# the CSV contract. The wiring task may extend it or add a helper; either way
+# the CSV contract must survive.
 # =============================================================================
 
-@test "LL-01: generator writes CSV header timestamp,endpoint,latency_ms,status" {
+@test "generator writes CSV header timestamp,endpoint,latency_ms,status" {
     run_generator_local "$BATS_TEST_TMPDIR/ll-01.csv"
 
     [ "$status" -eq 0 ]
     head -1 "$BATS_TEST_TMPDIR/ll-01.csv" | grep -q '^timestamp,endpoint,latency_ms,status$'
 }
 
-@test "LL-02: generator writes usable data rows (non-empty, 4 fields each)" {
+@test "generator writes usable data rows (non-empty, 4 fields each)" {
     run_generator_local "$BATS_TEST_TMPDIR/ll-02.csv"
 
     [ "$status" -eq 0 ]
@@ -177,7 +177,7 @@ run_generator_local() {
     [ "$rows" -gt 0 ]
 }
 
-@test "LL-03: data rows are usable — known endpoint, integer latency, numeric status" {
+@test "data rows are usable — known endpoint, integer latency, numeric status" {
     run_generator_local "$BATS_TEST_TMPDIR/ll-03.csv"
 
     [ "$status" -eq 0 ]
@@ -209,7 +209,7 @@ run_generator_local() {
     [ "$data_rows" -gt 0 ]
 }
 
-@test "LL-04: generator exits 0 and prints p50/p95/p99 summary on low-error run" {
+@test "generator exits 0 and prints p50/p95/p99 summary on low-error run" {
     run_generator_local "$BATS_TEST_TMPDIR/ll-04.csv"
 
     [ "$status" -eq 0 ]
@@ -219,34 +219,34 @@ run_generator_local() {
 }
 
 # =============================================================================
-# VC-LL-02 (REQ-2): Runner wiring — a config declaring workload.params.
+# Runner wiring — a config declaring workload.params.
 # latency_load must be recognized and planned in --dry-run: latency load
 # generation step, latency.csv into the cell dir, configured params echoed.
 # RED PHASE: none of this exists in the runner today.
 # =============================================================================
 
-@test "LL-10: latency_load config dry-run exits 0" {
+@test "latency_load config dry-run exits 0" {
     run bash "$RUN_EXPERIMENT_SH" "$LATENCY_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"DRY RUN MODE"* ]]
 }
 
-@test "LL-11: latency_load config dry-run mentions latency load generation" {
+@test "latency_load config dry-run mentions latency load generation" {
     run bash "$RUN_EXPERIMENT_SH" "$LATENCY_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
     printf '%s\n' "$output" | grep -qi 'latency'
 }
 
-@test "LL-12: latency_load config dry-run mentions latency.csv saved to the cell dir" {
+@test "latency_load config dry-run mentions latency.csv saved to the cell dir" {
     run bash "$RUN_EXPERIMENT_SH" "$LATENCY_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
     printf '%s\n' "$output" | grep -Eqi 'latency.*csv|csv.*latency'
 }
 
-@test "LL-13: latency_load config dry-run reflects configured rate and endpoint mix" {
+@test "latency_load config dry-run reflects configured rate and endpoint mix" {
     run bash "$RUN_EXPERIMENT_SH" "$LATENCY_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -257,13 +257,13 @@ run_generator_local() {
 }
 
 # =============================================================================
-# VC-LL-04 (REQ-4): Backward compatibility — existing workload.params.endpoint
+# Backward compatibility — existing workload.params.endpoint
 # behavior (start_load_generation) unchanged; configs without latency_load do
 # not mention latency generation in dry-run. These are regression guards that
-# already pass and must stay green after TASK-007.
+# already pass and must stay green after the wiring lands.
 # =============================================================================
 
-@test "LL-20: endpoint-based config dry-runs with unchanged shape, no latency mentions" {
+@test "endpoint-based config dry-runs with unchanged shape, no latency mentions" {
     run bash "$RUN_EXPERIMENT_SH" "$ENDPOINT_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -271,7 +271,7 @@ run_generator_local() {
     ! printf '%s\n' "$output" | grep -qi 'latency'
 }
 
-@test "LL-21: baseline config (no latency params) dry-runs with unchanged shape, no latency mentions" {
+@test "baseline config (no latency params) dry-runs with unchanged shape, no latency mentions" {
     run bash "$RUN_EXPERIMENT_SH" "$BASELINE_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -281,7 +281,7 @@ run_generator_local() {
     ! printf '%s\n' "$output" | grep -qi 'latency'
 }
 
-@test "LL-22: start_load_generation still exists in common.sh" {
+@test "start_load_generation still exists in common.sh" {
     run bash -c "
         source '$COMMON_SH'
         type start_load_generation 2>&1
@@ -292,12 +292,12 @@ run_generator_local() {
 }
 
 # =============================================================================
-# VC-LL-05 (REQ-5): Graceful degradation — if the latency generator fails
+# Graceful degradation — if the latency generator fails
 # (target unreachable), the cell continues, a warning is logged, latency.csv
 # may be missing, but the run does not hard-fail.
 # =============================================================================
 
-@test "LL-30: generator exits non-zero when target is unreachable" {
+@test "generator exits non-zero when target is unreachable" {
     # Pick a free port with nothing listening — curl fails instantly with
     # connection refused, so every request is an error (>50% error rate).
     LL_SERVER_PORT="$(pick_free_port)"
@@ -308,18 +308,18 @@ run_generator_local() {
     [ "$status" -ne 0 ]
 }
 
-@test "LL-31: latency_load dry-run marks generation as non-fatal/degradable" {
+@test "latency_load dry-run marks generation as non-fatal/degradable" {
     run bash "$RUN_EXPERIMENT_SH" "$LATENCY_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
     printf '%s\n' "$output" | grep -qi 'latency'
-    # REQ-5: a failing generator must not abort the cell; the dry-run plan
-    # must signal degradation. Any of several wordings is accepted (see
-    # TEST-DESIGN.md — this is the most wording-sensitive assertion).
+    # A failing generator must not abort the cell; the dry-run plan
+    # must signal degradation. Any of several wordings is accepted (this is
+    # the most wording-sensitive assertion).
     printf '%s\n' "$output" | grep -Eqi 'warn|continu|non-fatal|degrad|skip|tolerat'
 }
 
-@test "LL-32: common.sh sources cleanly (regression guard)" {
+@test "common.sh sources cleanly (regression guard)" {
     run bash -c "
         source '$COMMON_SH'
         echo OK

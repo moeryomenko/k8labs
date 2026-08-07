@@ -7,7 +7,7 @@ duration: 120
 cooldown: 15
 # Family C (qos-hierarchy): three stress-ng pods, one per QoS class, sharing
 # one node. The QoS class comes from the request/limit VALUES, not from the
-# workload type (TASK-010 contract T-TYPES). The guaranteed pod uses the
+# workload type (workload types contract). The guaranteed pod uses the
 # stress-ng-guaranteed template (memory request==limit 128Mi hardcoded) so the
 # pod is classified TRUE Guaranteed; burstable/besteffort use type stress-ng.
 #   guaranteed  -> request == limit (CPU matrix-driven equal values + 128Mi/128Mi)
@@ -18,12 +18,12 @@ cooldown: 15
 # <podname>_request / <podname>_limit. Pod names are deliberately
 # hyphen-free (guaranteed/burstable/besteffort) so the summary cell labels
 # come out as <qos>-<cell> (runner pattern <wpod>-<cell>), which is exactly
-# what qos-analyze.py (TASK-016) expects for the per-QoS rows.
+# what qos-analyze.py expects for the per-QoS rows.
 #
 # NOTE: run with --eevdf — this family measures EEVDF weight-share metrics
 # (per-pod vruntime/deadline/slice), so the Makefile target passes --eevdf.
 #
-# MANUAL STEP (TASK-016 contract): the runner does not yet capture the cgroup
+# MANUAL STEP: the runner does not yet capture the cgroup
 # hierarchy snapshot. After each cell, capture it per node manually:
 #   research/bin/cgroup-hierarchy-snapshot.sh <node-ip> \
 #     > <data-dir>/<cell>/cgroup-hierarchy-<node>.json

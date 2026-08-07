@@ -435,7 +435,7 @@ main() {
         || cgroup_interval="$(parse_yaml_value "$config_file" "measurement:cgroup_interval" 2>/dev/null)" \
         || die "Config missing 'measurement.cgroup_interval'"
 
-    # REQ-1 (TASK-V03): optional top-level node: key pins every pod manifest
+    # Optional top-level node: key pins every pod manifest
     # to a worker node via spec.nodeName. Absent key keeps the historical w1
     # default (backward compat). The value is injected by
     # substitute_cpu_params / substitute_pod_manifest through NODE_NAME.
@@ -487,7 +487,7 @@ main() {
         fi
     fi
 
-    # REQ-2: co-located configs may declare a top-level latency_load block
+    # Co-located configs may declare a top-level latency_load block
     # (same sub-keys as workload.params.latency_load). It targets the
     # latency-sensitive pod: the "latency-sensitive" pod in the legacy 2-pod
     # layout, or the first pod whose type is latency-sensitive in the generic
@@ -518,7 +518,7 @@ main() {
             || die "Config missing 'workload.type'"
         single_workload_params_endpoint="$(parse_yaml_subkey "$config_file" "workload.params.endpoint" 2>/dev/null || true)"
 
-        # REQ-2: optional latency-recording load generation block. The rate is
+        # Optional latency-recording load generation block. The rate is
         # the presence probe; duration defaults to the experiment duration and
         # the endpoint mix to the generator's default when not declared.
         single_workload_latency_rate="$(parse_yaml_subkey "$config_file" "workload.params.latency_load.rate" 2>/dev/null || true)"
@@ -539,7 +539,7 @@ main() {
 
     [[ ${#matrix_entries[@]} -gt 0 ]] || die "No matrix entries found in config"
 
-    # REQ-6 (TASK-011): reject any cell whose request exceeds its limit before
+    # Reject any cell whose request exceeds its limit before
     # anything runs. Applied to every matrix entry up front so --dry-run and
     # real runs fail identically, across single-pod, legacy 2-pod, and generic
     # N-pod key shapes.
@@ -569,7 +569,7 @@ main() {
             log "  - ${entry}"
         done
 
-        # REQ-2: latency load generation plan (single-pod workload.params.latency_load)
+        # Latency load generation plan (single-pod workload.params.latency_load)
         if [[ "$is_colocated" == false && -n "$single_workload_latency_load" ]]; then
             local dry_cell_dir="${OUTPUT_BASE_DIR}/${experiment_name}/<cell>/replicate-<n>"
             log ""
@@ -582,7 +582,7 @@ main() {
             log "  Degradation: generator failure is non-fatal — the cell continues with a warning and latency.csv may be absent"
         fi
 
-        # REQ-2: latency load generation plan (co-located top-level latency_load)
+        # Latency load generation plan (co-located top-level latency_load)
         if [[ "$is_colocated" == true && -n "$colocated_latency_load" ]]; then
             local dry_cell_dir="${OUTPUT_BASE_DIR}/${experiment_name}/<cell>/replicate-<n>"
             local dry_latency_target="latency-sensitive"
@@ -591,7 +591,7 @@ main() {
                 for i in "${!workload_pods[@]}"; do
                     latency_args+=("${workload_pods[$i]}:${workload_types[$i]}")
                 done
-                # REQ-4 (TASK-013): target api-server/cpu-burner/latency-sensitive
+                # Target api-server/cpu-burner/latency-sensitive
                 # (in that order) or the first HTTP-capable pod, not just
                 # latency-sensitive — Family D uses an api-server LS pod.
                 dry_latency_target="$(resolve_latency_load_target "${latency_args[@]}")" \
@@ -607,7 +607,7 @@ main() {
             log "  Degradation: generator failure is non-fatal — the cell continues with a warning and latency.csv may be absent"
         fi
 
-        # REQ-3 (TASK-V03): single-pod deployment plan. Dry-run must make node
+        # Single-pod deployment plan. Dry-run must make node
         # pinning visible per pod (spec.nodeName from the config `node:` key,
         # default w1) — today the single-pod path prints no deployment line.
         if [[ "$is_colocated" == false ]]; then
@@ -968,7 +968,7 @@ with open('${mdf}', 'w') as f:
                     for i in "${!workload_pods[@]}"; do
                         latency_args+=("${workload_pods[$i]}:${workload_types[$i]}")
                     done
-                    # REQ-4 (TASK-013): resolve the pod that should receive the
+                    # Resolve the pod that should receive the
                     # latency load — api-server/cpu-burner/latency-sensitive (in
                     # that order) or the first HTTP-capable pod. Family D uses an
                     # api-server LS pod, which the old latency-sensitive-only
@@ -1138,9 +1138,9 @@ with open('${mdf}', 'w') as f:
                     fi
                 fi
 
-                # Start latency-recording load generation (REQ-2:
-                # workload.params.latency_load). Runs in background; the CSV is
-                # checked after the measurement window (REQ-5: non-fatal).
+                # Start latency-recording load generation
+                # (workload.params.latency_load). Runs in background; the CSV is
+                # checked after the measurement window (non-fatal).
                 local latency_pid=""
                 if [[ -n "$single_workload_latency_load" && "$DRY_RUN" == false ]]; then
                     log "Starting latency load generation (rate: ${single_workload_latency_rate} req/s, duration: ${single_workload_latency_duration}s, endpoints: ${single_workload_latency_endpoints})"

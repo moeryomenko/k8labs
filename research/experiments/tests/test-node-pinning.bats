@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
-# test-node-pinning.bats — Tests for config-driven node pinning (TASK-V03)
+# test-node-pinning.bats — Tests for config-driven node pinning
 #
-# These tests encode the target behavior of TASK-V03 (parameterizing node
-# pinning so experiments can target a second worker w2): a top-level `node:`
+# These tests encode the target behavior of parameterizing node
+# pinning so experiments can target a second worker w2: a top-level `node:`
 # key in the experiment config makes the runner inject `nodeName: <node>` into
 # each pod manifest, defaulting to `w1` when the key is absent (backward
 # compat — the workload templates currently hardcode nodeName: w1 and must
@@ -14,18 +14,18 @@
 # No running cluster is required — every assertion targets --dry-run
 # stdout/stderr, exit codes, or the raw workload templates.
 #
-# Requirements covered (full mapping in TEST-DESIGN.md):
-#   REQ-1 -> VC-NP-V03-01 (NP-01, NP-02)
-#   REQ-2 -> VC-NP-V03-02 (NP-03, NP-04)
-#   REQ-3 -> VC-NP-V03-03 (NP-05, NP-06, NP-07)
-#   REQ-4 -> VC-NP-V03-04 (NP-08)
-#   REQ-5 -> VC-NP-V03-05 (NP-09, NP-10)
+# Covered behaviors:
+#   multi-pod config with node: w2 dry-runs with per-pod markers
+#   backward compat: existing weight-share.yaml defaults to w1
+#   single-pod configs: node: w2 vs w1 default
+#   rendered manifests for a node: w2 config carry nodeName: w2
+#   templates no longer hardcode a literal nodeName; composes with --eevdf
 #
 # Run from project root:
 #   bats research/experiments/tests/test-node-pinning.bats
 #
-# Run a specific test:
-#   bats --filter "NP-04" research/experiments/tests/test-node-pinning.bats
+# Run a specific test (filter by any substring of the test description):
+#   bats --filter "nodeName: w1" research/experiments/tests/test-node-pinning.bats
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -42,7 +42,7 @@ setup() {
     export BASELINE_W2_CONFIG="$BATS_TEST_TMPDIR/np-baseline-w2.yaml"
     export REQUEST_LIMIT_MATRIX_W2_CONFIG="$BATS_TEST_TMPDIR/np-request-limit-matrix-w2.yaml"
 
-    # REQ-1 fixture: three stress-ng pods pinned to w2 via a top-level node:
+    # Fixture: three stress-ng pods pinned to w2 via a top-level node:
     # key (weight-share shape, single cell — node injection is per pod, not
     # per cell, so one cell is enough for the dry-run contract).
     cat > "$MULTIPOD_W2_CONFIG" <<'EOF'
@@ -76,7 +76,7 @@ matrix:
   - a_request: "500m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
 EOF
 
-    # REQ-3 fixtures: the real single-pod configs plus one top-level node: key
+    # Single-pod fixtures: the real single-pod configs plus one top-level node: key
     # (sed-inserted at the top; the flat-YAML parser reads top-level keys in
     # any order).
     sed '1i node: w2' "$BASELINE_CONFIG" > "$BASELINE_W2_CONFIG"
@@ -101,26 +101,27 @@ count_node_markers() {
 }
 
 # =============================================================================
-# VC-NP-V03-01 (REQ-1): A config with node: w2 dry-runs exit 0 and the per-pod
+# A config with node: w2 dry-runs exit 0 and the per-pod
 # deployment output shows nodeName: w2 (or "node: w2") for every pod.
 # =============================================================================
 
-@test "NP-01: multi-pod config with node: w2 dry-runs successfully" {
+@test "multi-pod config with node: w2 dry-runs successfully" {
     run bash "$RUN_EXPERIMENT_SH" "$MULTIPOD_W2_CONFIG" --dry-run
 
     # RED PHASE: the config is accepted today (unknown top-level keys are
-    # tolerated), but the node markers are absent — NP-02 is the failing half.
+    # tolerated), but the node markers are absent — the marker assertion is the
+    # failing half.
     [ "$status" -eq 0 ]
     [[ "$output" == *"DRY RUN MODE"* ]]
 }
 
-@test "NP-02: multi-pod node: w2 dry-run shows nodeName: w2 for every pod" {
+@test "multi-pod node: w2 dry-run shows nodeName: w2 for every pod" {
     run bash "$RUN_EXPERIMENT_SH" "$MULTIPOD_W2_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
     local markers stale
     markers="$(count_node_markers w2)"
-    # REQ-1: one node marker per pod (3 pods) — the target node must be visible
+    # One node marker per pod (3 pods) — the target node must be visible
     [ "$markers" -ge 3 ]
     # Guard: no stale w1 marker leaks into a w2 config (mixed injection breaks
     # the manifest with duplicate spec keys)
@@ -129,11 +130,11 @@ count_node_markers() {
 }
 
 # =============================================================================
-# VC-NP-V03-02 (REQ-2): Backward compat — existing weight-share.yaml (no node:
+# Backward compat — existing weight-share.yaml (no node:
 # key) dry-runs exit 0 and shows nodeName: w1 for every pod (default preserved).
 # =============================================================================
 
-@test "NP-03: existing weight-share.yaml (no node: key) dry-runs with unchanged shape" {
+@test "existing weight-share.yaml (no node: key) dry-runs with unchanged shape" {
     run bash "$RUN_EXPERIMENT_SH" "$WEIGHT_SHARE_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -143,24 +144,24 @@ count_node_markers() {
     [[ "$output" == *"Prerequisites check passed"* ]]
 }
 
-@test "NP-04: weight-share default dry-run shows nodeName: w1 for every pod" {
+@test "weight-share default dry-run shows nodeName: w1 for every pod" {
     run bash "$RUN_EXPERIMENT_SH" "$WEIGHT_SHARE_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
     local markers stale
     markers="$(count_node_markers w1)"
-    # REQ-2: absent node: key keeps the historical w1 pinning — one marker per pod
+    # Absent node: key keeps the historical w1 pinning — one marker per pod
     [ "$markers" -ge 3 ]
     stale="$(count_node_markers w2)"
     [ "$stale" -eq 0 ]
 }
 
 # =============================================================================
-# VC-NP-V03-03 (REQ-3): Single-pod configs — node: w2 shows nodeName: w2;
+# Single-pod configs — node: w2 shows nodeName: w2;
 # without node: shows the w1 default.
 # =============================================================================
 
-@test "NP-05: single-pod config with node: w2 shows nodeName: w2" {
+@test "single-pod config with node: w2 shows nodeName: w2" {
     run bash "$RUN_EXPERIMENT_SH" "$BASELINE_W2_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -172,7 +173,7 @@ count_node_markers() {
     [ "$stale" -eq 0 ]
 }
 
-@test "NP-06: single-pod config without node: shows the w1 default" {
+@test "single-pod config without node: shows the w1 default" {
     run bash "$RUN_EXPERIMENT_SH" "$BASELINE_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -185,7 +186,7 @@ count_node_markers() {
     [ "$stale" -eq 0 ]
 }
 
-@test "NP-07: request-limit-matrix with node: w2 shows nodeName: w2" {
+@test "request-limit-matrix with node: w2 shows nodeName: w2" {
     run bash "$RUN_EXPERIMENT_SH" "$REQUEST_LIMIT_MATRIX_W2_CONFIG" --dry-run
 
     [ "$status" -eq 0 ]
@@ -198,13 +199,14 @@ count_node_markers() {
 }
 
 # =============================================================================
-# VC-NP-V03-04 (REQ-4): The manifest files generated for a node: w2 config
+# The manifest files generated for a node: w2 config
 # contain nodeName: w2. Strongest cluster-free assertion: if the runner writes
 # rendered manifests during --dry-run, assert file contents; otherwise assert
-# the dry-run output's per-pod node markers (mirrors MP-04's branch pattern).
+# the dry-run output's per-pod node markers (mirrors the multi-pod test's
+# branch pattern).
 # =============================================================================
 
-@test "NP-08: manifests rendered for a node: w2 config contain nodeName: w2" {
+@test "manifests rendered for a node: w2 config contain nodeName: w2" {
     local out_dir="$BATS_TEST_TMPDIR/np-out"
     run bash "$RUN_EXPERIMENT_SH" "$MULTIPOD_W2_CONFIG" --dry-run --output-dir "$out_dir"
 
@@ -227,7 +229,7 @@ count_node_markers() {
         done
     else
         # Branch B — dry-run only prints the plan: per-pod node markers must
-        # be visible in the output instead (REQ-4 fallback)
+        # be visible in the output instead (fallback)
         local markers
         markers="$(count_node_markers w2)"
         [ "$markers" -ge 3 ]
@@ -235,12 +237,12 @@ count_node_markers() {
 }
 
 # =============================================================================
-# VC-NP-V03-05 (REQ-5): Regression — templates no longer hardcode w1 (default
+# Regression — templates no longer hardcode w1 (default
 # injection gives w1) and the new feature composes with existing paths.
 # =============================================================================
 
-@test "NP-09: workload templates no longer hardcode a literal nodeName value" {
-    # REQ-5: the runner supplies the node now. A template that still pins a
+@test "workload templates no longer hardcode a literal nodeName value" {
+    # The runner supplies the node now. A template that still pins a
     # literal node (e.g. nodeName: w1) would conflict with config-driven
     # injection (duplicate spec-level key in the rendered manifest) — the 5
     # workload templates must drop it. A {{NODE_NAME}}-style marker is allowed
@@ -257,12 +259,12 @@ count_node_markers() {
     done
 }
 
-@test "NP-10: node: w2 composes with --eevdf in dry-run" {
+@test "node: w2 composes with --eevdf in dry-run" {
     run bash "$RUN_EXPERIMENT_SH" "$MULTIPOD_W2_CONFIG" --dry-run --eevdf
 
     [ "$status" -eq 0 ]
-    # REQ-5 regression: the EEVDF collection plan is still advertised alongside
-    # node injection (existing test-eevdf-wiring.bats assertions must hold)
+    # Regression: the EEVDF collection plan is still advertised alongside
+    # node injection (the eevdf-wiring assertions must hold)
     printf '%s\n' "$output" | grep -qi 'eevdf'
     local markers
     markers="$(count_node_markers w2)"
