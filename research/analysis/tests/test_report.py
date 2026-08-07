@@ -1,13 +1,12 @@
 """Tests for generate-report.py — markdown practical guide from analysis outputs.
 
-TASK-018 test-first design, extended by debt tasks TASK-D01 (data-driven
-burst verdict) and TASK-D08 (QoS ordering for direct guaranteed pod slices).
-The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract the engineer must build:
+Test-first design, extended by debt work on the data-driven burst verdict and
+QoS ordering for direct guaranteed pod slices.
+The module/function/CLI names used here are the contract the engineer must build:
 
     research/analysis/generate-report.py  (module: generate_report)
       REPORT_FILENAME = "interaction-report.md"
-      BURST_CSV = "burst-summary.csv"      (TASK-D01 pinned input)
+      BURST_CSV = "burst-summary.csv"      (pinned input)
       load_table(input_dir: Path, filename: str) -> pd.DataFrame | None
       build_report(input_dir: Path) -> str
       main(argv: list[str] | None = None) -> int
@@ -24,7 +23,7 @@ from the analyzer outputs):
     latency-correlation.csv  metric,correlation
     tunables-comparison.csv  tunable,mean_p99,std_p99,mean_slice_us,std_slice_us,n
     tunables-significance.csv  tunable,mean_p99,default_mean_p99,diff_p99,noise_threshold,significant
-    burst-summary.csv (TASK-D01 pinned)  cell,replicate,nr_periods,nr_throttled,
+    burst-summary.csv (pinned)  cell,replicate,nr_periods,nr_throttled,
       throttled_usec,usage_usec,cpu_max_burst,cpu_max_quota
 
 Report structure (pinned section headers, in order):
@@ -37,36 +36,36 @@ Report structure (pinned section headers, in order):
     ## Tunables verdict
     ## Burst verdict
 
-Section-presence rule (REQ-2, pinned): the six data-driven sections are NEVER
+Section-presence rule (pinned): the six data-driven sections are NEVER
 omitted; when their CSV is missing or has zero data rows they render the exact
 marker line ``_no data_`` under the header. The burst verdict section is
-two-branch (TASK-D01): when burst-summary.csv exists with data and at least
+two-branch: when burst-summary.csv exists with data and at least
 one row has cpu_max_burst > 0 it renders the measured verdict (the applied
 burst value, per-cell mean nr_throttled / throttled_usec, and the kernel
 constraint note); otherwise it renders the fallback static note ("No burst
 experiment data. Burst is disabled: cpu.max.burst defaults to 0..."). Empty
 input still produces a valid markdown file.
 
-Number formatting (pinned, REQ-4): integers render as ints; floats render via
+Number formatting (pinned): integers render as ints; floats render via
 ``format(v, "g")`` (deterministic, round-trippable); NaN renders as ``n/a``.
 Tables are standard pipe tables with a ``---`` separator row.
 
-TASK-018 covered requirements:
-  REQ-1 (VC-REP-01) all sections present, in pinned order
-  REQ-2 (VC-REP-02) missing/empty input -> "_no data_" marker, valid markdown
-  REQ-3 (VC-REP-03) exact fixture values in the right sections
-  REQ-4 (VC-REP-04) deterministic output (byte-identical, sorted rows)
-  REQ-5 (VC-CLI-01) --input-dir/--output-dir contract and exit codes
-  REQ-6 (VC-REP-05) string-contains / table parsing assertions, no network
+Covered behavior:
+  all sections present, in pinned order
+  missing/empty input -> "_no data_" marker, valid markdown
+  exact fixture values in the right sections
+  deterministic output (byte-identical, sorted rows)
+  --input-dir/--output-dir contract and exit codes
+  string-contains / table parsing assertions, no network
 
-TASK-D01/D08 debt requirements (the reason this file changes):
-  REQ-1 (D01) burst data-present case renders measured numbers (nr_throttled
+Debt-work behavior (the reason this file changes):
+  burst data-present case renders measured numbers (nr_throttled
         105 -> 0, burst=25000, kernel constraint note)
-  REQ-2 (D01) burst no-data fallback still renders the static note
-  REQ-3 (D08) QoS ordering: kubepods-pod*.slice sorts as guaranteed (before
+  burst no-data fallback still renders the static note
+  QoS ordering: kubepods-pod*.slice sorts as guaranteed (before
         burstable/besteffort); kubepods-guaranteed.slice still works
-  REQ-4 (D01/D08) existing determinism/CLI/no-data tests unaffected
-  REQ-5 (D01) burst input filename + schema pinned in TEST-DESIGN.md
+  existing determinism/CLI/no-data tests unaffected
+  burst input filename + schema pinned
 
 Run from research/analysis:
     python3 -m pytest tests/test_report.py -q
@@ -131,7 +130,7 @@ LAT_ROW_CELL2 = [
     "0.1",
 ]
 
-# TASK-D01 burst contract — fixture values from conftest BURST_ROWS.
+# Burst contract — fixture values from conftest BURST_ROWS.
 # The applied burst value (25000) comes from cpu_max_burst, NEVER from the
 # cell label (the burst cell label is burst=100000, the matrix value the
 # kernel rejected EINVAL).
@@ -143,7 +142,7 @@ BURST_VERDICT_MARKER = "Measured verdict"
 BURST_FALLBACK_MARKER = "No burst experiment data"
 BURST_KERNEL_CONSTRAINT = "burst <= quota"
 
-# TASK-D08: the direct TRUE-Guaranteed pod slice qos-analyze.py emits.
+# The direct TRUE-Guaranteed pod slice qos-analyze.py emits.
 DIRECT_GUARANTEED_SLICE = "kubepods-podg1.slice"
 
 
@@ -232,7 +231,7 @@ class TestModuleContract:
             )
 
     def test_module_exposes_burst_csv_name(self):
-        """TASK-D01: the script pins the burst input filename."""
+        """The script pins the burst input filename."""
         module = load_report_module()
         assert module.BURST_CSV == "burst-summary.csv"
 
@@ -265,7 +264,7 @@ class TestLoadTable:
         assert module.load_table(analysis_output_dir, "does-not-exist.csv") is None
 
     def test_reads_burst_csv(self, analysis_output_dir: pathlib.Path):
-        """TASK-D01: load_table reads burst-summary.csv with the pinned schema."""
+        """load_table reads burst-summary.csv with the pinned schema."""
         module = load_report_module()
         df = module.load_table(analysis_output_dir, "burst-summary.csv")
         assert list(df.columns) == BURST_COLUMNS
@@ -273,12 +272,12 @@ class TestLoadTable:
 
 
 # =========================================================================
-# VC-REP-01 — all sections present, pinned order (REQ-1)
+# All sections present, pinned order
 # =========================================================================
 
 
 class TestSectionPresence:
-    """REQ-1: every required section appears in the pinned order."""
+    """Every required section appears in the pinned order."""
 
     def test_all_sections_present_in_order(self, analysis_output_dir: pathlib.Path):
         """All seven headers appear; their order matches the pinned list."""
@@ -291,7 +290,7 @@ class TestSectionPresence:
     def test_happy_path_cli_report_has_all_sections(
         self, analysis_output_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """End-to-end: the written file contains all sections (REQ-1 + REQ-5)."""
+        """End-to-end: the written file contains all sections."""
         rc, err, report_path = run_ok(analysis_output_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         report = report_path.read_text()
@@ -300,7 +299,7 @@ class TestSectionPresence:
 
 
 # =========================================================================
-# VC-REP-03 — exact fixture values (REQ-3)
+# Exact fixture values
 # =========================================================================
 
 
@@ -423,7 +422,7 @@ class TestQosSection:
     def test_direct_pod_slice_sorts_as_guaranteed(
         self, qos_direct_guaranteed_output_dir: pathlib.Path
     ):
-        """TASK-D08: kubepods-podg1.slice sorts before burstable/besteffort.
+        """kubepods-podg1.slice sorts before burstable/besteffort.
 
         The direct TRUE-Guaranteed pod slice (qos-analyze.py output for a
         systemd layout without the kubepods-guaranteed.slice wrapper) must
@@ -443,7 +442,7 @@ class TestQosSection:
 
 
 class TestQosPriority:
-    """_qos_priority mapping (TASK-D08): direct pod slice ranks as guaranteed."""
+    """_qos_priority mapping: direct pod slice ranks as guaranteed."""
 
     def test_direct_pod_slice_is_guaranteed(self):
         """kubepods-pod*.slice (TRUE Guaranteed) ranks with guaranteed (0)."""
@@ -461,7 +460,7 @@ class TestQosPriority:
         ids=["guaranteed", "burstable", "besteffort", "unknown"],
     )
     def test_class_slices_keep_priorities(self, slice_name: str, expected: int):
-        """The existing QoS-class mapping is unchanged (REQ-4/REQ-3)."""
+        """The existing QoS-class mapping is unchanged."""
         module = load_report_module()
         assert module._qos_priority(slice_name) == expected
 
@@ -529,14 +528,14 @@ class TestTunablesSection:
 
 
 class TestBurstSection:
-    """Burst verdict (TASK-D01): data-driven measured verdict vs fallback note."""
+    """Burst verdict: data-driven measured verdict vs fallback note."""
 
     def test_data_present_renders_measured_verdict(
         self, analysis_output_dir: pathlib.Path
     ):
         """burst-summary.csv present -> measured numbers, burst value, kernel note.
 
-        REQ-1: the applied burst value (cpu.max.burst=25000), the per-cell
+        The applied burst value (cpu.max.burst=25000), the per-cell
         mean nr_throttled / throttled_usec (105 -> 0, 5280000 -> 0) and the
         kernel constraint note (burst <= quota; 100000 EINVAL) all appear.
         """
@@ -564,7 +563,7 @@ class TestBurstSection:
     def test_no_data_renders_static_fallback(
         self, empty_analysis_output_dir: pathlib.Path
     ):
-        """No burst-summary.csv -> the static fallback note (REQ-2)."""
+        """No burst-summary.csv -> the static fallback note."""
         module = load_report_module()
         body = section_text(
             module.build_report(empty_analysis_output_dir), SECTION_HEADERS[-1]
@@ -594,7 +593,7 @@ class TestBurstSection:
 
 
 # =========================================================================
-# VC-REP-02 — missing/empty input (REQ-2)
+# Missing/empty input
 # =========================================================================
 
 
@@ -604,7 +603,7 @@ class TestNoData:
     def test_empty_input_is_valid_markdown(
         self, empty_analysis_output_dir: pathlib.Path
     ):
-        """REQ-2: empty input still yields a valid markdown file with all headers."""
+        """Empty input still yields a valid markdown file with all headers."""
         module = load_report_module()
         report = module.build_report(empty_analysis_output_dir)
         assert report.strip()
@@ -613,7 +612,7 @@ class TestNoData:
             assert header in report
         for header in DATA_SECTIONS:
             assert NO_DATA_MARKER in section_text(report, header)
-        # Burst verdict (TASK-D01): no burst data -> the static fallback note,
+        # Burst verdict: no burst data -> the static fallback note,
         # never the no-data marker (the fallback explains the absence).
         burst_body = section_text(report, SECTION_HEADERS[-1])
         assert NO_DATA_MARKER not in burst_body
@@ -622,7 +621,7 @@ class TestNoData:
     def test_empty_input_cli_exit_zero(
         self, empty_analysis_output_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """CLI on empty input: exit 0 and a valid file (REQ-2 + REQ-5)."""
+        """CLI on empty input: exit 0 and a valid file."""
         rc, err, report_path = run_ok(empty_analysis_output_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert report_path.exists()
@@ -652,7 +651,7 @@ class TestNoData:
         assert NO_DATA_MARKER in section_text(report, SECTION_HEADERS[0])
 
     def test_header_only_burst_csv_renders_fallback(self, tmp_path: pathlib.Path):
-        """TASK-D01: header-only burst-summary.csv -> fallback note, not verdict."""
+        """Header-only burst-summary.csv -> fallback note, not verdict."""
         module = load_report_module()
         d = tmp_path / "burst-header-only"
         d.mkdir()
@@ -663,7 +662,7 @@ class TestNoData:
 
 
 # =========================================================================
-# VC-REP-04 — deterministic output (REQ-4)
+# Deterministic output
 # =========================================================================
 
 
@@ -699,7 +698,7 @@ class TestDeterminism:
 
 
 # =========================================================================
-# VC-CLI-01 — CLI contract (REQ-5)
+# CLI contract
 # =========================================================================
 
 
@@ -736,7 +735,7 @@ class TestCli:
 
 
 # =========================================================================
-# End-to-end: fixture data -> markdown report (REQ-1/3/5/6)
+# End-to-end: fixture data -> markdown report
 # =========================================================================
 
 
@@ -746,7 +745,7 @@ class TestEndToEnd:
     def test_happy_path_report_exists_with_content(
         self, analysis_output_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-REP-01 + VC-CLI-01: exit 0, report file with every section."""
+        """Exit 0, report file with every section."""
         rc, err, report_path = run_ok(analysis_output_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert report_path.exists()
@@ -756,12 +755,12 @@ class TestEndToEnd:
         assert "0.00393082" in report
         assert "Max throttling ratio: 0.9" in report
         assert "19.81" in report
-        assert "`cpu.max.burst=25000`" in report  # TASK-D01 measured verdict
+        assert "`cpu.max.burst=25000`" in report  # measured burst verdict
 
     def test_report_is_markdown_tables(
         self, analysis_output_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-6: structure assertions via pipe-table parsing, no network."""
+        """Structure assertions via pipe-table parsing, no network."""
         rc, err, report_path = run_ok(analysis_output_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         report = report_path.read_text()
@@ -772,7 +771,7 @@ class TestEndToEnd:
         assert "|--" in report
 
     def test_input_files_contract(self, analysis_output_dir: pathlib.Path):
-        """REQ-1: the report reads exactly the pinned input file names."""
+        """The report reads exactly the pinned input file names."""
         module = load_report_module()
         report = module.build_report(analysis_output_dir)
         for filename in REPORT_INPUT_FILES:

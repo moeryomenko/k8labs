@@ -1,8 +1,7 @@
 """Tests for weight-share-analyze.py — achieved vs theoretical CPU share.
 
-TASK-014 test-first design, red until TASK-015 implements the script.
-The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract TASK-015 must build:
+Test-first design, red until the script is implemented.
+The module/function/CLI names used here are the contract the implementation must build:
 
     research/analysis/weight-share-analyze.py  (module: weight_share_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
@@ -13,12 +12,12 @@ used here are the contract TASK-015 must build:
 CLI: --data-dir <dir> --output-dir <dir>; writes weight-share-summary.csv with
 columns cell,pod,achieved_share,weight_share,ratio_error.
 
-Covered requirements:
-  VC-WS-01 exact share math + output CSV schema
-  VC-WS-02 2-pod and 3-pod cells
-  VC-WS-03 missing cgroup file -> skip cell + warn, no crash
-  VC-EMPTY-01 empty input -> header-only output, no crash
-  VC-CLI-01 --data-dir/--output-dir contract and exit codes
+Covered behavior:
+  exact share math + output CSV schema
+  2-pod and 3-pod cells
+  missing cgroup file -> skip cell + warn, no crash
+  empty input -> header-only output, no crash
+  --data-dir/--output-dir contract and exit codes
 
 Run from research/analysis:
     python3 -m pytest tests/test_weight_share.py -q
@@ -104,7 +103,7 @@ class TestModuleContract:
 
 
 # =========================================================================
-# VC-WS-01 — exact share math (pure function)
+# Exact share math (pure function)
 # =========================================================================
 
 
@@ -164,7 +163,7 @@ class TestComputeWeightShares:
 
         With per-replicate ratios 0.375 (60000/100000) and 0.45 (90000/110000),
         aggregate-then-divide gives 150000/360000 = 0.4166667, NOT the mean of
-        per-replicate shares (0.4125). This pins the VC-WS-01 math.
+        per-replicate shares (0.4125). This pins the exact share math.
         """
         module = load_weight_share_module()
         df = pd.DataFrame(  # type: ignore
@@ -237,7 +236,7 @@ class TestLoadSummary:
 
 
 # =========================================================================
-# VC-WS-03 — missing cgroup file handling (pure function + CLI)
+# Missing cgroup file handling (pure function + CLI)
 # =========================================================================
 
 
@@ -264,7 +263,7 @@ class TestCgroupCompleteness:
 
 
 # =========================================================================
-# VC-CLI-01 — CLI contract
+# CLI contract
 # =========================================================================
 
 
@@ -309,7 +308,7 @@ class TestEndToEnd:
     def test_happy_path_outputs_exact_csv(
         self, family_a_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-WS-01 + VC-CLI-01: exit 0, CSV with exact shares for both cells."""
+        """Exit 0, CSV with exact shares for both cells."""
         rc, err, csv_path = run_ok(family_a_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert csv_path.exists(), f"missing output: {csv_path}"
@@ -323,7 +322,7 @@ class TestEndToEnd:
     def test_empty_summary_outputs_header_only(
         self, empty_summary_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-EMPTY-01: exit 0, header-only output, no crash."""
+        """Empty input: exit 0, header-only output, no crash."""
         rc, err, csv_path = run_ok(empty_summary_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert csv_path.exists()
@@ -334,7 +333,7 @@ class TestEndToEnd:
     def test_missing_cgroup_skips_cell_with_warning(
         self, incomplete_cgroup_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-WS-03: exit 0, incomplete cell skipped, warning names the cell."""
+        """Incomplete cell skipped, warning names the cell."""
         rc, err, csv_path = run_ok(incomplete_cgroup_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert csv_path.exists()
@@ -345,18 +344,18 @@ class TestEndToEnd:
 
 
 # =========================================================================
-# FIX-4 (REQ-1) — real runner layout: pod names with dashes + cell dir names
+# FIX-4 — real runner layout: pod names with dashes + cell dir names
 #
 # summary cell_label = "pod-a/pod-b/pod-c - <cell>" where <cell> is the full
 # matrix cell string that NAMES the directory under <data-dir>/<timestamp>/.
 # Naive first-dash splitting yields pod "pod" / cell "a-a_request=..." (the
-# TASK-022 verified bug) — the analyzer must resolve cells from the filesystem
+# verified bug) — the analyzer must resolve cells from the filesystem
 # (cell dir names) and map rows by cell_label suffix ("^(pod)-<cell>$").
 # =========================================================================
 
 
 class TestRealLayout:
-    """FIX-4 REQ-1: ingest the REAL runner output layout."""
+    """FIX-4: ingest the REAL runner output layout."""
 
     def test_check_cgroup_completeness_resolves_real_labels(
         self, real_weight_share_data_dir: pathlib.Path
@@ -376,7 +375,7 @@ class TestRealLayout:
     def test_cli_exit_zero_and_csv_written(
         self, real_weight_share_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-6: analyzer exits 0 on the real fixture and writes the CSV."""
+        """Analyzer exits 0 on the real fixture and writes the CSV."""
         rc, err, csv_path = run_ok(real_weight_share_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert csv_path.exists()
@@ -396,7 +395,7 @@ class TestRealLayout:
     def test_cli_real_layout_exact_shares(
         self, real_weight_share_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-1: exact achieved/weight shares per pod, BestEffort included.
+        """Exact achieved/weight shares per pod, BestEffort included.
 
         cell1 (500/500): achieved 12/33, 20/33, 1/33; weight 59/160, 100/160,
         1/160. cell2 (100/500): achieved 6/37, 30/37, 1/37; weight 17/118,

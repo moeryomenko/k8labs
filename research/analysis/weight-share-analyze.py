@@ -8,7 +8,7 @@ share (weight-based) and emit ``weight-share-summary.csv``.
 Usage:
     weight-share-analyze.py --data-dir <dir> --output-dir <dir>
 
-Math (pinned by the TASK-014 contract, TEST-DESIGN.md section 4):
+Math (pinned by the analysis contract):
 
     pod             = cell_label up to the first '-'
     cell            = remainder of the cell_label

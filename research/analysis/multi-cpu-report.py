@@ -11,7 +11,7 @@ Usage:
     multi-cpu-report.py --compare-dir <dir> --qos-summary <csv>
         --latency-summary <csv> --heatmap <csv> --output <md>
 
-Section layout (pinned by the TASK-V08 contract):
+Section layout (pinned by the analysis contract):
 
     # Multi-CPU validation
     ## 2-CPU vs 4-CPU weight-share (same cells)

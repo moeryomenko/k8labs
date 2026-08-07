@@ -9,7 +9,7 @@ join them with the summary throttling stats; emit ``latency-summary.csv`` and
 Usage:
     latency-analyze.py --data-dir <dir> --output-dir <dir>
 
-Math (pinned by the TASK-016 contract, TEST-DESIGN.md section 5):
+Math (pinned by the analysis contract):
 
     p50/p95/p99      = mean across replicates of the per-file percentiles
                        computed by latency_stats.percentiles_from_csv
@@ -22,8 +22,7 @@ Percentiles are computed by research/analysis/latency_stats.py — this module
 imports it and never reimplements percentile math. A cell is skipped (with a
 warning, never a crash) when it has NO usable latency samples: no latency.csv
 files, or every file header-only/empty. A present-but-empty latency.csv among
-non-empty files contributes (0.0, 0.0, 0.0) to the cell mean (TASK-007
-semantics).
+non-empty files contributes (0.0, 0.0, 0.0) to the cell mean.
 
 The correlation summary is a pandas-native Pearson correlation of each
 percentile column with ``throttled_usec``; zero-variance input yields NaN.
@@ -137,7 +136,7 @@ def discover_latency_csvs(
     same cell. Every ``**/latency.csv`` under ``<data-dir>/**/<cell>/`` is
     collected recursively (covering both ``replicate-<N>/`` nesting and flat
     direct-child layouts) and sorted; a cell without any latency file maps to
-    an empty list (REQ-4).
+    an empty list.
 
     Args:
         data_dir: Experiment data root (summary.csv lives here).
@@ -166,7 +165,7 @@ def compute_cell_latencies(
     the cell value is the mean across files. An empty file list, or a list
     where every file is header-only/empty (all percentiles 0.0), returns
     ``None`` (the cell is skipped). An empty file among non-empty ones
-    contributes ``(0.0, 0.0, 0.0)`` to the mean (TASK-007 semantics).
+    contributes ``(0.0, 0.0, 0.0)`` to the mean.
 
     Args:
         latency_paths: latency.csv paths for one cell, sorted.

@@ -185,7 +185,7 @@ class TestCsvInputMode:
     def test_csv_dir_produces_all_four_valid_pngs(self, mock_csv_dir, tmp_path):
         """A per-trace analysis subdir with the 4 flat CSVs yields the 4 PNGs.
 
-        TASK-001 REQ-003: plot-perfetto-cpu.py directory mode must accept the
+        plot-perfetto-cpu.py directory mode must accept the
         perfetto-analyze.py output layout (4 CSVs flat) and produce all 4
         plots. This pins rc == 0 and valid, non-empty PNG files — unlike the
         weaker test above, it never passes vacuously when the script fails.

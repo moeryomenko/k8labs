@@ -10,8 +10,7 @@ Usage:
     interaction-heatmap.py --data-dir <dir> --output-dir <dir>
                            [--value {throttling_ratio,usage}]
 
-Cell value semantics (pinned by the TASK-014 contract, TEST-DESIGN.md
-section 5):
+Cell value semantics (pinned by the analysis contract):
 
     throttling_ratio  = mean across replicates of nr_throttled / nr_periods
                         (NaN when nr_periods == 0)

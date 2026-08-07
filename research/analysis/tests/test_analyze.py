@@ -6,8 +6,8 @@ Test categories (29 tests total):
   3. SQL query validation        (4 tests)
   4. CSV output                  (4 tests)
   5. Edge cases / resilience     (4 tests)
-  6. Trace directory discovery   (2 tests, TASK-001: recursive discovery + --trace-dir alias)
-  7. Raw ftrace + sched contracts (5 tests, TASK-002/003: ingest_ftrace_in_raw,
+  6. Trace directory discovery   (2 tests: recursive discovery + --trace-dir alias)
+  7. Raw ftrace + sched contracts (5 tests: ingest_ftrace_in_raw,
      ftrace-based wakeup/runtime SQL, CSV header contracts)
 """
 
@@ -444,12 +444,12 @@ class TestEdgeCases:
 
 
 # =========================================================================
-# 6. Trace directory discovery (2 tests, TASK-001)
+# 6. Trace directory discovery (2 tests)
 #
-# REQ-001: *.perfetto-trace files nested ANY number of levels deep must be
+# *.perfetto-trace files nested ANY number of levels deep must be
 #          discovered (current code only scans top-level entries via
 #          os.listdir) and analyzed into <output-dir>/<trace-basename>/.
-# REQ-002: the input path must be accepted BOTH positionally AND via the
+# The input path must be accepted BOTH positionally AND via the
 #          --trace-dir alias (current parser rejects --trace-dir).
 #
 # The real `perfetto` package is not installed in the test environment, so
@@ -540,8 +540,8 @@ def fake_perfetto_env(tmp_path: pathlib.Path) -> dict:
 
 
 class TestTraceDirectoryDiscovery:
-    """Verify directory-mode trace discovery (REQ-001) and the --trace-dir
-    alias (REQ-002)."""
+    """Verify directory-mode trace discovery and the --trace-dir
+    alias."""
 
     def test_nested_directory_traces_discovered_recursively(
         self, tmp_path, fake_perfetto_env
@@ -589,28 +589,28 @@ class TestTraceDirectoryDiscovery:
 
 
 # =========================================================================
-# 7. Raw ftrace ingestion + scheduler SQL/CSV contracts (5 tests, TASK-002/003)
+# 7. Raw ftrace ingestion + scheduler SQL/CSV contracts (5 tests)
 #
-# REQ-A1: traces MUST load with raw ftrace ingestion enabled —
+# Traces MUST load with raw ftrace ingestion enabled —
 #         TraceProcessorConfig(ingest_ftrace_in_raw=True). The current default
 #         TraceProcessor(file_path=...) config does not import raw ftrace, so
 #         sched_waking / sched_stat_runtime are not queryable and
 #         perfetto-sched-latency.csv is header-only.
-# REQ-A2: two new SQL queries must be present:
+# Two new SQL queries must be present:
 #         - wakeup latency: ftrace_event (sched_waking) + args keys
 #           comm/pid/prio + thread mapping + next sched_slice of the woken utid
 #           (existing consumers plot-perfetto-cpu.py / sched-latency-heatmap.py
 #           depend on this contract);
 #         - per-task runtime samples: ftrace_event (sched_stat_runtime) + args
 #           keys comm/pid/runtime (runtime stored in int_value).
-# REQ-A3: EMPTY_HEADERS (or equivalent) must declare the CSV header contracts:
+# EMPTY_HEADERS (or equivalent) must declare the CSV header contracts:
 #         perfetto-sched-latency.csv -> pid,tid,thread_name,wakeup_latency_ms,count
 #         perfetto-sched-runtime.csv -> ts,cpu,pid,tid,thread_name,runtime_ns
 # =========================================================================
 
 
 class TestRawFtraceConfig:
-    """REQ-A1 — the analyzer loads traces with raw ftrace ingestion enabled."""
+    """The analyzer loads traces with raw ftrace ingestion enabled."""
 
     def test_trace_processor_config_enables_raw_ftrace(self):
         """TraceProcessorConfig with ingest_ftrace_in_raw=True is used."""
@@ -627,7 +627,7 @@ class TestRawFtraceConfig:
 
 
 class TestFtraceSqlQueries:
-    """REQ-A2 — the ftrace-based wakeup-latency and runtime SQL queries exist."""
+    """The ftrace-based wakeup-latency and runtime SQL queries exist."""
 
     def _find_ftrace_query(self, marker: str) -> str | None:
         """Return the first extracted query joining ftrace_event with *marker*."""
@@ -663,7 +663,7 @@ class TestFtraceSqlQueries:
 
 
 class TestCsvHeaderContracts:
-    """REQ-A3 — EMPTY_HEADERS (or equivalent) declares each output CSV contract."""
+    """EMPTY_HEADERS (or equivalent) declares each output CSV contract."""
 
     def test_sched_latency_csv_header_contract(self):
         """perfetto-sched-latency.csv declares pid,tid,thread_name,wakeup_latency_ms,count."""

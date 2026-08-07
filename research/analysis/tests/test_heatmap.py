@@ -1,8 +1,7 @@
 """Tests for interaction-heatmap.py — request x limit interaction heatmap.
 
-TASK-014 test-first design, red until TASK-015 implements the script.
-The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract TASK-015 must build:
+Test-first design, red until the script is implemented.
+The module/function/CLI names used here are the contract the implementation must build:
 
     research/analysis/interaction-heatmap.py  (module: interaction_heatmap)
       parse_cell_label(label: str) -> tuple[int, int] | None
@@ -15,11 +14,11 @@ writes heatmap-<value>.csv (pivot table: rows=request, cols=limit) and
 heatmap-<value>.png (matplotlib; rendering is lazy and non-fatal so the CSV
 is produced headless).
 
-Covered requirements:
-  VC-HT-01 pivot table CSV (rows=request, cols=limit, values=ratio|usage)
-  VC-HT-02 matplotlib heatmap emission, headless-safe
-  VC-EMPTY-01 empty input -> header-only output, no crash
-  VC-CLI-01 --data-dir/--output-dir contract and exit codes
+Covered behavior:
+  pivot table CSV (rows=request, cols=limit, values=ratio|usage)
+  matplotlib heatmap emission, headless-safe
+  empty input -> header-only output, no crash
+  --data-dir/--output-dir contract and exit codes
 
 Run from research/analysis:
     python3 -m pytest tests/test_heatmap.py -q
@@ -189,7 +188,7 @@ class TestParseCellLabel:
 
 
 # =========================================================================
-# VC-HT-01 — pivot table construction
+# Pivot table construction
 # =========================================================================
 
 
@@ -275,7 +274,7 @@ class TestBuildHeatmap:
         assert pd.isna(got)
 
     def test_empty_input_returns_request_column_only(self):
-        """Empty input -> DataFrame with a single 'request' column (REQ-4 header)."""
+        """Empty input -> DataFrame with a single 'request' column (header only)."""
         module = load_heatmap_module()
         empty = pd.DataFrame(columns=FAMILY_SUMMARY_COLUMNS)  # type: ignore
         pivot = module.build_heatmap(empty, value="throttling_ratio")
@@ -284,7 +283,7 @@ class TestBuildHeatmap:
 
 
 # =========================================================================
-# VC-CLI-01 — CLI contract
+# CLI contract
 # =========================================================================
 
 
@@ -330,7 +329,7 @@ class TestEndToEnd:
     def test_happy_path_ratio_csv(
         self, family_b_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-HT-01 + VC-CLI-01: exit 0 and an exact throttling-ratio pivot CSV."""
+        """Exit 0 and an exact throttling-ratio pivot CSV."""
         rc, err, out_dir = run_ok(family_b_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         csv_path = out_dir / VALUE_CSV
@@ -352,7 +351,7 @@ class TestEndToEnd:
     def test_empty_summary_outputs_header_only(
         self, empty_summary_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-EMPTY-01: exit 0, header-only CSV, no crash."""
+        """Empty input: exit 0, header-only CSV, no crash."""
         rc, err, out_dir = run_ok(empty_summary_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         csv_path = out_dir / VALUE_CSV
@@ -366,7 +365,7 @@ class TestEndToEnd:
     def test_png_heatmap_rendered(
         self, family_b_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-HT-02: real matplotlib (Agg) emits a valid heatmap PNG."""
+        """Real matplotlib (Agg) emits a valid heatmap PNG."""
         rc, err, out_dir = run_ok(family_b_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert_is_png(out_dir / RATIO_PNG)
@@ -374,7 +373,7 @@ class TestEndToEnd:
     def test_matplotlib_import_failure_is_nonfatal(
         self, family_b_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-HT-02: broken matplotlib must not block the CSV output.
+        """Broken matplotlib must not block the CSV output.
 
         A stub matplotlib that raises on import is injected via PYTHONPATH.
         The script must write heatmap-throttling_ratio.csv and exit 0 with a

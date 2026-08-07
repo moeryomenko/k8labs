@@ -1,8 +1,7 @@
 """Tests for cpu-count-compare.py — 2-CPU vs 4-CPU weight-share comparison.
 
-TASK-V07 test-first design, red until the script is implemented.
-The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract the engineer must build:
+Test-first design, red until the script is implemented.
+The module/function/CLI names used here are the contract the engineer must build:
 
     research/analysis/cpu-count-compare.py  (module: cpu_count_compare)
       OUTPUT_COMPARISON_CSV = "cpu-count-compare.csv"
@@ -44,14 +43,14 @@ delta = error_4cpu - error_2cpu (negative is an improvement); missing_in is
 file, "4cpu" when it is only in the 2-CPU file (the missing side is NaN,
 never a crash). Verdict means are computed over cells present in BOTH runs.
 
-Covered requirements:
-  REQ-1 (VC-CC-01) exact per-cell mean |ratio_error| + delta math on fixtures
-  REQ-2 (VC-CC-02) comparison CSV schema; cells in only one run marked missing
-  REQ-3 (VC-CC-03) verdict line deterministic per pinned format
-  REQ-4 (VC-CC-04) scaled 4-vCPU block as a separate section/file
-  REQ-5 (VC-EMPTY-01/VC-MPL-01) empty inputs -> header-only outputs + message;
+Covered behavior:
+  exact per-cell mean |ratio_error| + delta math on fixtures
+  comparison CSV schema; cells in only one run marked missing
+  verdict line deterministic per pinned format
+  scaled 4-vCPU block as a separate section/file
+  empty inputs -> header-only outputs + message;
         matplotlib lazy and non-fatal
-  REQ-6 (VC-CLI-01) CLI --output-dir contract: exit 0 on fixtures, non-zero
+  CLI --output-dir contract: exit 0 on fixtures, non-zero
         + clear message on missing input
 
 Run from research/analysis:
@@ -91,7 +90,7 @@ SCALED_COLUMNS = ["cell", "ratio_label", "error_scaled"]
 
 WEIGHT_SHARE_COLUMNS = ["cell", "pod", "achieved_share", "weight_share", "ratio_error"]
 
-# Pinned verdict numbers for the happy-path fixtures (REQ-1/REQ-3).
+# Pinned verdict numbers for the happy-path fixtures.
 VERDICT_2CPU_MEAN = 0.024
 VERDICT_4CPU_MEAN = 0.010
 VERDICT_SCALED_MEAN = 0.008
@@ -196,7 +195,7 @@ def fixtures(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
 
 @pytest.fixture
 def missing_cell_fixtures(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
-    """Fixture pair where one cell exists in each run only (REQ-2)."""
+    """Fixture pair where one cell exists in each run only."""
     return write_fixtures(
         tmp_path / "fixtures-missing",
         omit_2cpu={"a=100m;b=1000m"},  # present only in the 4-CPU file
@@ -242,7 +241,7 @@ def run_ok(
 
 
 def expected_comparison_rows() -> list[tuple]:
-    """Expected per-cell rows for the happy-path fixtures (REQ-1 math)."""
+    """Expected per-cell rows for the happy-path fixtures."""
     rows: list[tuple] = []
     for (cell, _a, _b, e2), (_c, _d, _e, e4) in zip(
         CELLS_2CPU, CELLS_4CPU, strict=True
@@ -328,7 +327,7 @@ class TestLoadSummaryCsv:
 
 
 # =========================================================================
-# VC-CC-01/02 — build_comparison (REQ-1 exact math, REQ-2 missing cells)
+# build_comparison (exact math, missing cells)
 # =========================================================================
 
 
@@ -336,7 +335,7 @@ class TestBuildComparison:
     """Per-cell mean |ratio_error|, delta and missing-cell marking."""
 
     def test_exact_per_cell_means_and_delta(self, fixtures: dict[str, pathlib.Path]):
-        """REQ-1: per-cell error_2cpu/error_4cpu/delta match the fixture math."""
+        """Per-cell error_2cpu/error_4cpu/delta match the fixture math."""
         module = load_module()
         df2 = module.load_summary_csv(fixtures["2cpu"])
         df4 = module.load_summary_csv(fixtures["4cpu"])
@@ -350,7 +349,7 @@ class TestBuildComparison:
             assert row["missing_in"] == "both"
 
     def test_columns_and_sorted_rows(self, fixtures: dict[str, pathlib.Path]):
-        """REQ-2: pinned column order, one row per cell, sorted by cell."""
+        """Pinned column order, one row per cell, sorted by cell."""
         module = load_module()
         table = module.build_comparison(
             module.load_summary_csv(fixtures["2cpu"]),
@@ -365,7 +364,7 @@ class TestBuildComparison:
     def test_overall_means_match_pinned_verdict(
         self, fixtures: dict[str, pathlib.Path]
     ):
-        """REQ-1/REQ-3: mean |ratio_error| is 0.024 (2-CPU) and 0.010 (4-CPU)."""
+        """Mean |ratio_error| is 0.024 (2-CPU) and 0.010 (4-CPU)."""
         module = load_module()
         table = module.build_comparison(
             module.load_summary_csv(fixtures["2cpu"]),
@@ -377,7 +376,7 @@ class TestBuildComparison:
     def test_cells_present_in_only_one_run_marked_missing(
         self, missing_cell_fixtures: dict[str, pathlib.Path]
     ):
-        """REQ-2: one-sided cells are marked; no crash; matched cells intact."""
+        """One-sided cells are marked; no crash; matched cells intact."""
         module = load_module()
         table = module.build_comparison(
             module.load_summary_csv(missing_cell_fixtures["2cpu"]),
@@ -403,7 +402,7 @@ class TestBuildComparison:
 
 
 # =========================================================================
-# VC-CC-01 — build_detail (per-pod rows)
+# build_detail (per-pod rows)
 # =========================================================================
 
 
@@ -411,7 +410,7 @@ class TestBuildDetail:
     """Per-pod signed ratio_error detail rows."""
 
     def test_exact_per_pod_rows(self, fixtures: dict[str, pathlib.Path]):
-        """REQ-1: pod-a +e / pod-b -e per run, delta between runs."""
+        """Pod-a +e / pod-b -e per run, delta between runs."""
         module = load_module()
         detail = module.build_detail(
             module.load_summary_csv(fixtures["2cpu"]),
@@ -430,7 +429,7 @@ class TestBuildDetail:
     def test_missing_cell_pods_get_nan_side(
         self, missing_cell_fixtures: dict[str, pathlib.Path]
     ):
-        """REQ-2: pods of a one-sided cell have NaN on the missing side."""
+        """Pods of a one-sided cell have NaN on the missing side."""
         module = load_module()
         detail = module.build_detail(
             module.load_summary_csv(missing_cell_fixtures["2cpu"]),
@@ -446,7 +445,7 @@ class TestBuildDetail:
 
 
 # =========================================================================
-# VC-CC-04 — build_scaled_block (REQ-4)
+# build_scaled_block
 # =========================================================================
 
 
@@ -454,7 +453,7 @@ class TestBuildScaledBlock:
     """Scaled 4-vCPU block section from the weight-share-4v summary."""
 
     def test_exact_scaled_rows(self, fixtures: dict[str, pathlib.Path]):
-        """REQ-4: per-cell error_scaled matches the scaled fixture math."""
+        """Per-cell error_scaled matches the scaled fixture math."""
         module = load_module()
         block = module.build_scaled_block(module.load_summary_csv(fixtures["4v"]))
         assert list(block.columns) == SCALED_COLUMNS
@@ -465,14 +464,14 @@ class TestBuildScaledBlock:
             assert rows.loc[cell, "error_scaled"] == pytest.approx(err, abs=1e-9)
 
     def test_rows_sorted_by_cell(self, fixtures: dict[str, pathlib.Path]):
-        """REQ-4: scaled rows are deterministically sorted by cell."""
+        """Scaled rows are deterministically sorted by cell."""
         module = load_module()
         block = module.build_scaled_block(module.load_summary_csv(fixtures["4v"]))
         assert block["cell"].tolist() == sorted(block["cell"].tolist())
 
 
 # =========================================================================
-# VC-CC-03 — verdict lines (REQ-3)
+# Verdict lines
 # =========================================================================
 
 
@@ -480,7 +479,7 @@ class TestVerdict:
     """Deterministic verdict lines in the pinned format."""
 
     def test_verdict_line_format(self, fixtures: dict[str, pathlib.Path]):
-        """REQ-3: 'mean |ratio_error| 0.024 -> 0.010' on the fixtures."""
+        """'mean |ratio_error| 0.024 -> 0.010' on the fixtures."""
         module = load_module()
         table = module.build_comparison(
             module.load_summary_csv(fixtures["2cpu"]),
@@ -489,14 +488,14 @@ class TestVerdict:
         assert module.verdict_line(table) == VERDICT_LINE
 
     def test_scaled_verdict_line_format(self, fixtures: dict[str, pathlib.Path]):
-        """REQ-4: 'scaled-4v mean |ratio_error| 0.008' on the fixtures."""
+        """'scaled-4v mean |ratio_error| 0.008' on the fixtures."""
         module = load_module()
         block = module.build_scaled_block(module.load_summary_csv(fixtures["4v"]))
         assert module.scaled_verdict_line(block) == SCALED_VERDICT_LINE
 
 
 # =========================================================================
-# VC-CLI-01 — CLI contract (REQ-6)
+# CLI contract
 # =========================================================================
 
 
@@ -522,7 +521,7 @@ class TestCli:
     def test_missing_input_file_exits_nonzero_with_message(
         self, fixtures: dict[str, pathlib.Path], tmp_path: pathlib.Path
     ):
-        """REQ-6: a nonexistent --csv-4cpu path -> non-zero + clear message.
+        """A nonexistent --csv-4cpu path -> non-zero + clear message.
 
         "missing-4cpu" is the nonexistent filename: the real script must name
         the path it could not find. The Python "can't open file" fallback for
@@ -545,7 +544,7 @@ class TestCli:
 
 
 # =========================================================================
-# End-to-end: fixture data -> outputs (REQ-1..4, REQ-6)
+# End-to-end: fixture data -> outputs
 # =========================================================================
 
 
@@ -555,7 +554,7 @@ class TestEndToEnd:
     def test_happy_path_all_outputs(
         self, fixtures: dict[str, pathlib.Path], tmp_path: pathlib.Path
     ):
-        """VC-CC-01/02/03/04 + VC-CLI-01: exit 0, exact CSVs + verdict lines."""
+        """Exit 0, exact CSVs + verdict lines."""
         rc, out, err, out_dir = run_ok(fixtures, tmp_path)
         assert rc == 0, f"stderr: {err}"
 
@@ -601,10 +600,10 @@ class TestEndToEnd:
     def test_empty_input_outputs_header_only(
         self, fixtures: dict[str, pathlib.Path], tmp_path: pathlib.Path
     ):
-        """REQ-5: header-only 2-CPU input -> header-only outputs + warning.
+        """Header-only 2-CPU input -> header-only outputs + warning.
 
         Pinned to exit 0 with a stderr warning, matching the repo convention
-        for empty inputs (see TEST-DESIGN.md decision D-2).
+        for empty inputs.
         """
         (fixtures["2cpu"]).write_text(",".join(WEIGHT_SHARE_COLUMNS) + "\n")
         rc, _out, err, out_dir = run_ok(fixtures, tmp_path)
@@ -625,7 +624,7 @@ class TestEndToEnd:
 
 
 # =========================================================================
-# VC-MPL-01 — matplotlib lazy, headless and non-fatal (REQ-5)
+# Matplotlib lazy, headless and non-fatal
 # =========================================================================
 
 
@@ -649,7 +648,7 @@ class TestMatplotlib:
     def test_matplotlib_import_failure_is_nonfatal(
         self, fixtures: dict[str, pathlib.Path], tmp_path: pathlib.Path
     ):
-        """REQ-5: broken matplotlib must not block the CSV + verdict outputs."""
+        """Broken matplotlib must not block the CSV + verdict outputs."""
         stub_dir = tmp_path / "stub-matplotlib"
         stub_dir.mkdir()
         (stub_dir / "matplotlib.py").write_text(

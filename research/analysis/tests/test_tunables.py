@@ -1,8 +1,7 @@
 """Tests for tunables-analyze.py — tunable sweep under contention analysis.
 
-TASK-016 test-first design, red until the script is implemented.
-The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract the implementation must build:
+Test-first design, red until the script is implemented.
+The module/function/CLI names used here are the contract the implementation must build:
 
     research/analysis/tunables-analyze.py  (module: tunables_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
@@ -30,11 +29,11 @@ diff_p99 = mean_p99 - default_mean_p99 (signed); a difference is beyond noise
 when abs(diff_p99) > max(std_p99_tunable, std_p99_default). No "default" group
 -> header-only significance file with a warning.
 
-Covered requirements:
-  REQ-5 (VC-TUN-01) comparison + significance math, exact values
-  REQ-6 (VC-CLI-01) --data-dir/--output-dir contract and exit codes
-  REQ-6 (VC-EMPTY-01) empty input -> header-only output, no crash
-  REQ-7 (VC-MPL-01) matplotlib lazy import, headless/non-fatal
+Covered behavior:
+  comparison + significance math, exact values
+  --data-dir/--output-dir contract and exit codes
+  empty input -> header-only output, no crash
+  matplotlib lazy import, headless/non-fatal
 
 Run from research/analysis:
     python3 -m pytest tests/test_tunables.py -q
@@ -214,7 +213,7 @@ class TestDiscoverReplicates:
 
 
 # =========================================================================
-# VC-TUN-01 — comparison table (exact math)
+# Comparison table (exact math)
 # =========================================================================
 
 
@@ -332,7 +331,7 @@ class TestBuildComparison:
 
 
 # =========================================================================
-# VC-TUN-01 — significance note
+# Significance note
 # =========================================================================
 
 
@@ -392,7 +391,7 @@ class TestBuildSignificance:
 
 
 # =========================================================================
-# VC-CLI-01 — CLI contract
+# CLI contract
 # =========================================================================
 
 
@@ -434,7 +433,7 @@ class TestEndToEnd:
     def test_happy_path_outputs_exact_csvs(
         self, family_f_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-TUN-01 + VC-CLI-01: exit 0, exact comparison and significance CSVs."""
+        """Exit 0, exact comparison and significance CSVs."""
         rc, err, out_dir = run_ok(family_f_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         comparison = pd.read_csv(out_dir / COMPARISON_CSV).set_index("tunable")
@@ -468,7 +467,7 @@ class TestEndToEnd:
     def test_empty_summary_outputs_header_only(
         self, empty_summary_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-EMPTY-01: exit 0, header-only CSVs, no crash."""
+        """Empty input: exit 0, header-only CSVs, no crash."""
         rc, err, out_dir = run_ok(empty_summary_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         comparison_lines = (out_dir / COMPARISON_CSV).read_text().splitlines()
@@ -482,7 +481,7 @@ class TestEndToEnd:
     def test_png_rendered(
         self, family_f_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-MPL-01: real matplotlib (Agg) emits a valid PNG."""
+        """Real matplotlib (Agg) emits a valid PNG."""
         rc, err, out_dir = run_ok(family_f_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         png_path = out_dir / OUTPUT_PNG
@@ -492,7 +491,7 @@ class TestEndToEnd:
     def test_matplotlib_import_failure_is_nonfatal(
         self, family_f_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-MPL-01: broken matplotlib must not block the CSV outputs."""
+        """Broken matplotlib must not block the CSV outputs."""
         stub_dir = tmp_path / "stub-matplotlib"
         stub_dir.mkdir()
         (stub_dir / "matplotlib.py").write_text(
@@ -508,10 +507,10 @@ class TestEndToEnd:
 
 
 # =========================================================================
-# FIX-4 (REQ-4) — real runner layout + slice-optional rule
+# FIX-4 — real runner layout + slice-optional rule
 #
 # Family F runs WITHOUT --eevdf: no eevdf-slices.csv exists anywhere in the
-# dataset (TASK-022 verified). The analyzer currently counts a replicate only
+# dataset. The analyzer currently counts a replicate only
 # when BOTH latency.csv and eevdf-slices.csv parse, so the p99-only verdict is
 # impossible. FIX-4 relaxes the rule: a replicate always counts for p99 when
 # latency.csv parses; slice-duration columns are computed only from replicates
@@ -525,7 +524,7 @@ class TestEndToEnd:
 
 
 class TestRealLayout:
-    """FIX-4 REQ-4: discover tunables in the REAL layout, no slices anywhere."""
+    """FIX-4: discover tunables in the REAL layout, no slices anywhere."""
 
     def test_discover_replicates_real_layout(
         self, real_tunables_data_dir: pathlib.Path
@@ -545,7 +544,7 @@ class TestRealLayout:
     def test_cli_exit_zero_and_csvs_written(
         self, real_tunables_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-6: exit 0 on the real fixture; both CSVs written."""
+        """Exit 0 on the real fixture; both CSVs written."""
         rc, err, out_dir = run_ok(real_tunables_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert (out_dir / COMPARISON_CSV).exists()
@@ -554,7 +553,7 @@ class TestRealLayout:
     def test_cli_real_layout_no_slices_still_emits_verdict(
         self, real_tunables_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-4: comparison rows with NaN slice columns + significance verdict.
+        """Comparison rows with NaN slice columns + significance verdict.
 
         No eevdf-slices.csv anywhere: mean_p99 from latency.csv alone (default
         12.0, low 6.0, high 18.0), n=3, slice columns NaN. Significance: low
@@ -616,7 +615,7 @@ class TestSliceOptional:
     def test_cli_without_slices_exit_zero(
         self, flat_noslices_tunables_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-6: flat no-slices fixture exits 0 and populates both CSVs."""
+        """Flat no-slices fixture exits 0 and populates both CSVs."""
         rc, err, out_dir = run_ok(flat_noslices_tunables_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         comparison = pd.read_csv(out_dir / COMPARISON_CSV)

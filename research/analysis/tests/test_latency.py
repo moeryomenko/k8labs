@@ -1,8 +1,7 @@
 """Tests for latency-analyze.py — latency interference analysis.
 
-TASK-016 test-first design, red until the script is implemented.
-The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract the implementation must build:
+Test-first design, red until the script is implemented.
+The module/function/CLI names used here are the contract the implementation must build:
 
     research/analysis/latency-analyze.py  (module: latency_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
@@ -23,12 +22,12 @@ CLI: --data-dir <dir> --output-dir <dir>; writes latency-summary.csv
 latency-correlation.csv (metric,correlation) and a lazy, non-fatal
 latency-vs-throttling.png.
 
-Covered requirements:
-  REQ-3 (VC-LAT-01) percentile + throttling join, exact values
-  REQ-4 (VC-LAT-02) missing/empty latency.csv -> skip cell + warn, no crash
-  REQ-6 (VC-CLI-01) --data-dir/--output-dir contract and exit codes
-  REQ-6 (VC-EMPTY-01) empty input -> header-only output, no crash
-  REQ-7 (VC-MPL-01) matplotlib lazy import, headless/non-fatal
+Covered behavior:
+  percentile + throttling join, exact values
+  missing/empty latency.csv -> skip cell + warn, no crash
+  --data-dir/--output-dir contract and exit codes
+  empty input -> header-only output, no crash
+  matplotlib lazy import, headless/non-fatal
 
 Run from research/analysis:
     python3 -m pytest tests/test_latency.py -q
@@ -168,7 +167,7 @@ class TestLoadSummary:
 
 
 # =========================================================================
-# VC-LAT-02 — latency.csv discovery (missing -> empty list)
+# Latency.csv discovery (missing -> empty list)
 # =========================================================================
 
 
@@ -256,7 +255,7 @@ class TestComputeCellLatencies:
 
 
 # =========================================================================
-# VC-LAT-01 — build_cell_table (percentiles joined with throttling)
+# build_cell_table (percentiles joined with throttling)
 # =========================================================================
 
 
@@ -387,7 +386,7 @@ class TestCorrelationSummary:
 
 
 # =========================================================================
-# VC-CLI-01 — CLI contract
+# CLI contract
 # =========================================================================
 
 
@@ -429,7 +428,7 @@ class TestEndToEnd:
     def test_happy_path_outputs_exact_csvs(
         self, family_d_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-LAT-01 + VC-CLI-01: exit 0, exact summary and correlation CSVs."""
+        """Exit 0, exact summary and correlation CSVs."""
         rc, err, out_dir = run_ok(family_d_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         summary_path = out_dir / SUMMARY_CSV
@@ -447,7 +446,7 @@ class TestEndToEnd:
     def test_missing_latency_skips_cell_with_warning(
         self, missing_latency_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-LAT-02: exit 0, broken cell skipped, warning names the cell."""
+        """Exit 0, broken cell skipped, warning names the cell."""
         rc, err, out_dir = run_ok(missing_latency_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         summary_path = out_dir / SUMMARY_CSV
@@ -460,7 +459,7 @@ class TestEndToEnd:
     def test_empty_summary_outputs_header_only(
         self, empty_summary_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-EMPTY-01: exit 0, header-only CSVs, no crash."""
+        """Empty input: exit 0, header-only CSVs, no crash."""
         rc, err, out_dir = run_ok(empty_summary_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         summary_lines = (out_dir / SUMMARY_CSV).read_text().splitlines()
@@ -474,7 +473,7 @@ class TestEndToEnd:
     def test_png_rendered(
         self, family_d_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-MPL-01: real matplotlib (Agg) emits a valid PNG."""
+        """Real matplotlib (Agg) emits a valid PNG."""
         rc, err, out_dir = run_ok(family_d_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         png_path = out_dir / OUTPUT_PNG
@@ -484,7 +483,7 @@ class TestEndToEnd:
     def test_matplotlib_import_failure_is_nonfatal(
         self, family_d_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-MPL-01: broken matplotlib must not block the CSV outputs."""
+        """Broken matplotlib must not block the CSV outputs."""
         stub_dir = tmp_path / "stub-matplotlib"
         stub_dir.mkdir()
         (stub_dir / "matplotlib.py").write_text(
@@ -500,12 +499,12 @@ class TestEndToEnd:
 
 
 # =========================================================================
-# FIX-4 (REQ-3) — real runner layout: pod-prefixed cell_labels + nesting
+# FIX-4 — real runner layout: pod-prefixed cell_labels + nesting
 #
 # Family D cell_labels carry a pod prefix (ls-api-, batch-stress-) absent from
 # the cell directory names, and latency.csv nests at
 # <data-dir>/<timestamp>/<cell>/replicate-<N>/. The analyzer's
-# `<cell_label>/**/latency.csv` glob misses everything (TASK-022 verified).
+# `<cell_label>/**/latency.csv` glob misses everything.
 # batch-stress itself contains a dash, so first-dash splitting would turn
 # `batch-stress-<cell>` into pod "batch" — the analyzer must resolve cells via
 # the filesystem dir names and aggregate BOTH pods' summary rows per cell.
@@ -513,7 +512,7 @@ class TestEndToEnd:
 
 
 class TestRealLayout:
-    """FIX-4 REQ-3: discover and analyze the REAL latency-interference layout."""
+    """FIX-4: discover and analyze the REAL latency-interference layout."""
 
     def test_discover_latency_finds_nested_files(
         self, real_latency_data_dir: pathlib.Path
@@ -535,7 +534,7 @@ class TestRealLayout:
     def test_cli_exit_zero_and_csv_written(
         self, real_latency_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-6: analyzer exits 0 on the real fixture and writes both CSVs."""
+        """Analyzer exits 0 on the real fixture and writes both CSVs."""
         rc, err, out_dir = run_ok(real_latency_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert (out_dir / SUMMARY_CSV).exists()
@@ -544,7 +543,7 @@ class TestRealLayout:
     def test_cli_real_layout_exact_rows(
         self, real_latency_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-3: one row per cell dir with exact percentiles + aggregates.
+        """One row per cell dir with exact percentiles + aggregates.
 
         cell1 (250m): p50/p95/p99 10.5/19.05/19.81; throttled_usec 18000000
         (both pods x 2 reps); usage 24200000; ratio 1800/4000. cell2 (500m):

@@ -1,4 +1,4 @@
-"""Latency percentile computation for k8labs experiments (TASK-007 REQ-3).
+"""Latency percentile computation for k8labs experiments.
 
 The percentile method is linear interpolation, matching the
 ``numpy.percentile`` / ``pandas.Series.quantile`` definition: sort ascending,

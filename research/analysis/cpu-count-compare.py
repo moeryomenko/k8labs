@@ -21,7 +21,7 @@ weight_share,ratio_error``). ``--csv-4v-scaled`` is OPTIONAL: when provided
 the scaled-4v block and its verdict line are emitted; when omitted the block
 is skipped with a stderr warning and the exit code stays 0.
 
-Math (pinned by the TASK-V07 contract, TEST-DESIGN.md section 4):
+Math (pinned by the analysis contract):
 
     error_2cpu / error_4cpu = per-cell mean |ratio_error| of the pod rows
     delta                   = error_4cpu - error_2cpu (negative is

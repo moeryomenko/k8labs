@@ -1,7 +1,7 @@
-"""Tests for latency percentile computation (TASK-007 REQ-3).
+"""Tests for latency percentile computation.
 
 These tests are written test-first against a module that does not exist yet:
-``research/analysis/latency_stats.py``. TASK-007 must implement the following
+``research/analysis/latency_stats.py``. The module must implement the following
 public API, which is the contract these tests encode:
 
     compute_percentiles(values, percentiles=(50, 95, 99)) -> dict[float, float]
@@ -40,7 +40,8 @@ import pandas as pd
 import pytest
 
 # The module does not exist yet — collection fails with ModuleNotFoundError,
-# which is the red phase for REQ-3. TASK-007 creates research/analysis/latency_stats.py.
+# which is the red phase of the test-first design. Creating
+# research/analysis/latency_stats.py makes these tests pass.
 from latency_stats import compute_percentiles, p50_p95_p99  # noqa: F401
 
 
@@ -117,7 +118,7 @@ class TestComputePercentiles:
 
 
 class TestLatencyCsvIntegration:
-    """Compute percentiles from the CSV contract produced by REQ-1.
+    """Compute percentiles from the CSV contract produced by the load generator.
 
     The load generator writes timestamp,endpoint,latency_ms,status per request;
     latency analysis reads that CSV with pandas and must get the same numbers

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """generate-report.py — markdown practical guide from analysis outputs.
 
-Consumes the eight analysis-output CSVs written by the TASK-014/016 analyzers
+Consumes the eight analysis-output CSVs written by the analyzers
 (weight-share-analyze.py, interaction-heatmap.py, qos-analyze.py,
-latency-analyze.py, tunables-analyze.py) plus the TASK-D01 burst summary, and
+latency-analyze.py, tunables-analyze.py) plus the burst summary, and
 renders ``interaction-report.md``, a practical guide on the request/limit
 scheduler interaction.
 
 Usage:
     generate-report.py --input-dir <dir> --output-dir <dir>
 
-Report structure (pinned by the TASK-018 contract, TEST-DESIGN.md section 5):
+Report structure (pinned by the analysis contract):
 
     # Request/limit scheduler interaction
     ## Weight-share validation
@@ -21,17 +21,17 @@ Report structure (pinned by the TASK-018 contract, TEST-DESIGN.md section 5):
     ## Tunables verdict
     ## Burst verdict
 
-Section-presence rule (REQ-2, pinned): the six data-driven sections are never
+Section-presence rule (pinned): the six data-driven sections are never
 omitted; when their CSV is missing or has zero data rows they render the exact
 marker line ``_no data_`` under the header. The burst verdict section is
-two-branch (TASK-D01): when ``burst-summary.csv`` exists with at least one
+two-branch: when ``burst-summary.csv`` exists with at least one
 data row and at least one row whose ``cpu_max_burst`` is > 0 it renders the
 measured verdict (applied burst value, per-cell mean nr_throttled /
 throttled_usec, kernel constraint note); otherwise it renders the static
 fallback note ("No burst experiment data. Burst is disabled: cpu.max.burst
 defaults to 0...").
 
-Determinism (REQ-4, pinned): no timestamps, no absolute paths, no
+Determinism (pinned): no timestamps, no absolute paths, no
 env-dependent content; rows are sorted as pinned in section 5; floats render
 via ``format(v, "g")``; NaN renders as ``n/a``. Same input dir -> byte-identical
 output.

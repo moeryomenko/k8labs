@@ -8,7 +8,7 @@ with the cgroup hierarchy weight model and emit ``qos-summary.csv``.
 Usage:
     qos-analyze.py --data-dir <dir> --output-dir <dir>
 
-Math (pinned by the TASK-016 contract, TEST-DESIGN.md section 4):
+Math (pinned by the analysis contract):
 
     qos             = cell_label up to the first '-'
     cell            = remainder of the cell_label
@@ -17,8 +17,8 @@ Math (pinned by the TASK-016 contract, TEST-DESIGN.md section 4):
 
 Aggregation is sum-then-divide across replicates (never the mean of
 per-replicate shares). The ``qos_slice`` / ``pod`` / ``cpu_weight`` columns
-come from the per-cell cgroup-hierarchy-<node>.json snapshot (TASK-009
-schema): the slice named ``kubepods-<qos>.slice``, its first pod entry, and
+come from the per-cell cgroup-hierarchy-<node>.json snapshot
+schema: the slice named ``kubepods-<qos>.slice``, its first pod entry, and
 that pod's ``cpu_weight``. A class with no matching slice is omitted from the
 table; a cell with no hierarchy JSON is skipped with a warning (never a
 crash). The JSON pod weights are verified against the summary ``cpu_weight``
@@ -177,7 +177,7 @@ def discover_hierarchy_files(
     ``<data-dir>/**/<cell>/**/cgroup-hierarchy-*.json`` is returned. The glob
     covers BOTH layouts: snapshots nested at ``replicate-<N>/`` (real layout)
     and direct children of the cell dir (flat fixtures). Cells with no
-    snapshot anywhere under *data_dir* are absent from the result (REQ-2).
+    snapshot anywhere under *data_dir* are absent from the result.
 
     Args:
         data_dir: Experiment data root (summary.csv lives here).
@@ -204,7 +204,7 @@ def load_hierarchy(path: pathlib.Path) -> dict:
         path: Path to the snapshot JSON file.
 
     Returns:
-        The parsed hierarchy dict (TASK-009 schema: ``node``,
+        The parsed hierarchy dict (schema: ``node``,
         ``kubepods_slice_weight``, ``slices``).
 
     Raises:

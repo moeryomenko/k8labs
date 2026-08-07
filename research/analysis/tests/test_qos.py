@@ -1,8 +1,7 @@
 """Tests for qos-analyze.py — QoS hierarchy competition analysis.
 
-TASK-016 test-first design, red until the script is implemented.
-The pinned contract lives in TEST-DESIGN.md; the module/function/CLI names
-used here are the contract the implementation must build:
+Test-first design, red until the script is implemented.
+The module/function/CLI names used here are the contract the implementation must build:
 
     research/analysis/qos-analyze.py  (module: qos_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
@@ -19,13 +18,13 @@ CLI: --data-dir <dir> --output-dir <dir>; writes qos-summary.csv with columns
 cell,qos_slice,pod,cpu_weight,achieved_share,throttled_usec and a lazy,
 non-fatal qos-share.png.
 
-Covered requirements:
-  REQ-1 (VC-QOS-01) exact hierarchy+summary table math
-  REQ-2 (VC-QOS-02) missing hierarchy JSON -> skip cell + warn, no crash
-  REQ-6 (VC-CLI-01) --data-dir/--output-dir contract and exit codes
-  REQ-6 (VC-EMPTY-01) empty input -> header-only output, no crash
-  REQ-7 (VC-MPL-01) matplotlib lazy import, headless/non-fatal
-  REQ-2 (FIX-3, VC-QOS-G-01) direct kubepods-pod*.slice (TRUE Guaranteed pod,
+Covered behavior:
+  exact hierarchy+summary table math
+  missing hierarchy JSON -> skip cell + warn, no crash
+  --data-dir/--output-dir contract and exit codes
+  empty input -> header-only output, no crash
+  matplotlib lazy import, headless/non-fatal
+  direct kubepods-pod*.slice (TRUE Guaranteed pod,
       systemd driver) attributed to qos class 'guaranteed'; build_qos_table /
       verify_hierarchy_weights use the self-representing entry's own weight
       (TestGuaranteedDirectSlice)
@@ -202,7 +201,7 @@ class TestLoadHierarchy:
 
 
 # =========================================================================
-# VC-QOS-02 — hierarchy JSON discovery (missing -> cell absent)
+# Hierarchy JSON discovery (missing -> cell absent)
 # =========================================================================
 
 
@@ -229,7 +228,7 @@ class TestDiscoverHierarchyFiles:
 
 
 # =========================================================================
-# VC-QOS-01 — exact table math (pure function)
+# Exact table math (pure function)
 # =========================================================================
 
 
@@ -292,7 +291,7 @@ class TestBuildQosTable:
 
         Replicate 1 usage 60000/100000/5000 and replicate 2 usage
         90000/110000/5000 give guaranteed 150000/370000 = 0.405405..., NOT the
-        mean of per-replicate shares (~0.4013). Pins VC-QOS-01 math.
+        mean of per-replicate shares (~0.4013). Pins the exact table math.
         """
         module = load_qos_module()
         df = pd.DataFrame(
@@ -402,7 +401,7 @@ class TestVerifyHierarchyWeights:
 
 
 # =========================================================================
-# VC-CLI-01 — CLI contract
+# CLI contract
 # =========================================================================
 
 
@@ -447,7 +446,7 @@ class TestEndToEnd:
     def test_happy_path_outputs_exact_csv(
         self, family_c_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-QOS-01 + VC-CLI-01: exit 0, CSV with exact shares/weights/throttling."""
+        """Exit 0, CSV with exact shares/weights/throttling."""
         rc, err, out_dir = run_ok(family_c_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         csv_path = out_dir / OUTPUT_CSV
@@ -465,7 +464,7 @@ class TestEndToEnd:
     def test_missing_hierarchy_skips_cell_with_warning(
         self, incomplete_hierarchy_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-QOS-02: exit 0, broken cell skipped, warning names the cell."""
+        """Exit 0, broken cell skipped, warning names the cell."""
         rc, err, out_dir = run_ok(incomplete_hierarchy_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         csv_path = out_dir / OUTPUT_CSV
@@ -478,7 +477,7 @@ class TestEndToEnd:
     def test_empty_summary_outputs_header_only(
         self, empty_summary_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-EMPTY-01: exit 0, header-only output, no crash."""
+        """Empty input: exit 0, header-only output, no crash."""
         rc, err, out_dir = run_ok(empty_summary_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         csv_path = out_dir / OUTPUT_CSV
@@ -492,7 +491,7 @@ class TestEndToEnd:
     def test_png_rendered(
         self, family_c_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-MPL-01: real matplotlib (Agg) emits a valid PNG."""
+        """Real matplotlib (Agg) emits a valid PNG."""
         rc, err, out_dir = run_ok(family_c_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         png_path = out_dir / OUTPUT_PNG
@@ -503,7 +502,7 @@ class TestEndToEnd:
     def test_matplotlib_import_failure_is_nonfatal(
         self, family_c_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """VC-MPL-01: broken matplotlib must not block the CSV output.
+        """Broken matplotlib must not block the CSV output.
 
         A stub matplotlib that raises on import is injected via PYTHONPATH.
         The script must write qos-summary.csv and exit 0 with a warning,
@@ -554,7 +553,7 @@ class TestFixtureMath:
 
 
 # =========================================================================
-# FIX-3 (REQ-2): TRUE Guaranteed pod — direct kubepods-pod*.slice
+# FIX-3: TRUE Guaranteed pod — direct kubepods-pod*.slice
 # =========================================================================
 
 
@@ -609,7 +608,7 @@ def build_direct_guaranteed_data_dir(root: pathlib.Path) -> pathlib.Path:
 
 
 class TestGuaranteedDirectSlice:
-    """FIX-3 (REQ-2): a direct kubepods-pod*.slice maps to QoS 'guaranteed'.
+    """FIX-3: a direct kubepods-pod*.slice maps to QoS 'guaranteed'.
 
     A TRUE Guaranteed pod has no kubepods-guaranteed.slice wrapper. The
     snapshot emits kubepods-pod<uid>.slice as a slice entry with one
@@ -695,18 +694,18 @@ class TestGuaranteedDirectSlice:
 
 
 # =========================================================================
-# FIX-4 (REQ-2) — real runner layout: replicate-nested hierarchy JSON
+# FIX-4 — real runner layout: replicate-nested hierarchy JSON
 #
 # The live snapshots live at <data-dir>/<timestamp>/<cell>/replicate-<N>/
 # cgroup-hierarchy-<node>.json. The analyzer's direct-child glob
-# `**/<cell>/cgroup-hierarchy-*.json` misses them (TASK-022 verified); the fix
+# `**/<cell>/cgroup-hierarchy-*.json` misses them; the fix
 # must discover recursively while keeping the flat direct-child layout working
-# (REQ-5 regression, pinned by the pre-FIX-4 tests).
+# (regression, pinned by the pre-FIX-4 tests).
 # =========================================================================
 
 
 class TestRealLayout:
-    """FIX-4 REQ-2: discover and analyze the REAL qos-hierarchy layout."""
+    """FIX-4: discover and analyze the REAL qos-hierarchy layout."""
 
     def test_discover_hierarchy_finds_nested_replicate_json(
         self, real_qos_data_dir: pathlib.Path
@@ -722,7 +721,7 @@ class TestRealLayout:
     def test_cli_exit_zero_and_csv_written(
         self, real_qos_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-6: analyzer exits 0 on the real fixture and writes qos-summary.csv."""
+        """Analyzer exits 0 on the real fixture and writes qos-summary.csv."""
         rc, err, out_dir = run_ok(real_qos_data_dir, tmp_path)
         assert rc == 0, f"stderr: {err}"
         assert (out_dir / OUTPUT_CSV).exists()
@@ -730,7 +729,7 @@ class TestRealLayout:
     def test_cli_real_layout_exact_table(
         self, real_qos_data_dir: pathlib.Path, tmp_path: pathlib.Path
     ):
-        """REQ-2: three QoS rows with exact shares/weights/throttling.
+        """Three QoS rows with exact shares/weights/throttling.
 
         cell = the real cell dir name; qos_slice kubepods-guaranteed /
         burstable / besteffort .slice; shares 12/33, 20/33, 1/33; weights

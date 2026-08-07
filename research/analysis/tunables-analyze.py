@@ -9,8 +9,8 @@ each tunable against the ``default`` set; emit ``tunables-comparison.csv`` and
 Usage:
     tunables-analyze.py --data-dir <dir> --output-dir <dir>
 
-Math (pinned by the TASK-016 contract, TEST-DESIGN.md section 6, plus the
-FIX-4 slice-optional hybrid rule, TEST-DESIGN.md section 3.4):
+Math (pinned by the analysis contract, plus the
+slice-optional hybrid rule):
 
     mean_p99 / std_p99          = mean / sample std (ddof=1) of per-replicate
                                   p99 latency (latency_stats reuse); every
@@ -222,7 +222,7 @@ def build_comparison(
     One row per tunable with columns ``tunable, mean_p99, std_p99,
     mean_slice_us, std_slice_us, n`` in that order. Group stats are mean /
     sample std (``ddof=1``, pandas default). The slice-optional hybrid rule
-    (FIX-4, TEST-DESIGN section 3.4) applies per tunable:
+    (slice-optional hybrid rule) applies per tunable:
 
     - A replicate always counts toward ``n`` / ``mean_p99`` / ``std_p99``
       when latency.csv parses.
