@@ -23,10 +23,24 @@ _EEVDF_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$_EEVDF_SCRIPT_DIR/cgroup-common.sh"
 
 # ---------------------------------------------------------------------------
-# resolve_container_pids — Get all container PIDs for a pod
+# resolve_container_pids — Get all container thread IDs (TIDs) for a pod
 #
-# Resolves PIDs for all containers in a pod from the worker node via SSH.
-# Returns space-separated list of PIDs.
+# Resolves the init PID of every container in a pod from the worker node via
+# SSH (get_container_pid / crictl inspect), then derives the container cgroup
+# scope from that init PID (get_cgroup_path reads /proc/<pid>/cgroup). The
+# scope's cgroup.procs (thread group leaders) and cgroup.threads (every TID)
+# list every task charged to the container, including forked worker PROCESSES
+# that /proc/<init>/task/ cannot see (stress-ng --cpu N forks workers; the
+# the live-capture gate proved task/ insufficient). The union of both files is
+# returned so worker processes AND worker threads land in
+# eevdf-<pod>-pids.csv; without them every real slice would be attributed to
+# `system` by dist-analyze.py.
+#
+# Returns a space-separated, deduplicated list of numeric TIDs on stdout
+# (union across all containers in the pod). When a container's cgroup
+# membership is empty or unreadable, the container still contributes its
+# init PID (graceful degradation). When a container's init PID itself
+# cannot be resolved, the container is skipped.
 # ---------------------------------------------------------------------------
 resolve_container_pids() {
     local pod_name="$1"
@@ -48,7 +62,35 @@ resolve_container_pids() {
     for container_name in $container_names; do
         container_id="$(get_container_id "$node_ip" "$pod_name" "$container_name" 2>/dev/null)" || continue
         pid="$(get_container_pid "$node_ip" "$container_id" 2>/dev/null)" || continue
-        all_pids+=("$pid")
+
+        # Derive the container cgroup scope from the init PID via
+        # /proc/<pid>/cgroup (get_cgroup_path). The scope directory is the
+        # enumeration source: cgroup.procs lists thread group leaders (init
+        # PID plus forked worker PROCESSES) and cgroup.threads lists every
+        # TID (leaders plus worker threads).
+        local scope_path
+        scope_path="$(get_cgroup_path "$node_ip" "$pid" 2>/dev/null || true)"
+
+        # Read both membership files from the scope on the node. Empty or
+        # unreadable membership degrades gracefully: the container still
+        # contributes its init PID (never a hard failure).
+        local procs="" threads=""
+        if [[ -n "$scope_path" ]]; then
+            procs="$(read_cgroup_file "$node_ip" "$scope_path" "cgroup.procs" 2>/dev/null || true)"
+            threads="$(read_cgroup_file "$node_ip" "$scope_path" "cgroup.threads" 2>/dev/null || true)"
+        fi
+        if [[ -z "$procs" && -z "$threads" ]]; then
+            procs="$pid"
+        fi
+
+        # Union across containers, deduplicated (a TID may appear in both
+        # files of a scope and across containers' scopes).
+        local tid
+        for tid in $procs $threads; do
+            [[ "$tid" =~ ^[0-9]+$ ]] || continue
+            [[ " ${all_pids[*]} " == *" $tid "* ]] && continue
+            all_pids+=("$tid")
+        done
     done
 
     if [[ ${#all_pids[@]} -eq 0 ]]; then
