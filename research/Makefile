@@ -195,7 +195,7 @@ experiment-qos-hierarchy: ## Run qos-hierarchy experiment (3 QoS-class pods: gua
 	@echo "Running qos-hierarchy experiment..."
 	# Family C: QoS hierarchy competition. Requires --eevdf (EEVDF weight-share
 	# metrics). Remember the manual cgroup-hierarchy-snapshot.sh capture per
-	# cell documented in the config comment (analyzer contract, TASK-016).
+	# cell documented in the config comment (analyzer contract).
 	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/qos-hierarchy.yaml --eevdf
 
 .PHONY: experiment-latency-interference
@@ -210,7 +210,7 @@ experiment-latency-interference: ## Run latency-interference experiment (api-ser
 experiment-cpu-burst: ## Run cpu-burst experiment (db-simulator 250m limit, with/without cpu.max.burst, no EEVDF by default)
 	@echo "Running cpu-burst experiment..."
 	# Family E: CPU burst at a low limit. Default is lighter (no --eevdf). Burst
-	# application is MANUAL via helper (TASK-020): after the pod starts, write
+	# application is MANUAL via helper: after the pod starts, write
 	# cpu.max.burst on the node via SSH (path pattern in the config comment:
 	# <container-cgroup>/cpu.max.burst) and restore to 0 after each burst cell.
 	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/cpu-burst.yaml
@@ -219,15 +219,132 @@ experiment-cpu-burst: ## Run cpu-burst experiment (db-simulator 250m limit, with
 experiment-tunables-contention: ## Run tunables-contention experiment (api-server LS + stress-ng batch, scheduler tunable sweep, no EEVDF by default)
 	@echo "Running tunables-contention experiment..."
 	# Family F: scheduler tunable sweep under contention. Default is lighter
-	# (no --eevdf). Apply tunable sets manually per cell (TASK-020):
+	# (no --eevdf). Apply tunable sets manually per cell:
 	#   research/scripts/tunable-sweep.sh apply <tunables> && ... cell ... && research/scripts/tunable-sweep.sh restore
 	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/tunables-contention.yaml
 
-# ---- Interaction Report (TASK-022 rerun pipeline) ----
+# ---- EEVDF Execution-Distribution Experiments ----
+#
+# Families A/B/C run with full capture: --eevdf snapshots plus
+# a Perfetto eevdf-deep trace on every cell (each target passes
+# --eevdf --perfetto --perfetto-config eevdf-deep). The dist-*.yaml configs
+# are the family deliverables; each target forwards its matching config to
+# the shared runner. Analysis targets (dist-analyze/plots/gif/steps/report)
+# are deterministic and run from staged data (no cluster, no network).
+# NOTE: the dist-plots target invokes dist-plot.py (singular);
+# the target name is intentionally plural.
+
+.PHONY: experiment-dist-api
+experiment-dist-api: ## Run dist-api-server experiment (Family A api-server, full EEVDF + Perfetto capture)
+	@echo "Running dist-api-server experiment (Family A)..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/dist-api-server.yaml --eevdf --perfetto --perfetto-config eevdf-deep
+
+.PHONY: experiment-dist-db
+experiment-dist-db: ## Run dist-db-simulator experiment (Family A db-simulator, full EEVDF + Perfetto capture)
+	@echo "Running dist-db-simulator experiment (Family A)..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/dist-db-simulator.yaml --eevdf --perfetto --perfetto-config eevdf-deep
+
+.PHONY: experiment-dist-burner
+experiment-dist-burner: ## Run dist-cpu-burner experiment (Family A cpu-burner, full EEVDF + Perfetto capture)
+	@echo "Running dist-cpu-burner experiment (Family A)..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/dist-cpu-burner.yaml --eevdf --perfetto --perfetto-config eevdf-deep
+
+.PHONY: experiment-dist-stress
+experiment-dist-stress: ## Run dist-stress-ng experiment (Family A stress-ng saturating control, full EEVDF + Perfetto capture)
+	@echo "Running dist-stress-ng experiment (Family A)..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/dist-stress-ng.yaml --eevdf --perfetto --perfetto-config eevdf-deep
+
+.PHONY: experiment-dist-weight
+experiment-dist-weight: ## Run dist-weight-share experiment (Family B weight-share, full EEVDF + Perfetto capture)
+	@echo "Running dist-weight-share experiment (Family B)..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/dist-weight-share.yaml --eevdf --perfetto --perfetto-config eevdf-deep
+
+.PHONY: experiment-dist-qos
+experiment-dist-qos: ## Run dist-qos-hierarchy experiment (Family C QoS hierarchy, full EEVDF + Perfetto capture)
+	@echo "Running dist-qos-hierarchy experiment (Family C)..."
+	$(EXPERIMENTS_DIR)/run-experiment.sh $(CONFIGS_DIR)/dist-qos-hierarchy.yaml --eevdf --perfetto --perfetto-config eevdf-deep
+
+# ---- EEVDF Execution-Distribution analysis (wired to canonical data) ----
+#
+# The analysis targets consume the CANONICAL run data under
+# research/experiments/data/dist-*/<ts>/ (newest timestamp per family) and
+# write under research/analysis/output/distribution/. They are
+# deterministic and need no cluster/network.
+#
+# dist-analyze/dist-plots/dist-gif iterate the six dist families
+# (one script invocation per family, matching the pinned per-family CLIs).
+# dist-steps is a single run on the Family A stress-ng matrix: it pins
+# exactly one global visuals/ set (step-3 = cells[0] no-limit cell, step-4 =
+# cells[3] 500m/500m quota cell — Family-A indexes that weight-share/qos cell
+# labels do not satisfy and qos's 3 cells would index out of range).
+# dist-report is a single run covering every family under distribution/.
+
+# The six dist families in spec order (Family A, Family B, Family C).
+DIST_FAMILIES := dist-api-server dist-db-simulator dist-cpu-burner dist-stress-ng dist-weight-share dist-qos-hierarchy
+
+# Output root for all dist analysis (outputs under .../output/distribution/).
+DIST_ANALYSIS_OUTPUT_DIR := $(PERFETTO_ANALYSIS_DIR)/output
+
+# --workload per family for dist-analyze (sanity gate). Only the four pinned
+# choices are valid; weight-share/qos have no throttle facts and pass no flag.
+dist_wl = $(if $(findstring $(1),dist-stress-ng),--workload stress-ng,$(if $(findstring $(1),dist-api-server),--workload api-server,$(if $(findstring $(1),dist-db-simulator),--workload db-simulator,$(if $(findstring $(1),dist-cpu-burner),--workload cpu-burner,))))
+
+# Comma-separated cell labels for a family config, in config (pinned) order —
+# same label transformation as run-experiment.sh::clean_cell_label.
+dist_cells = $(shell awk '/^matrix:/{f=1;next} f && /^[[:space:]]*- /{ sub(/^[[:space:]]*- /,""); gsub(/"/,""); gsub(/[[:space:]]*:[[:space:]]*/,"="); gsub(/;/,"-"); gsub(/[[:space:]]/,""); printf "%s%s", sep, $$0; sep="," } END{ print "" }' $(CONFIGS_DIR)/$(1).yaml)
+
+# NOTE: the per-family recipe bodies below are single-line (';'-terminated) on
+# purpose — with .ONESHELL a multi-line $(foreach)/$(call) expansion is joined
+# with tabs, collapsing the commands into one. Semicolons keep every family a
+# separate statement in the same shell.
+
+define dist_analyze_cmd
+latest="$$(ls -1dt $(EXPERIMENTS_DIR)/data/$(1)/*/ 2>/dev/null | grep -v '/_archive/' | head -1 | sed 's:/$$::')"; if [ -n "$$latest" ]; then python3 $(PERFETTO_ANALYSIS_DIR)/dist-analyze.py --data-dir "$$latest" --output-dir $(DIST_ANALYSIS_OUTPUT_DIR) --family $(1) $(call dist_wl,$(1)) --duration 90 --chunk-s 5; else echo "  WARN: no run data for $(1)"; fi;
+endef
+
+define dist_plot_cmd
+cells="$(call dist_cells,$(1))"; python3 $(PERFETTO_ANALYSIS_DIR)/dist-plot.py --data-dir $(DIST_ANALYSIS_OUTPUT_DIR) --output-dir $(DIST_ANALYSIS_OUTPUT_DIR) --family $(1) --cells "$$cells";
+endef
+
+define dist_gif_cmd
+python3 $(PERFETTO_ANALYSIS_DIR)/dist-gif.py --data-dir $(DIST_ANALYSIS_OUTPUT_DIR) --output-dir $(DIST_ANALYSIS_OUTPUT_DIR) --family $(1);
+endef
+
+.PHONY: dist-analyze
+dist-analyze: ## Run dist-analyze.py slice-level extraction pipeline
+	@echo "Running dist-analyze slice-level extraction..."
+	$(foreach fam,$(DIST_FAMILIES),$(call dist_analyze_cmd,$(fam)))
+
+.PHONY: dist-plots
+dist-plots: ## Generate static distribution images via dist-plot.py
+	@echo "Generating static distribution plots..."
+	$(foreach fam,$(DIST_FAMILIES),$(call dist_plot_cmd,$(fam)))
+
+.PHONY: dist-gif
+dist-gif: ## Generate animated distribution GIFs via dist-gif.py
+	@echo "Generating animated distribution GIFs..."
+	$(foreach fam,$(DIST_FAMILIES),$(call dist_gif_cmd,$(fam)))
+
+.PHONY: dist-steps
+dist-steps: ## Generate six step-by-step distribution images via dist-steps.py
+	@echo "Generating step-by-step distribution images..."
+	@cells="$(call dist_cells,dist-stress-ng)"
+	python3 $(PERFETTO_ANALYSIS_DIR)/dist-steps.py --data-dir $(DIST_ANALYSIS_OUTPUT_DIR) --output-dir $(DIST_ANALYSIS_OUTPUT_DIR) --family dist-stress-ng --cells "$$cells"
+
+.PHONY: dist-report
+dist-report: ## Regenerate DEEP-DIVE-EEVDF-EXEC.md via dist-report.py
+	@echo "Regenerating deep-dive report..."
+	python3 $(PERFETTO_ANALYSIS_DIR)/dist-report.py --data-dir $(DIST_ANALYSIS_OUTPUT_DIR) --output-file $(PROJECT_ROOT)/research/DEEP-DIVE-EEVDF-EXEC.md
+
+.PHONY: dist-all
+dist-all: experiment-dist-api experiment-dist-db experiment-dist-burner experiment-dist-stress experiment-dist-weight experiment-dist-qos ## Run all six dist experiment families sequentially
+	@echo "=== All dist experiment families complete ==="
+
+# ---- Interaction Report ----
 
 # Regenerates interaction-report.md from staged CSVs under experiments/data/
 # (one dir per family). No cluster, no network, no timestamps: rerunning with
-# the same staged data produces byte-identical output (REQ-5).
+# the same staged data produces byte-identical output.
 INTERACTION_REPORT_OUTPUT_DIR := $(PERFETTO_ANALYSIS_DIR)/output/interaction-report
 
 .PHONY: interaction-report
