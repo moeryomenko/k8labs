@@ -18,19 +18,19 @@ teardown() {
 }
 
 # =============================================================================
-# VC-001: Library can be sourced without error
+# Library can be sourced without error
 # =============================================================================
 
-@test "C01: perfetto-common.sh file exists" {
+@test "perfetto-common.sh file exists" {
     [ -f "$PERFETTO_COMMON_SH" ]
 }
 
-@test "C02: perfetto-common.sh can be sourced without error" {
+@test "perfetto-common.sh can be sourced without error" {
     run bash -c "source '$PERFETTO_COMMON_SH'"
     [ "$status" -eq 0 ]
 }
 
-@test "C03: guard variable _PERFETTO_COMMON_SH is set after sourcing" {
+@test "guard variable _PERFETTO_COMMON_SH is set after sourcing" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         echo \${_PERFETTO_COMMON_SH:-UNSET}
@@ -39,7 +39,7 @@ teardown() {
     [ "$output" != "UNSET" ]
 }
 
-@test "C04: double sourcing is idempotent (no error, returns immediately)" {
+@test "double sourcing is idempotent (no error, returns immediately)" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         source '$PERFETTO_COMMON_SH'
@@ -49,7 +49,7 @@ teardown() {
     [ "$output" = "OK" ]
 }
 
-@test "C05: guard variable is readonly after sourcing" {
+@test "guard variable is readonly after sourcing" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         _PERFETTO_COMMON_SH=newvalue 2>&1 || true
@@ -59,10 +59,10 @@ teardown() {
 }
 
 # =============================================================================
-# VC-002: perfetto_binary_path() returns /usr/bin/tracebox
+# perfetto_binary_path() returns /usr/bin/tracebox
 # =============================================================================
 
-@test "C06: perfetto_binary_path function exists" {
+@test "perfetto_binary_path function exists" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         type perfetto_binary_path 2>&1
@@ -70,7 +70,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "C07: perfetto_binary_path returns /usr/bin/tracebox" {
+@test "perfetto_binary_path returns /usr/bin/tracebox" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         perfetto_binary_path
@@ -80,10 +80,10 @@ teardown() {
 }
 
 # =============================================================================
-# VC-003: perfetto_config_path() resolves config paths
+# perfetto_config_path() resolves config paths
 # =============================================================================
 
-@test "C08: perfetto_config_path function exists" {
+@test "perfetto_config_path function exists" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         type perfetto_config_path 2>&1
@@ -91,7 +91,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "C09: perfetto_config_path returns /tmp/<name>.cfg for partial name" {
+@test "perfetto_config_path returns /tmp/<name>.cfg for partial name" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         perfetto_config_path scheduling
@@ -100,7 +100,7 @@ teardown() {
     [ "$output" = "/tmp/scheduling.cfg" ]
 }
 
-@test "C10: perfetto_config_path returns /tmp/<name> for name with extension" {
+@test "perfetto_config_path returns /tmp/<name> for name with extension" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         perfetto_config_path scheduling.cfg
@@ -109,7 +109,7 @@ teardown() {
     [ "$output" = "/tmp/scheduling.cfg" ]
 }
 
-@test "C11: perfetto_config_path returns /tmp/<name> for full path" {
+@test "perfetto_config_path returns /tmp/<name> for full path" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         perfetto_config_path /tmp/custom-config.cfg
@@ -118,7 +118,7 @@ teardown() {
     [ "$output" = "/tmp/custom-config.cfg" ]
 }
 
-@test "C12: perfetto_config_path fails on empty argument" {
+@test "perfetto_config_path fails on empty argument" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         perfetto_config_path '' 2>&1 || true
@@ -127,10 +127,10 @@ teardown() {
 }
 
 # =============================================================================
-# VC-004: resolve_node_ip() resolves node names to IPs
+# resolve_node_ip() resolves node names to IPs
 # =============================================================================
 
-@test "C13: resolve_node_ip function exists" {
+@test "resolve_node_ip function exists" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         type resolve_node_ip 2>&1
@@ -138,7 +138,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "C14: resolve_node_ip fails gracefully with no cluster (no SSH/Terraform)" {
+@test "resolve_node_ip fails gracefully with no cluster (no SSH/Terraform)" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         resolve_node_ip 'nonexistent-node' 2>&1 || true
@@ -149,10 +149,10 @@ teardown() {
 }
 
 # =============================================================================
-# VC-005: check_tracebox_available() validates tracebox presence
+# check_tracebox_available() validates tracebox presence
 # =============================================================================
 
-@test "C15: check_tracebox_available function exists" {
+@test "check_tracebox_available function exists" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         type check_tracebox_available 2>&1
@@ -160,7 +160,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "C16: check_tracebox_available fails gracefully with no SSH target" {
+@test "check_tracebox_available fails gracefully with no SSH target" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         check_tracebox_available '192.0.2.1' 2>&1 || true
@@ -170,10 +170,10 @@ teardown() {
 }
 
 # =============================================================================
-# VC-006: Library depends on cgroup-common.sh
+# Library depends on cgroup-common.sh
 # =============================================================================
 
-@test "C17: perfetto-common.sh sources cgroup-common.sh" {
+@test "perfetto-common.sh sources cgroup-common.sh" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         type ssh_node resolve_project_root 2>&1
@@ -183,7 +183,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "C18: cgroup-common.sh is sourced only once (guard check)" {
+@test "cgroup-common.sh is sourced only once (guard check)" {
     run bash -c "
         source '$CGROUP_COMMON_SH'
         source '$PERFETTO_COMMON_SH'
@@ -194,10 +194,10 @@ teardown() {
 }
 
 # =============================================================================
-# VC-007: Dry-run mode support structure
+# Dry-run mode support structure
 # =============================================================================
 
-@test "C19: DRY_RUN variable is respected if defined" {
+@test "DRY_RUN variable is respected if defined" {
     run bash -c "
         source '$PERFETTO_COMMON_SH'
         DRY_RUN=true

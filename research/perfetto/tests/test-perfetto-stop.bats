@@ -13,99 +13,99 @@ setup() {
 }
 
 # =============================================================================
-# VC-013: --help prints usage and exits 0
+# --help prints usage and exits 0
 # =============================================================================
 
-@test "P01: perfetto-stop.sh file exists" {
+@test "perfetto-stop.sh file exists" {
     [ -f "$PERFETTO_STOP_SH" ]
 }
 
-@test "P02: --help prints usage and exits 0" {
+@test "--help prints usage and exits 0" {
     run bash "$PERFETTO_STOP_SH" --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"Usage:"* ]] || [[ "$output" == *"usage:"* ]]
 }
 
-@test "P03: -h prints usage and exits 0" {
+@test "-h prints usage and exits 0" {
     run bash "$PERFETTO_STOP_SH" -h
     [ "$status" -eq 0 ]
     [[ "$output" == *"Usage:"* ]] || [[ "$output" == *"usage:"* ]]
 }
 
-@test "P04: --help output contains expected positional arguments" {
+@test "--help output contains expected positional arguments" {
     run bash "$PERFETTO_STOP_SH" --help
     [[ "$output" == *"node-ip"* ]] || [[ "$output" == *"NODE"* ]] || [[ "$output" == *"<ip>"* ]]
     [[ "$output" == *"trace-pid"* ]] || [[ "$output" == *"PID"* ]] || [[ "$output" == *"<pid>"* ]]
 }
 
-@test "P05: --help output contains expected options (--output-dir)" {
+@test "--help output contains expected options (--output-dir)" {
     run bash "$PERFETTO_STOP_SH" --help
     [[ "$output" == *"--output-dir"* ]]
 }
 
 # =============================================================================
-# VC-014: Missing arguments print error and exit non-zero
+# Missing arguments print error and exit non-zero
 # =============================================================================
 
-@test "P06: no arguments prints error and exits non-zero" {
+@test "no arguments prints error and exits non-zero" {
     run bash "$PERFETTO_STOP_SH"
     [ "$status" -ne 0 ]
     [[ "$output" == *"rror"* ]] || [[ "$output" == *"sage"* ]] || [[ "$output" == *"equired"* ]]
 }
 
-@test "P07: missing trace-pid argument prints error and exits non-zero" {
+@test "missing trace-pid argument prints error and exits non-zero" {
     run bash "$PERFETTO_STOP_SH" "192.168.122.10"
     [ "$status" -ne 0 ]
     [[ "$output" == *"rror"* ]] || [[ "$output" == *"sage"* ]] || [[ "$output" == *"pid"* ]] || [[ "$output" == *"PID"* ]]
 }
 
-@test "P08: missing both arguments prints error and exits non-zero" {
+@test "missing both arguments prints error and exits non-zero" {
     run bash "$PERFETTO_STOP_SH"
     [ "$status" -ne 0 ]
 }
 
 # =============================================================================
-# VC-015: Option parsing
+# Option parsing
 # =============================================================================
 
-@test "P09: --output-dir accepts a directory path" {
+@test "--output-dir accepts a directory path" {
     run bash "$PERFETTO_STOP_SH" --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"--output-dir"* ]]
 }
 
-@test "P10: --output-dir without value fails gracefully" {
+@test "--output-dir without value fails gracefully" {
     run bash "$PERFETTO_STOP_SH" "192.168.122.10" "1234" --output-dir
     [ "$status" -ne 0 ]
 }
 
-@test "P11: --output-dir at end fails gracefully" {
+@test "--output-dir at end fails gracefully" {
     run bash "$PERFETTO_STOP_SH" "192.168.122.10" "1234" --output-dir
     [ "$status" -ne 0 ]
 }
 
 # =============================================================================
-# VC-016: Unknown options are rejected
+# Unknown options are rejected
 # =============================================================================
 
-@test "P12: unknown option prints error and exits non-zero" {
+@test "unknown option prints error and exits non-zero" {
     run bash "$PERFETTO_STOP_SH" --bogus-option
     [ "$status" -ne 0 ]
     [[ "$output" == *"nknown"* ]] || [[ "$output" == *"nrecognized"* ]] || [[ "$output" == *"nvalid"* ]] || [[ "$output" == *"rror"* ]]
 }
 
 # =============================================================================
-# VC-017: Help text describes stop/download behavior
+# Help text describes stop/download behavior
 # =============================================================================
 
-@test "P13: --help output describes stopping and downloading trace" {
+@test "--help output describes stopping and downloading trace" {
     run bash "$PERFETTO_STOP_SH" --help
     [[ "$output" == *"stop"* ]] || [[ "$output" == *"SIGTERM"* ]] || [[ "$output" == *"kill"* ]]
     [[ "$output" == *"download"* ]] || [[ "$output" == *"SCP"* ]] || [[ "$output" == *"scp"* ]]
 }
 
 # =============================================================================
-# REQ-003: _reconstruct_remote_path extracts /tmp/<name>.perfetto-trace
+# _reconstruct_remote_path extracts /tmp/<name>.perfetto-trace
 #          from /proc/<pid>/cmdline
 #
 # The real script is sourced with its trailing `main "$@"` disabled (via a
@@ -113,7 +113,7 @@ setup() {
 # stubbed via PATH to simulate the remote `cat /proc/<pid>/cmdline` output.
 # =============================================================================
 
-@test "P14: REQ-003 _reconstruct_remote_path extracts trace path from cmdline" {
+@test "_reconstruct_remote_path extracts trace path from cmdline" {
     local stub_dir
     stub_dir="$(mktemp -d)"
     cat > "$stub_dir/ssh" <<'STUB'
@@ -139,7 +139,7 @@ STUB
     rm -rf "$stub_dir" "$tmp_stop"
 }
 
-@test "P15: REQ-003 _reconstruct_remote_path fails when cmdline has no trace path" {
+@test "_reconstruct_remote_path fails when cmdline has no trace path" {
     local stub_dir
     stub_dir="$(mktemp -d)"
     cat > "$stub_dir/ssh" <<'STUB'
@@ -165,10 +165,10 @@ STUB
 }
 
 # =============================================================================
-# REQ-002: local trace filename keeps the .perfetto-trace suffix
+# local trace filename keeps the .perfetto-trace suffix
 # =============================================================================
 
-@test "P16: REQ-002 stop dry-run local path keeps .perfetto-trace basename" {
+@test "stop dry-run local path keeps .perfetto-trace basename" {
     run env DRY_RUN=true bash "$PERFETTO_STOP_SH" "192.168.122.10" "1234" --output-dir /tmp/perfetto-out
     [ "$status" -eq 0 ]
     # Dry-run fakes the reconstructed remote path as /tmp/trace-<pid>.perfetto-trace
@@ -177,7 +177,7 @@ STUB
     [[ "$output" == *"/tmp/perfetto-out/trace-1234.perfetto-trace"* ]]
 }
 
-@test "P17: REQ-002 stop with --remote-path downloads to output-dir/<basename>.perfetto-trace" {
+@test "stop with --remote-path downloads to output-dir/<basename>.perfetto-trace" {
     run env DRY_RUN=true bash "$PERFETTO_STOP_SH" "192.168.122.10" "1234" \
         --output-dir /tmp/perfetto-out --remote-path /tmp/whatever.perfetto-trace
     [ "$status" -eq 0 ]

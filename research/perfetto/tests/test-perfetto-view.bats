@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# test-perfetto-view.bats — pins the `make perfetto-view` target (REQ-004)
+# test-perfetto-view.bats — pins the `make perfetto-view` target
 #
 # perfetto-view must exist in research/Makefile and its recipe must:
 #   1. reference the ui.perfetto.dev UI (the detailed scheduler analysis UI);
@@ -20,9 +20,9 @@
 # requires a live cluster.
 #
 # When there is no *.perfetto-trace under research/experiments/data there is
-# nothing to view, so the test SKIPS cleanly (REQ-004) instead of failing.
-# This mirrors the skip convention in test-perfetto-capture-e2e.bats
-# (E2E-11/E2E-12): absence of the prerequisite skips, never fails.
+# nothing to view, so the test SKIPS cleanly instead of failing.
+# This mirrors the skip convention in test-perfetto-capture-e2e.bats:
+# absence of the prerequisite skips, never fails.
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -31,11 +31,11 @@ setup() {
 }
 
 # =============================================================================
-# REQ-004 — perfetto-view serves the raw trace and opens a file URL
+# perfetto-view serves the raw trace and opens a file URL
 # =============================================================================
 
-@test "VW-01: make perfetto-view serves the raw trace via perfetto-serve and opens a file URL (REQ-004)" {
-    # Skip (never fail) when there are no traces to view (REQ-004).
+@test "make perfetto-view serves the raw trace via perfetto-serve and opens a file URL" {
+    # Skip (never fail) when there are no traces to view.
     local trace
     trace="$(find "$EXPERIMENTS_DATA_DIR" -name '*.perfetto-trace' -type f 2>/dev/null | head -1)"
     if [[ -z "$trace" ]]; then

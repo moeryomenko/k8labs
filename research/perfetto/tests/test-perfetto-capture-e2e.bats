@@ -4,20 +4,19 @@
 # Proves the capture lifecycle against a LIVE node: upload config, start
 # tracebox, wait, stop, download. Then validates the downloaded artifact is a
 # genuine binary Perfetto trace — NOT the shell/python wrapper script, which is
-# the regression REQ-002 guards against.
+# the regression this suite guards against.
 #
 # =============================================================================
-# How TASK-005 runs this (after TASK-003 has deployed tracebox to the node):
+# How this suite runs (after tracebox has been deployed to the node):
 #
 #   NODE_IP=<node-ip> bats research/perfetto/tests/test-perfetto-capture-e2e.bats
 #
 # Example:
 #   NODE_IP=192.168.124.11 bats research/perfetto/tests/test-perfetto-capture-e2e.bats
 #
-# Without NODE_IP the live capture tests (E2E-01..E2E-04) skip cleanly
-# (REQ-004). The fixture-based assertion tests (E2E-05..E2E-10) and the
-# skip-path tests (E2E-11, E2E-12) run without a node, so the regression
-# detection logic is always exercised.
+# Without NODE_IP the live capture tests skip cleanly. The fixture-based
+# assertion tests and the skip-path tests run without a node, so the
+# regression detection logic is always exercised.
 #
 # The smoke experiment config used by the runner is
 # research/experiments/configs/perfetto-smoke.yaml; validate it with:
@@ -27,14 +26,13 @@
 # (the --perfetto flag is what makes the runner print the Perfetto plan block).
 # =============================================================================
 #
-# Requirements covered:
-#   REQ-001  E2E-01  capture against live node, 30s, eevdf-deep config
-#   REQ-002  E2E-02/03 + fixtures E2E-05/06/07/08/09  trace exists, non-empty,
-#                    file(1) reports binary, not ASCII text / Python script
-#   REQ-003  E2E-04 + fixture E2E-10  filename ends in .perfetto-trace
-#   REQ-004  E2E-11/12  skip (not fail) on unset NODE_IP / unreachable node,
-#                    time-bounded via timeout(1) so it cannot hang
-#   REQ-006  this header documents the TASK-005 invocation (above)
+# Coverage:
+#   live capture against a node, 30s, eevdf-deep config
+#   trace exists, non-empty, file(1) reports binary, not ASCII text / Python
+#   script (fixture-based assertion tests cover the rejection paths)
+#   filename ends in .perfetto-trace (fixture test)
+#   skip (not fail) on unset NODE_IP / unreachable node, time-bounded via
+#   timeout(1) so it cannot hang
 
 setup() {
     export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
@@ -53,8 +51,8 @@ setup() {
 # _live_node_or_skip — Skip the current test unless a node is available
 #
 # Skips when NODE_IP is unset/empty, or when the node cannot be reached over
-# SSH within a bounded timeout (REQ-004: skip, never fail, never hang).
-# NODE_IP_OVERRIDE is for the deterministic skip-path tests (E2E-11/E2E-12).
+# SSH within a bounded timeout (skip, never fail, never hang).
+# NODE_IP_OVERRIDE is for the deterministic skip-path tests.
 # ---------------------------------------------------------------------------
 _live_node_or_skip() {
     local node_ip
@@ -69,7 +67,7 @@ _live_node_or_skip() {
     fi
 
     if ! timeout 8 ssh "${SSH_OPTS[@]}" "root@${node_ip}" true >/dev/null 2>&1; then
-        skip "node ${node_ip} unreachable over SSH — E2E capture test skipped (REQ-004)"
+        skip "node ${node_ip} unreachable over SSH — E2E capture test skipped"
     fi
 }
 
@@ -136,10 +134,10 @@ _assert_binary_trace() {
 }
 
 # =============================================================================
-# REQ-001 — Invoke perfetto-capture.sh against a LIVE node
+# Invoke perfetto-capture.sh against a LIVE node
 # =============================================================================
 
-@test "E2E-01: capture runs end-to-end against live node (REQ-001)" {
+@test "capture runs end-to-end against live node" {
     _live_node_or_skip
     run _run_capture
     [ "$status" -eq 0 ]
@@ -147,10 +145,10 @@ _assert_binary_trace() {
 }
 
 # =============================================================================
-# REQ-002 — Trace exists, is non-empty, and file(1) reports binary data
+# Trace exists, is non-empty, and file(1) reports binary data
 # =============================================================================
 
-@test "E2E-02: trace file exists and is non-empty (REQ-002)" {
+@test "trace file exists and is non-empty" {
     _live_node_or_skip
     run _run_capture
     [ "$status" -eq 0 ]
@@ -158,7 +156,7 @@ _assert_binary_trace() {
     [ -s "$output" ]
 }
 
-@test "E2E-03: file(1) reports binary data, not ASCII text / Python script (REQ-002)" {
+@test "file(1) reports binary data, not ASCII text / Python script" {
     _live_node_or_skip
     run _run_capture
     [ "$status" -eq 0 ]
@@ -166,33 +164,33 @@ _assert_binary_trace() {
     [ "$status" -eq 0 ]
 }
 
-@test "E2E-05: binary assertion rejects a Python-script trace (wrapper regression, REQ-002)" {
+@test "binary assertion rejects a Python-script trace (wrapper regression)" {
     local fake="${BATS_TEST_TMPDIR:-/tmp}/fake-trace.perfetto-trace"
     printf '#!/usr/bin/env python3\n# fake perfetto trace wrapper\n' > "$fake"
     run _assert_binary_trace "$fake"
     [ "$status" -ne 0 ]
 }
 
-@test "E2E-06: binary assertion rejects a plain ASCII text trace (REQ-002)" {
+@test "binary assertion rejects a plain ASCII text trace" {
     local fake="${BATS_TEST_TMPDIR:-/tmp}/fake-trace.perfetto-trace"
     printf 'this is not a perfetto trace, just plain text\n' > "$fake"
     run _assert_binary_trace "$fake"
     [ "$status" -ne 0 ]
 }
 
-@test "E2E-07: binary assertion rejects an empty trace file (REQ-002)" {
+@test "binary assertion rejects an empty trace file" {
     local fake="${BATS_TEST_TMPDIR:-/tmp}/fake-trace.perfetto-trace"
     : > "$fake"
     run _assert_binary_trace "$fake"
     [ "$status" -ne 0 ]
 }
 
-@test "E2E-08: binary assertion rejects a missing trace file (REQ-002)" {
+@test "binary assertion rejects a missing trace file" {
     run _assert_binary_trace "${BATS_TEST_TMPDIR:-/tmp}/does-not-exist.perfetto-trace"
     [ "$status" -ne 0 ]
 }
 
-@test "E2E-09: binary assertion accepts genuine binary data (positive control, REQ-002)" {
+@test "binary assertion accepts genuine binary data (positive control)" {
     local real="${BATS_TEST_TMPDIR:-/tmp}/genuine.perfetto-trace"
     printf '\x0a\x00\x00\x00\x08\x00\x12\x03bin' > "$real"
     run _assert_binary_trace "$real"
@@ -200,17 +198,17 @@ _assert_binary_trace() {
 }
 
 # =============================================================================
-# REQ-003 — Trace filename ends in .perfetto-trace
+# Trace filename ends in .perfetto-trace
 # =============================================================================
 
-@test "E2E-04: trace filename ends in .perfetto-trace (REQ-003)" {
+@test "trace filename ends in .perfetto-trace" {
     _live_node_or_skip
     run _run_capture
     [ "$status" -eq 0 ]
     [[ "$output" == *.perfetto-trace ]]
 }
 
-@test "E2E-10: binary assertion rejects a non .perfetto-trace filename (REQ-003)" {
+@test "binary assertion rejects a non .perfetto-trace filename" {
     local wrong="${BATS_TEST_TMPDIR:-/tmp}/trace.bin"
     printf '\x0a\x00\x00\x00\x08\x00' > "$wrong"
     run _assert_binary_trace "$wrong"
@@ -218,17 +216,17 @@ _assert_binary_trace() {
 }
 
 # =============================================================================
-# REQ-004 — Skip (not fail) when NODE_IP unset or node unreachable; no hang
+# Skip (not fail) when NODE_IP unset or node unreachable; no hang
 # =============================================================================
 
-@test "E2E-11: unreachable node skips instead of failing (REQ-004)" {
+@test "unreachable node skips instead of failing" {
     # 192.0.2.1 is TEST-NET-1 (RFC 5737): no route exists, so the SSH probe
     # fails within ConnectTimeout=2 and the test must skip, not fail.
     NODE_IP_OVERRIDE="192.0.2.1" _live_node_or_skip
     false  # reached only if the probe unexpectedly succeeded — must have skipped
 }
 
-@test "E2E-12: unset/empty NODE_IP skips instead of failing (REQ-004)" {
+@test "unset/empty NODE_IP skips instead of failing" {
     NODE_IP_OVERRIDE="" _live_node_or_skip
     false  # reached only if the probe unexpectedly succeeded — must have skipped
 }
