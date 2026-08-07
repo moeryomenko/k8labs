@@ -1,0 +1,28 @@
+experiment:
+  name: dist-cpu-burner
+  description: "Family A: cpu-burner request x limit matrix — steady ~30% light-demand profile via /load, shared 6-cell matrix. Must be run with --eevdf --perfetto --perfetto-config eevdf-deep."
+replicates: 3
+pre_warm: 10
+duration: 90
+cooldown: 10
+node: w1
+# Family A (dist-cpu-burner): single cpu-burner
+# pod pinned to w1, the shared 6-cell request/limit matrix, latency_load with
+# the burn endpoint mix (burn:100, hitting /load?percent=30&duration=<window>)
+# producing a steady ~30% light-demand profile. The latency_load duration
+# defaults to the experiment duration (90s).
+workload:
+  type: cpu-burner
+  params:
+    latency_load:
+      rate: 50
+      endpoints: "burn:100"
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: ""
+  - request: "100m"; limit: "100m"
+  - request: "100m"; limit: "1000m"
+  - request: "500m"; limit: "500m"
+  - request: "500m"; limit: "2000m"
+  - request: "1000m"; limit: "2000m"

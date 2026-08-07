@@ -1,0 +1,28 @@
+experiment:
+  name: dist-api-server
+  description: "Family A: api-server request x limit matrix — realistic HTTP load, shared 6-cell matrix. Must be run with --eevdf --perfetto --perfetto-config eevdf-deep."
+replicates: 3
+pre_warm: 10
+duration: 90
+cooldown: 10
+node: w1
+# Family A (dist-api-server): single api-server
+# pod pinned to w1, the shared 6-cell request/limit matrix, latency_load at
+# 50 req/s against the generator's default endpoint mix
+# (users:30,orders:30,search:20,reports:20). The latency_load duration
+# defaults to the experiment duration (90s).
+workload:
+  type: api-server
+  params:
+    latency_load:
+      rate: 50
+      endpoints: "users:30,orders:30,search:20,reports:20"
+measurement:
+  cgroup_interval: 5
+matrix:
+  - request: ""; limit: ""
+  - request: "100m"; limit: "100m"
+  - request: "100m"; limit: "1000m"
+  - request: "500m"; limit: "500m"
+  - request: "500m"; limit: "2000m"
+  - request: "1000m"; limit: "2000m"

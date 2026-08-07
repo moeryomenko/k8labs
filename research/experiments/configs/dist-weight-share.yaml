@@ -1,0 +1,42 @@
+experiment:
+  name: dist-weight-share
+  description: "Weight-share matrix (Family B) — 3 co-located stress-ng pods with varying request-only CPU shares (limits empty on purpose; BestEffort pod-c demonstrates starvation). Identical 3-pod structure and 6 cells to weight-share.yaml, with the global execution model (replicates 3, pre_warm 10, duration 90, cooldown 10). Must be run with --eevdf."
+node: w1
+replicates: 3
+pre_warm: 10
+duration: 90
+cooldown: 10
+# Family B: three stress-ng pods sharing one
+# node. The matrix varies pod-a/pod-b requests only — limits are intentionally
+# empty so the EEVDF weight (from requests) alone decides the CPU split. pod-c
+# gets no request/limit in the 2-pod cells and becomes BestEffort,
+# demonstrating BestEffort starvation under full load. Byte-identical
+# workloads/matrix to weight-share.yaml; node w1 explicit per spec 3.0.
+#
+# NOTE: run with --eevdf — this family measures EEVDF weight-share metrics
+# (per-pod vruntime/deadline/slice), so the Makefile target passes --eevdf.
+workloads:
+  pod-a:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+  pod-b:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+  pod-c:
+    type: stress-ng
+    params:
+      cores: 2
+      load: 100
+measurement:
+  cgroup_interval: 5
+matrix:
+  - a_request: "500m"; a_limit: ""; b_request: "500m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "250m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "100m"; a_limit: ""; b_request: "500m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "100m"; a_limit: ""; b_request: "1000m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "800m"; a_limit: ""; b_request: "800m"; b_limit: ""; c_request: ""; c_limit: ""
+  - a_request: "200m"; a_limit: ""; b_request: "500m"; b_limit: ""; c_request: ""; c_limit: ""
