@@ -49,7 +49,7 @@ make all-experiments   # ~2 hours total
 ### 5. Generate analysis report
 
 ```bash
-make report   # (after TASK-R006 is implemented)
+make report   # Generate analysis report from experiment data
 ```
 
 ### 6. Run EEVDF experiments
