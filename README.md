@@ -15,22 +15,22 @@ Lab scenarios include:
 - **Kubernetes the Hard Way** — manual bootstrapping of control plane components (etcd, API server, controller manager, scheduler) and worker node registration.
 - **Cilium CNI networking** — installation, configuration, and exploration of Cilium's eBPF-based networking, including L2 announcements for LoadBalancer services and Gateway API for L7 traffic management.
 - **System extension layering** — using systemd-sysext and systemd-confext to overlay Kubernetes and container runtime binaries and configuration onto a minimal base OS image, demonstrating immutable OS extension patterns.
-- **Certificate lifecycle** — generation and distribution of TLS certificates for etcd, kubelet, API server, and service accounts using Ansible community.crypto modules.
-- **Infrastructure as Code** — full pipeline from Packer image baking through Terraform/OpenTofu VM provisioning to Ansible configuration management, all running locally on KVM.
+- **Certificate lifecycle** — generation and distribution of TLS certificates for etcd, kubelet, API server, and service accounts using the OpenTofu `tls` provider during the phase-B `make configure` step.
+- **Infrastructure as Code** — full pipeline from Packer image baking through OpenTofu VM provisioning (phase A) and tofu-generated runtime configuration (phase B), all running locally on KVM.
 
 ## Architecture
 
 The cluster environment is built in stages, each producing an artifact consumed by the next:
 
-1. **Base OS image** (Packer) — a minimal Fedora image built from a Fedora Cloud Base qcow2 using the [cloudhypervisor builder plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor), with a pinned kernel version and SSH access configured via cloud-init. The resulting qcow2 image serves as the immutable base for all cluster VMs.
+1. **Base OS image** (Packer) — a minimal Fedora image built from a Fedora Cloud Base qcow2 using the [cloudhypervisor builder plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor), with a pinned kernel version and SSH access configured via cloud-init. The image bakes every node prerequisite: the seven systemd-sysext images (kubelet, CRI-O, crun, CNI, etcd, kubernetes-cp, perfetto) under `/var/lib/extensions/`, the three static systemd-confext images (`confext-cri-o`, `confext-kubernetes`, `confext-containers`) under `/var/lib/confexts/`, the `conmon`/`parted`/`growpart` packages, a first-boot root-resize helper (`/usr/local/sbin/resize-rootfs.sh`), the SELinux `ebpf-fix` policy module, and enabled `systemd-sysext`/`systemd-confext` services. The resulting qcow2 image serves as the immutable base for all cluster VMs.
 
-2. **System extensions** (sysext/confext) — Kubernetes and container runtime binaries (kubelet, CRI-O, crun, CNI plugins, etcd, API server, controller manager, scheduler, kubectl) are packaged as systemd-sysext images and dropped into `/var/lib/extensions/`. Corresponding configuration overlays (sysctl parameters, module loading, kubelet config, CRI-O config, etcd config) are built as systemd-confext images layered over `/etc/`. This keeps the base OS pristine and allows atomic updates of individual components without re-baking the VM image.
+2. **System extensions** (sysext/confext) — Kubernetes and container runtime binaries are packaged as systemd-sysext images that overlay `/usr/`; runtime-independent node configuration (kubelet config, CRI-O config, container policy) is packaged as systemd-confext images that overlay `/etc/`. Both are baked into the base image by Packer and merged at first boot by the enabled `systemd-sysext`/`systemd-confext` services. This keeps the base OS pristine and delivers node configuration as immutable, versioned extension images rather than mutating the live filesystem.
 
-3. **Ansible runner container** (Podman/Containerfile) — a self-contained execution environment with Ansible, community.crypto, community.general, kubectl, and Cilium CLI. All Ansible operations run inside this container for reproducibility.
+3. **VM provisioning, phase A** (OpenTofu) — a [cloudhypervisor provider](https://github.com/moeryomenko/tf-provider-cloud-hypervisor) configuration provisions control plane and worker VMs from the base image, with cloud-init metadata (hostname, SSH keys, first-boot root resize) attached as a FAT16 CIDATA disk. VM specifications (CPU, RAM, disk) are configurable per node. VMs use TAP devices on a shared Linux bridge (`k8sbr0`) with DHCP from systemd-networkd and DNS forwarding via dnsmasq. At first boot the baked sysext/confext images are merged; no Kubernetes service is enabled yet.
 
-4. **VM provisioning** (OpenTofu/Terraform) — a [cloudhypervisor provider](https://github.com/moeryomenko/tf-provider-cloud-hypervisor) configuration that provisions control plane and worker VMs from the base image, with cloud-init metadata (hostname, SSH keys) attached as a FAT16 CIDATA disk. VM specifications (CPU, RAM, disk) are configurable per node. VMs use TAP devices on a shared Linux bridge (`k8sbr0`) with DHCP from systemd-networkd and DNS forwarding via dnsmasq.
+4. **Runtime configuration, phase B** (`make configure`) — a second OpenTofu root module (`terraform/runtime/`) discovers each node's DHCP IP, generates the cluster PKI (CA, apiserver, kubelet, etcd, service-account, front-proxy certs), and renders role-split systemd-confext images (`z-etcd`, `z-kubernetes-cp`, `z-kubelet-<node>`) containing the runtime-dependent configuration (certs, kubeconfigs, CP-IP-embedded config). It pushes them to `/var/lib/confexts/` on each node over SSH, runs `systemd-confext refresh`, and enables/starts the Kubernetes services in dependency order (crio -> etcd -> apiserver -> controller-manager -> scheduler; workers crio -> kubelet). The push is hash-conditional, so re-runs skip unchanged nodes.
 
-5. **Cluster bootstrapping** (Ansible) — Ansible playbooks orchestrate the full cluster bring-up: distributing system extensions, generating and deploying TLS certificates, bootstrapping etcd, initializing the Kubernetes control plane, configuring kubelet on workers, deploying Cilium CNI, and configuring Layer 2 load balancer IP pools. The bootstrap follows the KTHW service sequence (etcd -> API server -> controller manager -> scheduler -> kubelet -> kube-proxy -> CNI).
+5. **Cluster operations** — host `kubectl` applies cluster-level resources: `make rbac` (kubelet bootstrap, `system:nodes`, admin bindings), `make cilium` (committed Cilium manifests, Gateway API CRDs, LB pool, L2 policy), and `make coredns` (cluster DNS). `make smoke-test` gates the whole result.
 
 6. **Load balancing pool** — Cilium L2 announcements provide LoadBalancer service IPs from a dedicated `10.0.10.0/24` pool. A declarative host route on the management machine (`10.0.10.0/24 dev k8sbr0`, declared in `network/k8sbr0.network` as `[Route] Destination=10.0.10.0/24`) bridges traffic into the cluster's virtual network.
 
@@ -42,16 +42,16 @@ The cluster environment is built in stages, each producing an artifact consumed 
 | Base OS | Fedora (kernel 7.1) |
 | VM provisioning | OpenTofu / Terraform (cloudhypervisor provider) |
 | Image baking | Packer (cloudhypervisor builder on Fedora Cloud) |
-| Configuration management | Ansible (community.crypto, community.general) |
+| Node configuration | Image-baked systemd-sysext / systemd-confext + tofu-pushed runtime confexts |
+| PKI | OpenTofu `tls` provider (phase B) |
 | Container runtime | CRI-O with crun |
 | CNI / Service Mesh | Cilium (eBPF, L2 announcements, Gateway API) |
 | Service discovery | etcd |
 | OS extensions | systemd-sysext / systemd-confext |
-| Runner container | Podman |
 
 ## Quick Start
 
-Requirements: a Linux host with KVM-capable hardware, `cloud-hypervisor` (>= v38), `tofu` (or `terraform`), `packer`, `podman`, `openssl`, `mkdosfs` (dosfstools), `mcopy` (mtools), and `dnsmasq`. Run `make prereq` to validate core tools. The Packer plugin must be built from source with `make plugin`.
+Requirements: a Linux host with KVM-capable hardware, `cloud-hypervisor` (>= v38), `tofu` (or `terraform`), `packer`, `openssl`, `mkdosfs` (dosfstools), `mcopy` (mtools), and `dnsmasq`. Run `make prereq` to validate core tools. The Packer plugin must be built from source with `make plugin`.
 
 The full cluster build pipeline is driven through a single Makefile:
 
@@ -59,7 +59,7 @@ The full cluster build pipeline is driven through a single Makefile:
 make cluster
 ```
 
-This executes the complete sequence: validate prerequisites, bake the base OS image, build all system and configuration extensions, build the Ansible runner container, provision VMs via OpenTofu, wait for DHCP leases and SSH connectivity, bootstrap Kubernetes with Ansible, configure Cilium and L2 announcements, and fetch a working kubeconfig.
+This executes the complete sequence: bake the base OS image with the system and configuration extensions baked in, provision VMs via OpenTofu (phase A), wait for DHCP leases and SSH connectivity, generate PKI and push role confexts via `make configure` (phase B), apply RBAC/Cilium/CoreDNS, and fetch a working kubeconfig before running the smoke test.
 
 Individual pipeline stages can be run separately:
 
@@ -73,14 +73,13 @@ Individual pipeline stages can be run separately:
 | `make base-cloudinit` | Generate FAT16 CIDATA disk for Packer SSH key injection |
 | `make plugin` | Build and install [cloudhypervisor Packer plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) from source |
 
-**Extensions and container:**
+**Extensions:**
 
 | Target | Description |
 |--------|-------------|
 | `make sysexts` | Build all system extension images |
 | `make confexts` | Build all configuration extension overlays |
 | `make extensions` | Build all extensions (both sysext and confext) |
-| `make container` | Build the Ansible runner container |
 
 **Networking:**
 
@@ -93,19 +92,22 @@ Individual pipeline stages can be run separately:
 
 | Target | Description |
 |--------|-------------|
-| `make deploy` | Provision cluster VMs via OpenTofu (cloudhypervisor provider) |
+| `make deploy` | Phase A: provision cluster VMs via OpenTofu (cloudhypervisor provider) |
 | `make wait-ips` | Poll until all VMs have DHCP-assigned IPs |
 | `make wait-ssh` | Poll until SSH is reachable on all VMs |
+| `make configure` | Phase B: generate PKI + role confexts and activate services (`terraform/runtime`) |
 | `make destroy` | Tear down all VMs |
-| `make destroy-full` | Destroy VMs, certs, kubeconfig, and inventory |
+| `make destroy-full` | Destroy VMs, runtime state, certs, and kubeconfig |
 
 **Cluster operations:**
 
 | Target | Description |
 |--------|-------------|
-| `make bootstrap` | Run the full Ansible cluster bootstrap |
+| `make rbac` | Apply cluster RBAC (kubelet bootstrap, `system:nodes`, admin, apiserver-proxy) |
+| `make cilium` | Install Cilium from committed manifests (Gateway API CRDs, LB pool, L2 policy) |
 | `make smoke-test` | Validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling, CoreDNS DNS regression) |
 | `make coredns` | Deploy CoreDNS cluster DNS (kube-dns Service at 10.96.0.10) |
+| `make metrics-server` | Enable `kubectl top` (metrics API via aggregation layer) |
 | `make start` / `make stop` | Start/stop VMs via ch-remote API (ACPI shutdown) |
 | `make kubeconfig` | Fetch DHCP-resistant kubeconfig from control-plane |
 | `make update-kubeconfig` | Refresh kubeconfig after DHCP IP change |
@@ -116,13 +118,12 @@ Pre-built dependencies are cached: re-running `make cluster` skips stages whose 
 
 The repository is organized by concern, not by lifecycle stage:
 
-- `packer/` — Packer templates (`base.pkr.hcl`), cloud-init configs, and provisioning scripts for base image baking
-- `terraform/` — OpenTofu/Terraform configuration for VM definitions (cloudhypervisor provider), bridge TAP networking, and cloud-init
-- `ansible/` — Ansible playbooks, roles (certs, etcd, kubernetes-cp, kubelet, cilium), and dynamic inventory script
-- `container/` — Containerfile for the Ansible runner
+- `packer/` — Packer templates (`base.pkr.hcl`), cloud-init configs, and provisioning scripts for base image baking (bakes the sysext/confext images)
+- `terraform/` — OpenTofu/Terraform configuration for VM definitions (cloudhypervisor provider, phase A), bridge TAP networking, and cloud-init
+- `terraform/runtime/` — Phase-B root module: PKI generation (tls provider) and role-confext rendering/pushing
 - `extensions/` — Build scripts and download utilities for systemd-sysext and systemd-confext packaging
 - `sysext/` — Raw system extension directory structures (binaries, systemd units)
-- `confext/` — Raw configuration extension directory structures (config files, sysctl, sysfs params)
+- `confext/` — Raw configuration extension directory structures (kubelet config, CRI-O config, container policy)
 - `certs/` — Generated TLS certificates (output artifact, gitignored except `.gitkeep`)
 - `cilium/` — Cilium manifest templates (L2 announcement policy, LB IP pool, Gateway API manifests)
 - `coredns/` — CoreDNS cluster DNS manifests (Corefile ConfigMap, RBAC, Deployment, kube-dns Service)
@@ -133,9 +134,9 @@ The repository is organized by concern, not by lifecycle stage:
 
 - **KTHW-style bootstrap**: Every Kubernetes component is configured explicitly (certificates, kubeconfigs, systemd units, manifests). This is deliberate — the goal is to understand how the components interconnect, not to minimize keystrokes.
 
-- **Immutable base + sysext layering**: The base OS is baked once and treated as immutable. All Kubernetes and container runtime components are delivered as system extensions. This pattern mirrors production-ready approaches like Flatcar Linux or Fedora CoreOS and allows iterating on cluster component versions without re-baking images.
+- **Immutable base + sysext/confext layering**: The base OS is baked once and treated as immutable. All Kubernetes and container runtime components are delivered as systemd-sysext images and all static node configuration as systemd-confext images baked into the base image by Packer; runtime-dependent configuration (PKI, kubeconfigs, CP-IP-embedded config) arrives later as tofu-pushed role confexts. This pattern mirrors production-ready approaches like Flatcar Linux or Fedora CoreOS; bumping a component version re-bakes the base image (`make base` depends on the extension builds).
 
-- **Podman-based Ansible runner**: Ansible runs inside a container rather than directly on the host. This keeps the host clean of Python/Ansible dependencies and ensures the execution environment matches the tested configuration.
+- **Two-phase tofu delivery**: Phase A boots immutable VMs that merge only the baked static extensions; phase B (`make configure`) generates the runtime PKI and pushes role-split confexts, so no post-boot configuration mutates the node filesystem and the host needs no configuration-management runtime beyond `tofu`, `ssh`/`scp`, and `kubectl`.
 
 - **MAC-based IP resolution**: The Makefile reads the systemd-networkd DHCP server lease file (`/var/lib/systemd/network/dhcp-server-lease/k8sbr0`) with MAC address matching to reliably resolve VM IPs after provisioning — no reliance on Terraform outputs or libvirt. A `scripts/vm-ip.sh` helper provides the lookup for both systemd-networkd and legacy dnsmasq lease formats.
 
@@ -149,10 +150,10 @@ This lab includes Cilium's built-in Gateway API controller, providing Kubernetes
 
 ### Configuration
 
-Gateway API support is enabled by default during the Ansible bootstrap. The Cilium role:
+Gateway API support is enabled by default via the committed Cilium install manifests (`make cilium`):
 
-1. Installs Gateway API v1.1.1 CRDs (GatewayClass, Gateway, HTTPRoute, GRPCRoute, ReferenceGrant, TLSRoute)
-2. Enables the Gateway API controller via `gatewayAPI.enabled=true` in Cilium
+1. Installs Gateway API CRDs (bundle v1.4.0: GatewayClass, Gateway, HTTPRoute, GRPCRoute, ReferenceGrant, TLSRoute)
+2. Enables the Gateway API controller via `enable-gateway-api` in the Cilium ConfigMap
 3. Applies a `CiliumGatewayClassConfig` that configures the generated LoadBalancer service type and external traffic policy
 4. Applies example Gateway API resources (GatewayClass, Gateway, HTTPRoute)
 
@@ -167,7 +168,7 @@ All Gateway API manifests are in `cilium/`:
 
 ### Usage
 
-Gateway API resources are applied automatically during `make cluster` or `make bootstrap`. To add your own routes:
+Gateway API resources are applied automatically during `make cluster` or `make cilium`. To add your own routes:
 
 ```
 kubectl apply -f cilium/http-route.yaml
@@ -193,8 +194,8 @@ upstream to 1.1.1.1/8.8.8.8.
 
 ### Deployment
 
-CoreDNS is deployed during `make cluster`/`make bootstrap` by the Ansible `coredns`
-role, which applies the `coredns/` manifests. To deploy or re-deploy on an
+CoreDNS is deployed during `make cluster`/`make coredns`, which applies the
+`coredns/` manifests with host `kubectl`. To deploy or re-deploy on an
 already-running cluster (idempotent):
 
 ```
