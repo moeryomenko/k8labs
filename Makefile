@@ -288,7 +288,7 @@ tfvars: ## Generate terraform.tfvars from defaults for deployment
 	@if [ ! -f "$(TFVARS)" ]; then \
 		echo '==> Creating $(TFVARS) from example...'; \
 		PUB_KEY="$$(cat ~/.ssh/id_ed25519.pub 2>/dev/null || cat ~/.ssh/id_rsa.pub 2>/dev/null || echo 'YOUR_SSH_PUB_KEY')"; \
-		sed "s|ssh-ed25519 AAAAC3.*|$$PUB_KEY|" \
+		sed "s|ssh-ed25519 AAAAC3.*|$$PUB_KEY\"|" \
 			terraform/terraform.tfvars.example > "$(TFVARS)"; \
 		echo '    Edit $(TFVARS) to adjust VM count and MAC addresses'; \
 	fi
@@ -331,7 +331,12 @@ deploy: network-up tfvars vm-disks ## Apply Terraform/OpenTofu infrastructure
 .PHONY: destroy
 destroy: tfvars ## Destroy all VMs
 	@echo 'Destroying VMs...'
-	tofu -chdir=terraform destroy -auto-approve -var-file="../$(TFVARS)"
+	# First attempt refreshes state. When VM sockets are gone but the state
+	# still tracks them, the provider's Read hard-fails on the missing socket
+	# (only HTTP 404 counts as "VM gone"), so retry with -refresh=false: the
+	# Delete is graceful (missing socket -> no-op + state removal).
+	@tofu -chdir=terraform destroy -auto-approve -var-file="../$(TFVARS)" || \
+		tofu -chdir=terraform destroy -refresh=false -auto-approve -var-file="../$(TFVARS)"
 
 # --- VM Lifecycle ---
 
@@ -462,7 +467,7 @@ runtime-tfvars: ## Generate build/runtime.tfvars from tofu output + DHCP leases
 .PHONY: configure
 configure: wait-ips wait-ssh runtime-tfvars ## Configure phase B: generate PKI + role confexts and activate services
 	@echo 'Applying runtime configuration (tofu apply, phase B)...'
-	tofu -chdir=terraform/runtime apply -auto-approve -var-file=../build/runtime.tfvars
+	tofu -chdir=terraform/runtime apply -auto-approve -var-file=../../build/runtime.tfvars
 
 .PHONY: prereq
 prereq: ## Validate required build tools (tofu, cloud-hypervisor, openssl, nft, systemctl, jq, python3)
@@ -788,8 +793,9 @@ clean: ## Remove build artifacts
 .PHONY: validate-packer
 validate-packer: ## Validate Packer template syntax
 	@echo 'Validating Packer template syntax...'
-	# Some vars don't have defaults (firmware_path, etc.) -- checked at build time.
-	cd packer && packer validate -var="firmware_path=/tmp/test" -var="cloud_image_path=/tmp/test" -var="cloudinit_disk_path=/tmp/test" -var="ssh_private_key_file=/tmp/test" . 2>&1 || true
+	# Validate the real template with its var file; no masking so an
+	# unset-variable error fails the target (was masked by `|| true`).
+	cd packer && packer validate -var-file=vars.pkrvars.hcl .
 
 .PHONY: validate-terraform
 validate-terraform: ## Validate Terraform/OpenTofu configuration (both root modules)
