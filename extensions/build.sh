@@ -125,6 +125,16 @@ else
     output_file="${RELEASE_DIR}/${output_name}.raw"
 
     if command -v mksquashfs >/dev/null 2>&1; then
+        # Skip the rebuild when the output already exists and is newer than
+        # every regular file in the source tree. Without this guard every
+        # invocation refreshes the .raw mtime (mksquashfs -noappend rewrites
+        # the file), which defeats the Makefile's base-image skip-guard
+        # (NEWEST_RAW -nt BASE_IMAGE_DEST).
+        newer_sources=$(find "$source_dir" -type f -newer "$output_file")
+        if [ -f "$output_file" ] && [ -z "$newer_sources" ]; then
+            echo "SKIP: ${output_name}.raw is up to date"
+            exit 0
+        fi
         mksquashfs "$source_dir" "$output_file" -noappend -all-root
     elif command -v genisoimage >/dev/null 2>&1; then
         genisoimage -output "$output_file" "$source_dir"
