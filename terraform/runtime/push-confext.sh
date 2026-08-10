@@ -53,7 +53,9 @@
 #      real path is validated in E2E.
 #
 # Environment:
-#   PUSH_SSH_OPTS  extra ssh options (default: batch-mode + 5s connect timeout)
+#   PUSH_SSH_OPTS  extra ssh options (default: batch-mode + 5s connect timeout,
+#                  host key check disabled like wait-ssh — destroy/recreate can
+#                  reuse DHCP IPs with a new host key)
 #   PUSH_SCP_OPTS  extra scp options (default: none)
 #   ETCD_WAIT_ATTEMPTS / ETCD_WAIT_SLEEP        etcdctl health retry bounds
 #   APISERVER_WAIT_ATTEMPTS / APISERVER_WAIT_SLEEP  /healthz retry bounds
@@ -72,7 +74,7 @@ die() {
     exit 1
 }
 
-SSH_OPTS="${PUSH_SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new}"
+SSH_OPTS="${PUSH_SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
 SCP_OPTS="${PUSH_SCP_OPTS:-}"
 
 if [ "$#" -lt 2 ]; then
