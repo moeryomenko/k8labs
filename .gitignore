@@ -21,9 +21,6 @@ sysext/etcd/usr/bin/*
 sysext/kubernetes-cp/usr/bin/*
 sysext/perfetto/usr/bin/*
 
-# Ansible Galaxy collections — installed at build time
-ansible/collections/
-
 # Generated TLS certificates, kubeconfigs, and cluster admin config
 /certs/*
 !/certs/.gitkeep
@@ -53,12 +50,10 @@ override.tf.json
 # CLI configuration files (local to each developer)
 .terraformrc
 terraform.rc
-ansible/inventory/inventory.json
 
 # Generated cloud-init disk images — created at build time
 terraform/cloud-init/out/
 
-.container.stamp
 perfetto-plots
 perfetto-analysis
 research/analysis/output/
