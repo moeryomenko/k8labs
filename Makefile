@@ -1,7 +1,7 @@
 # k8labs — Kubernetes OS Image Build System
 # Targets for Packer VM baking and system/configuration extensions.
 # For maximum parallelism, use: make -j$$(nproc) cluster
-# This builds base image, extensions, and container simultaneously.
+# This builds base image, extensions, and cluster VMs.
 
 SHELL := /bin/bash
 .ONESHELL:
@@ -365,7 +365,7 @@ stop: ## Gracefully stop all VMs via ACPI shutdown
 	done
 
 .PHONY: destroy-full
-destroy-full: destroy ## Destroy all artifacts (VMs + certs + inventory + kubeconfig)
+destroy-full: destroy ## Destroy all artifacts (VMs + runtime state + kubeconfig + certs)
 	@echo '==> Preparing to clean up generated artifacts...'
 	@if [ "${YES}" != "1" ]; then \
 		read -t 30 -r -p "Remove all generated certificates and kubeconfigs? [y/N] " confirm; \
@@ -374,66 +374,17 @@ destroy-full: destroy ## Destroy all artifacts (VMs + certs + inventory + kubeco
 			*) echo "  Aborted."; exit 1 ;; \
 		esac; \
 	fi
+	@echo '==> Removing terraform/runtime state...'
+	@rm -f terraform/runtime/terraform.tfstate*
+	@echo '==> Removing build/runtime...'
+	@rm -rf build/runtime
 	@echo '==> Removing generated certificates...'
 	@find certs/ -type f ! -name '.gitkeep' -delete
 	@find certs/ -type d -empty -delete
 	@touch certs/.gitkeep
-	@echo '==> Removing ansible/inventory/inventory.json...'
-	@rm -f ansible/inventory/inventory.json
 	@echo '==> Removing root kubeconfig...'
 	@rm -f kubeconfig
 	@echo '==> Cleanup complete.'
-
-# --- Ansible Container ---
-
-ANSIBLE_IMAGE := localhost/ansible-podman
-ANSIBLE_DIR := ansible
-ANSIBLE_RUN := podman run --rm --network host \
-	--cap-add=NET_ADMIN \
-	-v $(PWD):/workspace:z \
-	-v $(HOME)/.ssh:/root/.ssh:ro,z \
-	-v $(SSH_AUTH_SOCK):/ssh-agent:z \
-	-e SSH_AUTH_SOCK=/ssh-agent \
-	-e ANSIBLE_ROLES_PATH=/workspace/$(ANSIBLE_DIR)/roles \
-	-e ANSIBLE_INVENTORY=/workspace/$(ANSIBLE_DIR)/inventory/inventory.json \
-	-w /workspace \
-	$(ANSIBLE_IMAGE):latest
-
-.PHONY: container
-container: .container.stamp ## Build Ansible runner container image
-
-.container.stamp: container/Containerfile
-	@echo 'Building Ansible runner container image...'
-	podman build -t $(ANSIBLE_IMAGE):latest -f container/Containerfile
-	@touch .container.stamp
-
-.PHONY: inventory
-inventory: ## Test dynamic inventory output
-	@echo 'Testing Ansible dynamic inventory...'
-	ansible/inventory/inventory.py --list | python3 -m json.tool
-
-.PHONY: deploy-extensions
-deploy-extensions: ## Deploy sysext/confext extensions to all VMs (Ansible)
-	@echo 'Deploying extensions via Ansible...'
-	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json
-	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
-		ansible/playbooks/deploy-extensions.yml
-
-.PHONY: certs
-certs: ## Generate TLS certificates via Ansible (community.crypto)
-	@echo 'Generating TLS certificates (Ansible)...'
-	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json
-	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
-		ansible/playbooks/bootstrap.yml --tags certs
-
-.PHONY: bootstrap
-bootstrap: ## Bootstrap Kubernetes cluster via Ansible (KTHW + Cilium + L2)
-	@echo 'Bootstrapping Kubernetes cluster via Ansible...'
-	@echo '  Prerequisites: make deploy must have been run, SSH keys injected'
-	@echo '  Generating Ansible inventory from tofu state + dnsmasq leases...'
-	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json
-	$(ANSIBLE_RUN) ansible-playbook -i ansible/inventory/inventory.json \
-		ansible/playbooks/bootstrap.yml
 
 .PHONY: wait-ips
 wait-ips: ## Wait for ALL VMs to get DHCP leases (reads systemd-networkd lease file by MAC)
@@ -498,14 +449,26 @@ wait-ssh: ## Wait for SSH to become available on all VMs (reads DHCP leases for 
 		if [ -z "$$ip" ]; then echo "  WARNING: no IP for $$name" >&2; continue; fi; \
 		(check_ssh "$$ip" "$$name") & pids="$$pids $$!"; \
 	done; \
-	for pid in $$pids; do [ -z "$$pid" ] && continue; wait "$$pid" || has_error=1; done; \
+	for pid in $$pids; do [ -z "$$pid" ] && continue; wait "$$pid" || has_error=1; 	done; \
 	if [ "$$has_error" -ne 0 ]; then echo "  ERROR: one or more VMs failed SSH check" >&2; exit 1; fi
 
+# --- Runtime Configuration (Phase B) ---
+
+.PHONY: runtime-tfvars
+runtime-tfvars: ## Generate build/runtime.tfvars from tofu output + DHCP leases
+	@echo 'Generating runtime tfvars (phase B inputs)...'
+	scripts/runtime-tfvars.sh
+
+.PHONY: configure
+configure: wait-ips wait-ssh runtime-tfvars ## Configure phase B: generate PKI + role confexts and activate services
+	@echo 'Applying runtime configuration (tofu apply, phase B)...'
+	tofu -chdir=terraform/runtime apply -auto-approve -var-file=../build/runtime.tfvars
+
 .PHONY: prereq
-prereq: ## Validate required build tools (tofu, cloud-hypervisor, podman, openssl, nft, systemctl)
+prereq: ## Validate required build tools (tofu, cloud-hypervisor, openssl, nft, systemctl, jq, python3)
 	@set -euo pipefail; \
 	fail=0; \
-	for cmd in tofu cloud-hypervisor podman openssl nft systemctl; do \
+	for cmd in tofu cloud-hypervisor openssl nft systemctl jq python3; do \
 		if ! command -v $$cmd &>/dev/null; then \
 			echo "ERROR: required tool '$$cmd' not found" >&2; \
 			fail=1; \
@@ -514,23 +477,18 @@ prereq: ## Validate required build tools (tofu, cloud-hypervisor, podman, openss
 	exit $$fail
 
 .PHONY: cluster
-cluster: network-up base tfvars vm-disks sysexts confexts container ## Full pipeline: network -> base -> extensions -> container -> deploy -> bootstrap
+cluster: network-up base tfvars vm-disks sysexts confexts ## Full pipeline: network -> base -> deploy (phase A) -> configure (phase B) -> cluster ops
 	@set -euo pipefail; \
-	echo 'Bootstrapping cluster...'; \
-	echo '  Step 1: Deploy VMs (tofu apply)...'; \
-	tofu -chdir=terraform apply -auto-approve -var-file="../build/deploy.tfvars"; \
-	echo '  Step 2: Wait for VM IP addresses...'; \
-	$(MAKE) wait-ips; \
-	echo '  Step 3: Wait for SSH connectivity on all VMs...'; \
-	$(MAKE) wait-ssh; \
-	echo '  Step 4: Generate Ansible inventory...'; \
-	$(ANSIBLE_DIR)/inventory/inventory.py --list > $(ANSIBLE_DIR)/inventory/inventory.json; \
-	echo '  Step 5: Ansible bootstrap (extensions + certs + KTHW + Cilium)...'; \
-	$(ANSIBLE_RUN) ansible-playbook -i $(ANSIBLE_DIR)/inventory/inventory.json \
-		$(ANSIBLE_DIR)/playbooks/bootstrap.yml; \
-	echo '  Step 7: Fetch kubeconfig...'; \
+	echo 'Building cluster...'; \
+	echo '  Step 1: Deploy VMs (tofu apply, phase A)...'; \
+	tofu -chdir=terraform apply -auto-approve -var-file="../$(TFVARS)"; \
+	echo '  Step 2: Configure nodes (tofu apply, phase B: wait-ips, wait-ssh, runtime-tfvars, configure)...'; \
+	$(MAKE) configure; \
+	echo '  Step 3: Fetch kubeconfig...'; \
 	$(MAKE) kubeconfig; \
-	echo '  Step 8: Wait for control plane node Ready (up to 10m)...'; \
+	echo '  Step 4: Cluster operations (RBAC -> Cilium -> CoreDNS)...'; \
+	$(MAKE) rbac cilium coredns; \
+	echo '  Step 5: Wait for control plane node Ready (up to 10m)...'; \
 	for i in $$(seq 1 120); do \
 		if kubectl --kubeconfig=kubeconfig wait --for=condition=Ready node/cp1 --timeout=10s 2>/dev/null; then \
 			echo "  Control plane node cp1 is Ready after $$((i * 5))s"; \
@@ -545,7 +503,9 @@ cluster: network-up base tfvars vm-disks sysexts confexts container ## Full pipe
 	else \
 		echo "  Control plane node cp1 is Ready"; \
 	fi; \
-	echo 'Cluster build and bootstrap complete.'
+	echo '  Step 6: Smoke test...'; \
+	$(MAKE) smoke-test; \
+	echo 'Cluster build complete.'
 
 # --- kubeconfig ---
 
@@ -581,7 +541,7 @@ update-kubeconfig: kubeconfig ## Alias for kubeconfig — explicitly signals ref
 KUBECONFIG := kubeconfig
 
 .PHONY: smoke-test
-smoke-test:
+smoke-test: ## Validate cluster health end-to-end (nodes Ready, Cilium, Gateway, CoreDNS)
 	@set -euo pipefail; \
 	POD_NAME="smoke-test-$$(date +%s)"; \
 	DNS_NS=""; \
@@ -832,9 +792,10 @@ validate-packer: ## Validate Packer template syntax
 	cd packer && packer validate -var="firmware_path=/tmp/test" -var="cloud_image_path=/tmp/test" -var="cloudinit_disk_path=/tmp/test" -var="ssh_private_key_file=/tmp/test" . 2>&1 || true
 
 .PHONY: validate-terraform
-validate-terraform: ## Validate Terraform/OpenTofu configuration
+validate-terraform: ## Validate Terraform/OpenTofu configuration (both root modules)
 	@echo 'Validating Terraform/OpenTofu configuration...'
 	tofu -chdir=terraform validate
+	tofu -chdir=terraform/runtime validate
 
 .PHONY: validate
 validate: validate-packer validate-terraform ## Run all validations (packer + terraform)
