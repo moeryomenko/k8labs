@@ -315,7 +315,10 @@ def process_trace_file_perfetto(trace_path: str, output_dir: str) -> int:
         log(f"Failed to load trace: {exc}", level="error")
         return 1
 
-    results = _process_perfetto_trace(tp)
+    # The TraceProcessor owns a ~500 MB trace_processor subprocess that only
+    # exits on close(); the with-block closes it even when a query raises.
+    with tp:
+        results = _process_perfetto_trace(tp)
 
     os.makedirs(output_dir, exist_ok=True)
 

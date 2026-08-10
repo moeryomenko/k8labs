@@ -286,9 +286,10 @@ def process_trace_file(trace_path: str, output_dir: str) -> None:
             config=TraceProcessorConfig(ingest_ftrace_in_raw=True),
         )
 
-    # Query 1 — per-thread CPU execution
-    try:
-        result = tp.query("""
+    with tp:
+        # Query 1 — per-thread CPU execution
+        try:
+            result = tp.query("""
 SELECT
   cpu,
   thread.name AS thread_name,
@@ -303,21 +304,21 @@ WHERE dur >= 0
 GROUP BY cpu, thread.name, process.pid, thread.tid
 ORDER BY cpu, tid
 """)
-        _save_or_empty(
-            os.path.join(output_dir, "perfetto-threads.csv"),
-            "perfetto-threads.csv",
-            result,
-        )
-    except Exception as exc:
-        log(f"  perfetto-threads.csv — query failed: {exc}", level="warn")
-        _write_empty_csv(
-            os.path.join(output_dir, "perfetto-threads.csv"),
-            EMPTY_HEADERS["perfetto-threads.csv"],
-        )
-
-    # Query 2 — CPU utilization per core
-    try:
-        result = tp.query("""
+            _save_or_empty(
+                os.path.join(output_dir, "perfetto-threads.csv"),
+                "perfetto-threads.csv",
+                result,
+            )
+        except Exception as exc:
+            log(f"  perfetto-threads.csv — query failed: {exc}", level="warn")
+            _write_empty_csv(
+                os.path.join(output_dir, "perfetto-threads.csv"),
+                EMPTY_HEADERS["perfetto-threads.csv"],
+            )
+    
+        # Query 2 — CPU utilization per core
+        try:
+            result = tp.query("""
 SELECT
   cpu AS core,
   (SUM(dur) * 100.0 / NULLIF((SELECT SUM(dur) FROM sched_slice WHERE dur >= 0), 0)) AS utilization_pct,
@@ -327,21 +328,21 @@ WHERE dur >= 0
 GROUP BY cpu
 ORDER BY cpu
 """)
-        _save_or_empty(
-            os.path.join(output_dir, "perfetto-cpu-util.csv"),
-            "perfetto-cpu-util.csv",
-            result,
-        )
-    except Exception as exc:
-        log(f"  perfetto-cpu-util.csv — query failed: {exc}", level="warn")
-        _write_empty_csv(
-            os.path.join(output_dir, "perfetto-cpu-util.csv"),
-            EMPTY_HEADERS["perfetto-cpu-util.csv"],
-        )
-
-    # Query 3 — per-process summary
-    try:
-        result = tp.query("""
+            _save_or_empty(
+                os.path.join(output_dir, "perfetto-cpu-util.csv"),
+                "perfetto-cpu-util.csv",
+                result,
+            )
+        except Exception as exc:
+            log(f"  perfetto-cpu-util.csv — query failed: {exc}", level="warn")
+            _write_empty_csv(
+                os.path.join(output_dir, "perfetto-cpu-util.csv"),
+                EMPTY_HEADERS["perfetto-cpu-util.csv"],
+            )
+    
+        # Query 3 — per-process summary
+        try:
+            result = tp.query("""
 SELECT
   process.pid,
   process.name AS name,
@@ -356,21 +357,21 @@ WHERE sched.dur >= 0
 GROUP BY process.pid
 ORDER BY cpu_time_ms DESC
 """)
-        _save_or_empty(
-            os.path.join(output_dir, "perfetto-process-summary.csv"),
-            "perfetto-process-summary.csv",
-            result,
-        )
-    except Exception as exc:
-        log(f"  perfetto-process-summary.csv — query failed: {exc}", level="warn")
-        _write_empty_csv(
-            os.path.join(output_dir, "perfetto-process-summary.csv"),
-            EMPTY_HEADERS["perfetto-process-summary.csv"],
-        )
-
-    # Query 4 — scheduling wakeup latency (real, from raw ftrace)
-    try:
-        result = tp.query("""
+            _save_or_empty(
+                os.path.join(output_dir, "perfetto-process-summary.csv"),
+                "perfetto-process-summary.csv",
+                result,
+            )
+        except Exception as exc:
+            log(f"  perfetto-process-summary.csv — query failed: {exc}", level="warn")
+            _write_empty_csv(
+                os.path.join(output_dir, "perfetto-process-summary.csv"),
+                EMPTY_HEADERS["perfetto-process-summary.csv"],
+            )
+    
+        # Query 4 — scheduling wakeup latency (real, from raw ftrace)
+        try:
+            result = tp.query("""
 SELECT
   process.pid,
   t_woken.tid,
@@ -398,21 +399,21 @@ WHERE w.name = 'sched_waking'
 GROUP BY process.pid, t_woken.tid, COALESCE(t_woken.name, a_comm.string_value)
 ORDER BY count DESC
 """)
-        _save_or_empty(
-            os.path.join(output_dir, "perfetto-sched-latency.csv"),
-            "perfetto-sched-latency.csv",
-            result,
-        )
-    except Exception as exc:
-        log(f"  perfetto-sched-latency.csv — query failed: {exc}", level="warn")
-        _write_empty_csv(
-            os.path.join(output_dir, "perfetto-sched-latency.csv"),
-            EMPTY_HEADERS["perfetto-sched-latency.csv"],
-        )
-
-    # Query 5 — per-task runtime samples from raw ftrace
-    try:
-        result = tp.query("""
+            _save_or_empty(
+                os.path.join(output_dir, "perfetto-sched-latency.csv"),
+                "perfetto-sched-latency.csv",
+                result,
+            )
+        except Exception as exc:
+            log(f"  perfetto-sched-latency.csv — query failed: {exc}", level="warn")
+            _write_empty_csv(
+                os.path.join(output_dir, "perfetto-sched-latency.csv"),
+                EMPTY_HEADERS["perfetto-sched-latency.csv"],
+            )
+    
+        # Query 5 — per-task runtime samples from raw ftrace
+        try:
+            result = tp.query("""
 SELECT
   r.ts,
   r.cpu,
@@ -428,21 +429,21 @@ LEFT JOIN thread AS t ON t.tid = a_pid.int_value
 WHERE r.name = 'sched_stat_runtime'
 ORDER BY r.ts
 """)
-        _save_or_empty(
-            os.path.join(output_dir, "perfetto-sched-runtime.csv"),
-            "perfetto-sched-runtime.csv",
-            result,
-        )
-    except Exception as exc:
-        log(f"  perfetto-sched-runtime.csv — query failed: {exc}", level="warn")
-        _write_empty_csv(
-            os.path.join(output_dir, "perfetto-sched-runtime.csv"),
-            EMPTY_HEADERS["perfetto-sched-runtime.csv"],
-        )
-
-    # Query 6 — task migrations from raw ftrace
-    try:
-        result = tp.query("""
+            _save_or_empty(
+                os.path.join(output_dir, "perfetto-sched-runtime.csv"),
+                "perfetto-sched-runtime.csv",
+                result,
+            )
+        except Exception as exc:
+            log(f"  perfetto-sched-runtime.csv — query failed: {exc}", level="warn")
+            _write_empty_csv(
+                os.path.join(output_dir, "perfetto-sched-runtime.csv"),
+                EMPTY_HEADERS["perfetto-sched-runtime.csv"],
+            )
+    
+        # Query 6 — task migrations from raw ftrace
+        try:
+            result = tp.query("""
 SELECT
   m.ts,
   m.cpu,
@@ -458,17 +459,17 @@ LEFT JOIN thread AS t ON t.tid = a_pid.int_value
 WHERE m.name = 'sched_migrate_task'
 ORDER BY m.ts
 """)
-        _save_or_empty(
-            os.path.join(output_dir, "perfetto-sched-migrations.csv"),
-            "perfetto-sched-migrations.csv",
-            result,
-        )
-    except Exception as exc:
-        log(f"  perfetto-sched-migrations.csv — query failed: {exc}", level="warn")
-        _write_empty_csv(
-            os.path.join(output_dir, "perfetto-sched-migrations.csv"),
-            EMPTY_HEADERS["perfetto-sched-migrations.csv"],
-        )
+            _save_or_empty(
+                os.path.join(output_dir, "perfetto-sched-migrations.csv"),
+                "perfetto-sched-migrations.csv",
+                result,
+            )
+        except Exception as exc:
+            log(f"  perfetto-sched-migrations.csv — query failed: {exc}", level="warn")
+            _write_empty_csv(
+                os.path.join(output_dir, "perfetto-sched-migrations.csv"),
+                EMPTY_HEADERS["perfetto-sched-migrations.csv"],
+            )
 
 
 def process_trace(

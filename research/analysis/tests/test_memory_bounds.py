@@ -285,6 +285,15 @@ class TraceProcessor:
         if "sched_slice" in sql_lower:
             return QueryResult(data["slices"])
         return QueryResult(pd.DataFrame())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def close(self):
+        pass
 """
 
 

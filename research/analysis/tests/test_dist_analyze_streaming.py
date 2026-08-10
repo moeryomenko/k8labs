@@ -277,6 +277,15 @@ class TraceProcessor:
                 df = df[(df["ts_start_us"] >= start) & (df["ts_start_us"] < end)]
             return QueryResult(df.reset_index(drop=True))
         return QueryResult(pd.DataFrame())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def close(self):
+        pass
 """
 
 

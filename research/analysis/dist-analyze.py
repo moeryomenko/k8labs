@@ -878,25 +878,29 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     return 1
 
-                first_ns, last_ns = trace_event_bounds(tp)
-                start_us, end_us = retained_window(first_ns, last_ns)
+                # The TraceProcessor owns a ~500 MB trace_processor subprocess
+                # that only exits on close(); the with-block closes it even
+                # when a query raises (leak fix).
+                with tp:
+                    first_ns, last_ns = trace_event_bounds(tp)
+                    start_us, end_us = retained_window(first_ns, last_ns)
 
-                # Process the guard window in time-chunked
-                # windows when --chunk-s is given; without the flag the full
-                # window is queried in one pass (the byte-identity reference).
-                if chunked:
-                    windows = chunk_windows(start_us, end_us, args.chunk_s)
-                else:
-                    windows = [(start_us, end_us)]
+                    # Process the guard window in time-chunked
+                    # windows when --chunk-s is given; without the flag the full
+                    # window is queried in one pass (the byte-identity reference).
+                    if chunked:
+                        windows = chunk_windows(start_us, end_us, args.chunk_s)
+                    else:
+                        windows = [(start_us, end_us)]
 
-                # Accumulate each chunk's rows; the concat equals the one-shot
-                # window query exactly (no chunk duplicates or drops rows), so the
-                # per-replicate result is identical regardless of chunking.
-                chunk_slices: list[pd.DataFrame] = []
-                chunk_runtime: list[pd.DataFrame] = []
-                for c_start_us, c_end_us in windows:
-                    chunk_slices.append(query_slices(tp, c_start_us, c_end_us))
-                    chunk_runtime.append(query_runtime(tp, c_start_us, c_end_us))
+                    # Accumulate each chunk's rows; the concat equals the one-shot
+                    # window query exactly (no chunk duplicates or drops rows), so the
+                    # per-replicate result is identical regardless of chunking.
+                    chunk_slices: list[pd.DataFrame] = []
+                    chunk_runtime: list[pd.DataFrame] = []
+                    for c_start_us, c_end_us in windows:
+                        chunk_slices.append(query_slices(tp, c_start_us, c_end_us))
+                        chunk_runtime.append(query_runtime(tp, c_start_us, c_end_us))
                 if chunk_slices:
                     slices_src = pd.concat(chunk_slices, ignore_index=True)
                 else:
@@ -983,10 +987,11 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     )
 
-                # Free the replicate's DataFrames and the
-                # trace layer before the next replicate (the merged files are
-                # regenerated from the per-replicate CSVs, so no accumulation).
-                del slices_df, runtime_df, tp
+                # Free the replicate's DataFrames before the next replicate (the
+                # merged files are regenerated from the per-replicate CSVs, so no
+                # accumulation).  The trace processor was already closed by the
+                # with-block above.
+                del slices_df, runtime_df
                 gc.collect()
 
             # Regenerate the merged dist-slices.csv from the

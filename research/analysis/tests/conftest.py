@@ -180,6 +180,15 @@ def make_mock_trace_processor(
             else:
                 return MockQueryResult(pd.DataFrame())
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.close()
+
+        def close(self):
+            pass
+
     return MockTraceProcessor
 
 
@@ -1661,6 +1670,15 @@ class TraceProcessor:
         if "sched_slice" in sql_lower:
             return QueryResult(pd.DataFrame(data.get("slices", [])))
         return QueryResult(pd.DataFrame())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def close(self):
+        pass
 """
 
 
@@ -2050,6 +2068,15 @@ def make_dist_mock_trace_processor(
             if "sched_slice" in sql_lower:
                 return _QueryResult(slices_df)
             return _QueryResult(pd.DataFrame())
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.close()
+
+        def close(self):
+            pass
 
     return _MockTraceProcessor
 
