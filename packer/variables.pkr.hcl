@@ -127,3 +127,19 @@ variable "manifest_output" {
   type        = string
   default     = "../build"
 }
+
+# ---------------------------------------------------------------------------
+# Extension baking inputs
+# ---------------------------------------------------------------------------
+
+variable "extensions_release_dir" {
+  description = "Directory containing the built sysext/confext .raw images (relative to the packer template)"
+  type        = string
+  default     = "../extensions/release"
+}
+
+variable "packer_scripts_dir" {
+  description = "Directory containing the Packer provisioning scripts (relative to the packer template)"
+  type        = string
+  default     = "scripts"
+}

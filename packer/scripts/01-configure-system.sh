@@ -1,4 +1,7 @@
 #!/bin/sh
+# shellcheck shell=sh # this is a POSIX sh script; declare the real shell so
+#                     # ShellCheck applies the sh ruleset (repo .shellcheckrc
+#                     # defaults to bash).
 set -eux
 
 # ---------------------------------------------------------------------------
@@ -20,9 +23,10 @@ if dnf install -y "kernel-core-${KERNEL_VERSION}*" \
     echo "==> Kernel ${KERNEL_VERSION} installed from updates"
 
     # Set the newly installed kernel as the default boot entry
-    NEW_KERNEL=$(ls -t /boot/vmlinuz-${KERNEL_VERSION}* 2>/dev/null | head -1)
-    if [ -n "$NEW_KERNEL" ]; then
-        grubby --set-default "$NEW_KERNEL" 2>/dev/null || true
+    NEW_KERNEL=$(find /boot -maxdepth 1 -name "vmlinuz-${KERNEL_VERSION}*" \
+        -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    if [ -n "${NEW_KERNEL}" ]; then
+        grubby --set-default "${NEW_KERNEL}" 2>/dev/null || true
     fi
 
     # Note: old kernel packages remain installed as boot fallback
@@ -64,3 +68,21 @@ cat > /etc/modules-load.d/k8s.conf <<EOF
 overlay
 br_netfilter
 EOF
+
+# ---------------------------------------------------------------------------
+# sysext/confext payload destinations
+# ---------------------------------------------------------------------------
+# Directories that receive the baked extension images. The Packer file
+# provisioners upload the .raw images here after this script runs, so the
+# destinations must already exist.
+mkdir -p /var/lib/extensions /var/lib/confexts
+
+# ---------------------------------------------------------------------------
+# Runtime prerequisites
+# ---------------------------------------------------------------------------
+# conmon is the container runtime monitor required by cri-o. parted/growpart
+# are required by /usr/local/sbin/resize-rootfs.sh at first boot — without
+# them the resize helper dies and the root disk is never grown (reviewer
+# F-001). tar/rsync are intentionally NOT installed (Ansible is gone) and
+# policy.json lives in the confext-containers image, not the base.
+dnf install -y conmon parted growpart
