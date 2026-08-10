@@ -1,0 +1,26 @@
+# Kubelet bootstrap authorization — ported verbatim from
+# ansible/playbooks/bootstrap.yml:170-207 (Stage 5).
+# Allows kubelets to self-register by creating CertificateSigningRequests
+# and binds the system:nodes group to that role.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:kubelet-bootstrap
+rules:
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["certificatesigningrequests"]
+  verbs: ["create", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:kubelet-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:kubelet-bootstrap
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:nodes

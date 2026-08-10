@@ -1,0 +1,48 @@
+Cilium v1.19.6 (chart 1.19.6), Gateway API CRDs v1.4.0
+Generated 2026-08-10.
+
+Pin rationale:
+- v1.19.6 is the latest stable patch of the current stable line
+  (published 2026-07-16); v1.20.0 is too fresh to pin, and 1.17/1.18 are
+  older maintenance lines. 1.19.x fully supports the feature set already
+  committed under cilium/:
+    - CiliumGatewayClassConfig (needs >= 1.17, gateways/cilium/gateway-class-config.yaml)
+    - CiliumL2AnnouncementPolicy (>= 1.16, cilium/l2-policy.yaml)
+    - CiliumLoadBalancerIPPool (>= 1.16, cilium/lb-pool.yaml)
+    - Gateway API (>= 1.14)
+
+Render method (helm template, not committed binaries):
+  helm template cilium cilium/cilium --version 1.19.6 \
+    --namespace kube-system --include-crds \
+    --set l2announcements.enabled=true \
+    --set externalIPs.enabled=true \
+    --set kubeProxyReplacement=true \
+    --set ipam.mode=kubernetes \
+    --set routingMode=native \
+    --set ipv4NativeRoutingCIDR=10.244.0.0/16 \
+    --set autoDirectNodeRoutes=true \
+    --set endpointRoutes.enabled=true \
+    --set operator.replicas=1 \
+    --set gatewayAPI.enabled=true \
+    --set hubble.enabled=false
+  The values mirror the previous Ansible install
+  (ansible/roles/cilium/tasks/main.yml:49-62). In 1.19.6 the chart no
+  longer has a top-level externalIPs value (that --set was a no-op against
+  1.16.x charts); external-IP handling now comes from l2announcements +
+  lbipam, both enabled in the render.
+
+Deviations from the raw chart render:
+- hubble.enabled=false: k8labs does not use Hubble (no relay/UI, research
+  does not touch it). Disabling it drops the two helm-rendered Secret
+  objects (cilium-ca, hubble-server-certs) that contain freshly generated
+  private keys — keeping the committed manifests free of secrets per
+  the pinned-manifest constraints.
+- No Cilium CRDs are committed: this chart ships none and the cilium-operator
+  registers all cilium.io CRDs at startup
+  (pkg/k8s/apis/cell.go RegisterCRDsCell, --skip-crd-creation=false).
+- Gateway API CRDs are committed separately in 00-gateway-api-crds.yaml
+  from kubernetes-sigs/gateway-api v1.4.0 (standard channel:
+  gatewayclasses, gateways, httproutes, referencegrants). Cilium 1.19.6 is
+  built against sigs.k8s.io/gateway-api v1.4.0-rc.2; the operator only
+  DISCOVERS Gateway API CRDs and disables Gateway API when they are missing
+  (operator/pkg/gateway-api/cell.go), so they must be applied separately.

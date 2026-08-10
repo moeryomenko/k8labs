@@ -1,0 +1,15 @@
+# Bind the system:masters group to cluster-admin for full admin access —
+# ported verbatim from ansible/playbooks/bootstrap.yml:212-227 (Stage 5).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:masters

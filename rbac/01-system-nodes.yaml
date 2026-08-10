@@ -1,0 +1,16 @@
+# Allow kubelets (system:nodes group) to use the built-in system:node
+# ClusterRole — ported verbatim from ansible/playbooks/bootstrap.yml:195-207
+# (Stage 5). Nodes report NotReady until this binding exists.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:node
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:nodes
