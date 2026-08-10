@@ -10,8 +10,18 @@
 #  - extensions/download-sysexts.sh  (download URLs, versions, binary paths)
 #  - extensions/build.sh             (build process, validation)
 #  - Makefile (lines 149-230)        (sysext/confext names, targets, output names)
-#  - sysext/*/usr/lib/extension-release.d/   (sysext metadata)
-#  - confext/*/etc/extension-release.d/      (confext metadata)
+#  - sysext/*/usr/lib/extension-release.d/extension-release.<image-name>
+#                                     (sysext release metadata)
+#  - confext/*/etc/extension-release.d/extension-release.<image-name>
+#                                     (confext release metadata)
+#
+# Release metadata naming (ratified 2026-08-10): every packaged image
+# must carry usr/lib/extension-release.d/extension-release.<image-name> (sysext)
+# or etc/extension-release.d/extension-release.<image-name> (confext), where
+# <image-name> is the output .raw basename (e.g. extension-release.crun,
+# extension-release.confext-kubernetes, extension-release.z-etcd). systemd
+# (>= 252) requires the metadata FILE NAME to match the image name; the legacy
+# <name>.sysext / <name>.confext metadata files are rejected at merge time.
 
 schema_version: 1
 

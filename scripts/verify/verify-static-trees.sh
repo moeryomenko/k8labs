@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2292  # POSIX sh per AGENTS.md: [ ] not [[ ]]; rc forces shell=bash
 # =============================================================================
 # verify-static-trees.sh — static-tree hygiene acceptance checks
 #
@@ -118,26 +119,30 @@ check_placeholders() {
 # ---------------------------------------------------------------------------
 # Check 2 — sysext release metadata at usr/lib/extension-release.d/
 #
-# Expected metadata filenames follow the existing per-tree naming that the
-# implementation moves into place (sysext tree cri-o carries crio.sysext,
-# matching extensions/manifest.yaml extension_name: crio).
+# RATIFIED 2026-08-10 (E2E replay): systemd 259 requires the metadata
+# FILE to be named extension-release.<image-name>, where <image-name> is the
+# packaged .raw basename. The Makefile builds every sysext with output-name
+# equal to the tree name (`extensions/build.sh sysext sysext/<tree> <tree>`),
+# so each sysext tree must carry
+# usr/lib/extension-release.d/extension-release.<tree>. The old
+# <name>.sysext naming is refused by systemd and must not appear.
 # ---------------------------------------------------------------------------
 check_sysext_metadata() {
     label='check-2 sysext metadata paths'
     set -- \
-        'kubelet kubelet.sysext' \
-        'cri-o crio.sysext' \
-        'crun crun.sysext' \
-        'cni cni.sysext' \
-        'etcd etcd.sysext' \
-        'kubernetes-cp kubernetes-cp.sysext' \
-        'perfetto perfetto.sysext'
+        'kubelet kubelet' \
+        'cri-o cri-o' \
+        'crun crun' \
+        'cni cni' \
+        'etcd etcd' \
+        'kubernetes-cp kubernetes-cp' \
+        'perfetto perfetto'
     failed=0
     while [ $# -gt 0 ]; do
         pair=$1
         tree=${pair%% *}
-        meta=${pair##* }
-        file="${SYSEXT_DIR}/${tree}/usr/lib/extension-release.d/${meta}"
+        output_name=${pair##* }
+        file="${SYSEXT_DIR}/${tree}/usr/lib/extension-release.d/extension-release.${output_name}"
         old="${SYSEXT_DIR}/${tree}/extension-release.d"
         if [ ! -f "${file}" ]; then
             printf '    missing sysext metadata: %s\n' "${file}" >&2
@@ -159,19 +164,26 @@ check_sysext_metadata() {
 
 # ---------------------------------------------------------------------------
 # Check 3 — confext release metadata at etc/extension-release.d/
+#
+# Same corrected contract as Check 2: the metadata FILE must be named
+# extension-release.<image-name>. The Makefile packages the static confexts
+# with a confext- output prefix
+# (`extensions/build.sh confext confext/<tree> confext-<tree>`), so each
+# static confext tree must carry
+# etc/extension-release.d/extension-release.confext-<tree>.
 # ---------------------------------------------------------------------------
 check_confext_metadata() {
     label='check-3 confext metadata paths'
     set -- \
-        'cri-o cri-o.confext' \
-        'kubernetes kubernetes.confext' \
-        'containers containers.confext'
+        'cri-o confext-cri-o' \
+        'kubernetes confext-kubernetes' \
+        'containers confext-containers'
     failed=0
     while [ $# -gt 0 ]; do
         pair=$1
         tree=${pair%% *}
-        meta=${pair##* }
-        file="${CONFEXT_DIR}/${tree}/etc/extension-release.d/${meta}"
+        output_name=${pair##* }
+        file="${CONFEXT_DIR}/${tree}/etc/extension-release.d/extension-release.${output_name}"
         old="${CONFEXT_DIR}/${tree}/extension-release.d"
         if [ ! -f "${file}" ]; then
             printf '    missing confext metadata: %s\n' "${file}" >&2
@@ -273,9 +285,11 @@ check_crio_conmon() {
     failed=0
     if grep -q 'conmonrs' "${conf}"; then
         printf '    conmonrs references remain:\n' >&2
+        # shellcheck disable=SC2312  # display-only pipe; grep exit already handled by the if above
         grep -n 'conmonrs' "${conf}" | sed 's/^/      /' >&2
         failed=1
     fi
+    # shellcheck disable=SC2312  # second grep no-match (exit 1) is the expected clean state
     bad=$(grep -n 'conmon' "${conf}" | grep -v '/usr/bin/conmon')
     if [ -n "${bad}" ]; then
         printf '    conmon references other than /usr/bin/conmon:\n' >&2

@@ -29,8 +29,10 @@ Arguments:
   [output-name]  Name for output file (default: basename of source-dir)
 
 Types:
-  sysext   Must have usr/ directory and usr/lib/extension-release.d/ with .sysext files
-  confext  Must have etc/ directory and etc/extension-release.d/ with .confext files
+  sysext   Must have usr/ directory and
+           usr/lib/extension-release.d/extension-release.<output-name>
+  confext  Must have etc/ directory and
+           etc/extension-release.d/extension-release.<output-name>
 
 Output:
   Default: squashfs image at release/<name>.raw (via mksquashfs or genisoimage)
@@ -85,24 +87,34 @@ case "$type" in
         if [ ! -d "${source_dir}/usr/lib/extension-release.d" ]; then
             die "sysext must have usr/lib/extension-release.d/ directory"
         fi
-        # Check at least one .sysext file exists
-        found=0
-        for f in "${source_dir}/usr/lib/extension-release.d/"*.sysext; do
-            [ -f "$f" ] && found=1 && break
-        done
-        [ "$found" -eq 1 ] || die "sysext must have at least one .sysext file in usr/lib/extension-release.d/"
+        # systemd (>= 252) requires the release metadata file to be named
+        # extension-release.<output-name>, exactly matching the image name
+        # (systemd 259 refuses images carrying a legacy
+        # <name>.sysext metadata file instead).
+        meta="${source_dir}/usr/lib/extension-release.d/extension-release.${output_name}"
+        if [ ! -f "$meta" ]; then
+            if ls "${source_dir}/usr/lib/extension-release.d/"*.sysext >/dev/null 2>&1; then
+                die "sysext metadata must be named extension-release.${output_name}, found legacy .sysext naming in usr/lib/extension-release.d/ (rename it)"
+            fi
+            die "sysext must carry usr/lib/extension-release.d/extension-release.${output_name}"
+        fi
         ;;
     confext)
         [ -d "${source_dir}/etc" ] || die "confext must have etc/ directory"
         if [ ! -d "${source_dir}/etc/extension-release.d" ]; then
             die "confext must have etc/extension-release.d/ directory"
         fi
-        # Check at least one .confext file exists
-        found=0
-        for f in "${source_dir}/etc/extension-release.d/"*.confext; do
-            [ -f "$f" ] && found=1 && break
-        done
-        [ "$found" -eq 1 ] || die "confext must have at least one .confext file in etc/extension-release.d/"
+        # systemd (>= 252) requires the release metadata file to be named
+        # extension-release.<output-name>, exactly matching the image name
+        # (systemd 259 refuses images carrying a legacy
+        # <name>.confext metadata file instead).
+        meta="${source_dir}/etc/extension-release.d/extension-release.${output_name}"
+        if [ ! -f "$meta" ]; then
+            if ls "${source_dir}/etc/extension-release.d/"*.confext >/dev/null 2>&1; then
+                die "confext metadata must be named extension-release.${output_name}, found legacy .confext naming in etc/extension-release.d/ (rename it)"
+            fi
+            die "confext must carry etc/extension-release.d/extension-release.${output_name}"
+        fi
         ;;
     *)
         die "invalid type '${type}' (must be sysext or confext)"

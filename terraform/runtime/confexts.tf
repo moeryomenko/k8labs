@@ -8,9 +8,10 @@
 # references the PKI/kubeconfig/encryption resources, so the secret
 # material exists in state once, not duplicated for the confext copies.
 #
-# Every tree carries etc/extension-release.d/z-<name>.confext with ID=fedora,
-# VERSION_ID=44 so systemd-confext accepts the merge on the Fedora
-# 44 host. KERNEL_VERSION is kept for parity with the static confexts.
+# Every tree carries etc/extension-release.d/extension-release.z-<name> with
+# ID=fedora, VERSION_ID=44 so systemd-confext accepts the merge on
+# the Fedora 44 host. KERNEL_VERSION is kept for parity with the static
+# confexts.
 #
 # z-etcd (cp1 only)      etc/etcd/etcd.conf.yml — pre-delete static confext
 #                        content (commit 91a035f, TLS-disabled single-node)
@@ -56,32 +57,32 @@ locals {
   # PKI secrets exist in state once, not twice.
   confext_tree_files = merge(
     {
-      "z-etcd/etc/etcd/etcd.conf.yml"                 = templatefile("${path.module}/templates/etcd.conf.yml.tftpl", { cp_ip = var.cp_ip })
-      "z-etcd/etc/extension-release.d/z-etcd.confext" = "${local.confext_metadata}EXTENSION=z-etcd\n"
+      "z-etcd/etc/etcd/etcd.conf.yml"                           = templatefile("${path.module}/templates/etcd.conf.yml.tftpl", { cp_ip = var.cp_ip })
+      "z-etcd/etc/extension-release.d/extension-release.z-etcd" = "${local.confext_metadata}EXTENSION=z-etcd\n"
     },
     {
-      "z-kubernetes-cp/etc/kubernetes/cp.env"                           = templatefile("${path.module}/templates/cp.env.tftpl", { cp_ip = var.cp_ip })
-      "z-kubernetes-cp/etc/kubernetes/pki/ca.pem"                       = local_file.ca_cert.content
-      "z-kubernetes-cp/etc/kubernetes/pki/kubernetes.pem"               = local_file.apiserver_cert.content
-      "z-kubernetes-cp/etc/kubernetes/pki/kubernetes-key.pem"           = local_file.apiserver_key.content
-      "z-kubernetes-cp/etc/kubernetes/pki/front-proxy-ca.pem"           = local_file.front_proxy_ca_cert.content
-      "z-kubernetes-cp/etc/kubernetes/pki/front-proxy-client.pem"       = local_file.front_proxy_client_cert.content
-      "z-kubernetes-cp/etc/kubernetes/pki/front-proxy-client-key.pem"   = local_file.front_proxy_client_key.content
-      "z-kubernetes-cp/etc/kubernetes/pki/service-account.pem"          = local_file.service_account_cert.content
-      "z-kubernetes-cp/etc/kubernetes/pki/service-account-key.pem"      = local_file.service_account_key.content
-      "z-kubernetes-cp/etc/kubernetes/admin.kubeconfig"                 = local_file.admin_kubeconfig.content
-      "z-kubernetes-cp/etc/kubernetes/controller-manager.kubeconfig"    = local_file.controller_manager_kubeconfig.content
-      "z-kubernetes-cp/etc/kubernetes/scheduler.kubeconfig"             = local_file.scheduler_kubeconfig.content
-      "z-kubernetes-cp/etc/kubernetes/encryption-config.yaml"           = local_file.encryption_config.content
-      "z-kubernetes-cp/etc/extension-release.d/z-kubernetes-cp.confext" = "${local.confext_metadata}EXTENSION=z-kubernetes-cp\n"
+      "z-kubernetes-cp/etc/kubernetes/cp.env"                                     = templatefile("${path.module}/templates/cp.env.tftpl", { cp_ip = var.cp_ip })
+      "z-kubernetes-cp/etc/kubernetes/pki/ca.pem"                                 = local_file.ca_cert.content
+      "z-kubernetes-cp/etc/kubernetes/pki/kubernetes.pem"                         = local_file.apiserver_cert.content
+      "z-kubernetes-cp/etc/kubernetes/pki/kubernetes-key.pem"                     = local_file.apiserver_key.content
+      "z-kubernetes-cp/etc/kubernetes/pki/front-proxy-ca.pem"                     = local_file.front_proxy_ca_cert.content
+      "z-kubernetes-cp/etc/kubernetes/pki/front-proxy-client.pem"                 = local_file.front_proxy_client_cert.content
+      "z-kubernetes-cp/etc/kubernetes/pki/front-proxy-client-key.pem"             = local_file.front_proxy_client_key.content
+      "z-kubernetes-cp/etc/kubernetes/pki/service-account.pem"                    = local_file.service_account_cert.content
+      "z-kubernetes-cp/etc/kubernetes/pki/service-account-key.pem"                = local_file.service_account_key.content
+      "z-kubernetes-cp/etc/kubernetes/admin.kubeconfig"                           = local_file.admin_kubeconfig.content
+      "z-kubernetes-cp/etc/kubernetes/controller-manager.kubeconfig"              = local_file.controller_manager_kubeconfig.content
+      "z-kubernetes-cp/etc/kubernetes/scheduler.kubeconfig"                       = local_file.scheduler_kubeconfig.content
+      "z-kubernetes-cp/etc/kubernetes/encryption-config.yaml"                     = local_file.encryption_config.content
+      "z-kubernetes-cp/etc/extension-release.d/extension-release.z-kubernetes-cp" = "${local.confext_metadata}EXTENSION=z-kubernetes-cp\n"
     },
     merge([
       for name in sort(keys(var.node_ips)) : {
-        "z-kubelet-${name}/etc/kubernetes/kubelet.conf"                       = local_file.kubelet_kubeconfig[name].content
-        "z-kubelet-${name}/etc/kubernetes/pki/ca.pem"                         = local_file.ca_cert.content
-        "z-kubelet-${name}/etc/kubernetes/pki/${name}.pem"                    = local_file.kubelet_cert[name].content
-        "z-kubelet-${name}/etc/kubernetes/pki/${name}-key.pem"                = local_file.kubelet_key[name].content
-        "z-kubelet-${name}/etc/extension-release.d/z-kubelet-${name}.confext" = "${local.confext_metadata}EXTENSION=z-kubelet-${name}\n"
+        "z-kubelet-${name}/etc/kubernetes/kubelet.conf"                                 = local_file.kubelet_kubeconfig[name].content
+        "z-kubelet-${name}/etc/kubernetes/pki/ca.pem"                                   = local_file.ca_cert.content
+        "z-kubelet-${name}/etc/kubernetes/pki/${name}.pem"                              = local_file.kubelet_cert[name].content
+        "z-kubelet-${name}/etc/kubernetes/pki/${name}-key.pem"                          = local_file.kubelet_key[name].content
+        "z-kubelet-${name}/etc/extension-release.d/extension-release.z-kubelet-${name}" = "${local.confext_metadata}EXTENSION=z-kubelet-${name}\n"
       }
     ]...),
   )

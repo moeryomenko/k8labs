@@ -10,16 +10,18 @@
 # confexts_output_dir, anchored via path.module to the repo-root build dir):
 #
 #   1. z-etcd.raw (cp1 only): contains etc/etcd/etcd.conf.yml with the real
-#      cp_ip embedded, and etc/extension-release.d/z-etcd.confext carrying
-#      ID=fedora and VERSION_ID=44.
+#      cp_ip embedded, and etc/extension-release.d/extension-release.z-etcd
+#      carrying ID=fedora and VERSION_ID=44 (RATIFIED 2026-08-10 E2E
+#      replay: metadata must be named extension-release.<image-name>;
+#      systemd 259 refuses the old z-etcd.confext naming).
 #   2. z-kubernetes-cp.raw (cp1 only): contains etc/kubernetes/cp.env with
 #      KUBE_ADVERTISE_ADDRESS and KUBE_ETCD_SERVERS bound to the real cp_ip,
 #      etc/kubernetes/pki/ca.pem, admin/controller-manager/scheduler
 #      kubeconfigs, etc/kubernetes/encryption-config.yaml, and the
-#      etc/extension-release.d/z-kubernetes-cp.confext metadata.
+#      etc/extension-release.d/extension-release.z-kubernetes-cp metadata.
 #   3. z-kubelet-<node>.raw (cp1, w1, w2): contains etc/kubernetes/kubelet.conf,
 #      etc/kubernetes/pki/ca.pem, a per-node kubelet cert/key pair, and
-#      etc/extension-release.d/z-kubelet-<node>.confext metadata.
+#      etc/extension-release.d/extension-release.z-kubelet-<node> metadata.
 #   4. Every image contains no content outside etc/ (systemd-confext merges
 #      only /etc; a stray usr/ or var/ subtree would silently do nothing).
 #
@@ -192,9 +194,9 @@ else
         printf '    missing etc/etcd/etcd.conf.yml\n' >&2
         check1_failed=1
     fi
-    check_confext_metadata "${etcd_raw}" "etc/extension-release.d/z-etcd.confext" || check1_failed=1
+    check_confext_metadata "${etcd_raw}" "etc/extension-release.d/extension-release.z-etcd" || check1_failed=1
     if [ "${check1_failed}" -eq 0 ]; then
-        pass "check-1 z-etcd.raw: etc/etcd/etcd.conf.yml embeds cp_ip ${cp_ip}; etc/extension-release.d/z-etcd.confext has ID=fedora VERSION_ID=44"
+        pass "check-1 z-etcd.raw: etc/etcd/etcd.conf.yml embeds cp_ip ${cp_ip}; etc/extension-release.d/extension-release.z-etcd has ID=fedora VERSION_ID=44"
     else
         fail "check-1 z-etcd.raw content + release metadata"
     fi
@@ -259,7 +261,7 @@ else
         printf '    missing etc/kubernetes/encryption-config.yaml\n' >&2
         check2_failed=1
     fi
-    check_confext_metadata "${cp_raw}" "etc/extension-release.d/z-kubernetes-cp.confext" || check2_failed=1
+    check_confext_metadata "${cp_raw}" "etc/extension-release.d/extension-release.z-kubernetes-cp" || check2_failed=1
     if [ "${check2_failed}" -eq 0 ]; then
         pass "check-2 z-kubernetes-cp.raw: cp.env (KUBE_ADVERTISE_ADDRESS/KUBE_ETCD_SERVERS=${cp_ip}), pki/ca.pem, admin/controller-manager/scheduler kubeconfigs, encryption-config.yaml, release metadata"
     else
@@ -319,7 +321,7 @@ for _node in cp1 w1 w2; do
         printf '    missing per-node kubelet cert/key pair for %s under etc/kubernetes/pki/\n' "${_node}" >&2
         check3_failed=1
     fi
-    check_confext_metadata "${kubelet_raw}" "etc/extension-release.d/z-kubelet-${_node}.confext" || check3_failed=1
+    check_confext_metadata "${kubelet_raw}" "etc/extension-release.d/extension-release.z-kubelet-${_node}" || check3_failed=1
     if [ "${check3_failed}" -eq 0 ]; then
         pass "check-3 z-kubelet-${_node}.raw: kubelet.conf, pki/ca.pem, per-node kubelet cert/key, release metadata"
     else
