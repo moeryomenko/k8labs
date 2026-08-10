@@ -96,14 +96,19 @@ base-cloudinit: base-ssh-key ## Generate cloud-init CIDATA disk for Packer build
 		--output "$(CLOUDINIT_DISK)"
 
 .PHONY: base
-base: base-deps base-cloudinit ## Build base image via Packer
+base: base-deps base-cloudinit sysexts confexts ## Build base image via Packer
 	@if [ -f "$(BASE_IMAGE_DEST)" ]; then \
-		echo 'Base image already exists: $(BASE_IMAGE_DEST)'; \
-		echo 'To force a rebuild, run: make base-rebuild'; \
-		exit 0; \
+		NEWEST_RAW="$$(ls -t extensions/release/*.raw 2>/dev/null | head -n1)"; \
+		if [ -n "$$NEWEST_RAW" ] && [ "$$NEWEST_RAW" -nt "$(BASE_IMAGE_DEST)" ]; then \
+			echo 'Extension images are newer than $(BASE_IMAGE_DEST); rebuilding base image...'; \
+		else \
+			echo 'Base image already exists: $(BASE_IMAGE_DEST)'; \
+			echo 'To force a rebuild, run: make base-rebuild'; \
+			exit 0; \
+		fi; \
 	fi
 	@echo 'Building base image via Packer...'
-	rm -rf build/base-image
+	rm -rf build/base-image packer/output-base
 	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
 		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
 	@echo 'Copying base image to build/ for Terraform consumption...'
@@ -118,10 +123,10 @@ base: base-deps base-cloudinit ## Build base image via Packer
 	echo "    Converted $$ARTIFACT -> $(BASE_IMAGE_DEST)"
 
 .PHONY: base-rebuild
-base-rebuild: base-deps base-cloudinit ## Force rebuild of the base image
+base-rebuild: base-deps base-cloudinit sysexts confexts ## Force rebuild of the base image
 	@echo 'Forcing base image rebuild via Packer...'
 	rm -f "$(BASE_IMAGE_DEST)"
-	rm -rf build/base-image
+	rm -rf build/base-image packer/output-base
 	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
 		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
 	@set -euo pipefail; \
@@ -241,13 +246,9 @@ sysexts: ## Build all sysext extensions in parallel
 
 # --- Config Extensions ---
 
-CONFEXT_NAMES := worker cri-o kubernetes etcd kubernetes-cp
+CONFEXT_NAMES := cri-o kubernetes containers
 
 .PHONY: $(addprefix confext/,$(CONFEXT_NAMES)) confexts
-
-confext/worker: ## Build confext worker configuration overlay
-	@echo 'Building confext worker...'
-	extensions/build.sh confext confext/worker confext-worker
 
 confext/cri-o: ## Build confext cri-o configuration overlay
 	@echo 'Building confext cri-o...'
@@ -257,13 +258,9 @@ confext/kubernetes: ## Build confext kubernetes configuration overlay
 	@echo 'Building confext kubernetes...'
 	extensions/build.sh confext confext/kubernetes confext-kubernetes
 
-confext/etcd: ## Build confext etcd configuration overlay
-	@echo 'Building confext etcd...'
-	extensions/build.sh confext confext/etcd confext-etcd
-
-confext/kubernetes-cp: ## Build confext kubernetes-cp configuration overlay
-	@echo 'Building confext kubernetes-cp...'
-	extensions/build.sh confext confext/kubernetes-cp confext-kubernetes-cp
+confext/containers: ## Build confext containers configuration overlay
+	@echo 'Building confext containers...'
+	extensions/build.sh confext confext/containers confext-containers
 
 confexts: ## Build all confext extensions in parallel
 	@echo 'Building all confexts in parallel...'
@@ -791,6 +788,33 @@ coredns: ## Deploy CoreDNS cluster DNS (kube-dns Service at 10.96.0.10)
 	fi; \
 	echo "PASS: kube-dns clusterIP is 10.96.0.10"
 	@echo 'CoreDNS ready.'
+
+# --- Cluster Ops ---
+
+.PHONY: rbac
+rbac: ## Apply cluster RBAC (kubelet bootstrap, system:nodes, admin, apiserver-proxy)
+	@echo 'Applying cluster RBAC manifests...'
+	kubectl --kubeconfig $(KUBECONFIG) apply -f rbac/
+	@echo 'RBAC ready.'
+
+.PHONY: cilium
+cilium: rbac ## Install Cilium from committed manifests (Gateway API CRDs + install + policies)
+	@echo 'Applying Cilium install manifests (Gateway API CRDs first)...'
+	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/install/
+	@echo 'Waiting for Cilium CRDs to be established...'
+	kubectl --kubeconfig $(KUBECONFIG) wait --for=condition=Established \
+		crd/ciliumloadbalancerippools.cilium.io \
+		crd/ciliuml2announcementpolicies.cilium.io \
+		crd/ciliumgatewayclassconfigs.cilium.io --timeout=5m
+	@echo 'Applying LB pool, L2 policy, and Gateway manifests...'
+	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/gatewayclass.yaml \
+		-f cilium/gateway-class-config.yaml -f cilium/gateway.yaml \
+		-f cilium/http-route.yaml -f cilium/lb-pool.yaml \
+		-f cilium/l2-policy.yaml
+	@echo 'Waiting for Cilium daemonset and operator rollout...'
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout status ds/cilium --timeout=5m
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout status deployment/cilium-operator --timeout=5m
+	@echo 'Cilium ready.'
 
 # --- Cleanup ---
 
