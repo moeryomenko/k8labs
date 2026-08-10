@@ -1,10 +1,12 @@
 [Unit]
 Description=kube-apiserver: The Kubernetes API Server
 Documentation=https://kubernetes.io/docs/home/
+ConditionPathExists=/etc/kubernetes/pki/ca.pem
 
 [Service]
+EnvironmentFile=/etc/kubernetes/cp.env
 ExecStart=/usr/bin/kube-apiserver \
-  --advertise-address={{CP_IP}} \
+  --advertise-address=${KUBE_ADVERTISE_ADDRESS} \
   --allow-privileged=true \
   --authorization-mode=Node,RBAC \
   --client-ca-file=/etc/kubernetes/pki/ca.pem \
@@ -13,7 +15,7 @@ ExecStart=/usr/bin/kube-apiserver \
   --etcd-cafile=/etc/kubernetes/pki/ca.pem \
   --etcd-certfile=/etc/kubernetes/pki/kubernetes.pem \
   --etcd-keyfile=/etc/kubernetes/pki/kubernetes-key.pem \
-  --etcd-servers=http://{{CP_IP}}:2379 \
+  --etcd-servers=${KUBE_ETCD_SERVERS} \
   --kubelet-client-certificate=/etc/kubernetes/pki/kubernetes.pem \
   --kubelet-client-key=/etc/kubernetes/pki/kubernetes-key.pem \
   --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname \
@@ -25,7 +27,7 @@ ExecStart=/usr/bin/kube-apiserver \
   --requestheader-group-headers=X-Remote-Group \
   --requestheader-username-headers=X-Remote-User \
   --secure-port=6443 \
-  --service-account-issuer=https://{{CP_IP}}:6443 \
+  --service-account-issuer=https://${KUBE_ADVERTISE_ADDRESS}:6443 \
   --service-account-key-file=/etc/kubernetes/pki/service-account.pem \
   --service-account-signing-key-file=/etc/kubernetes/pki/service-account-key.pem \
   --service-cluster-ip-range=10.96.0.0/12 \

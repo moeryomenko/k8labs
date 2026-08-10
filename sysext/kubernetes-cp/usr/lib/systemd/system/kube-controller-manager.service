@@ -1,6 +1,7 @@
 [Unit]
 Description=kube-controller-manager: The Kubernetes Controller Manager
 Documentation=https://kubernetes.io/docs/home/
+ConditionPathExists=/etc/kubernetes/controller-manager.kubeconfig
 
 [Service]
 ExecStart=/usr/bin/kube-controller-manager \

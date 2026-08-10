@@ -29,8 +29,8 @@ Arguments:
   [output-name]  Name for output file (default: basename of source-dir)
 
 Types:
-  sysext   Must have usr/ directory and extension-release.d/ with .sysext files
-  confext  Must have etc/ directory and extension-release.d/ with .confext files
+  sysext   Must have usr/ directory and usr/lib/extension-release.d/ with .sysext files
+  confext  Must have etc/ directory and etc/extension-release.d/ with .confext files
 
 Output:
   Default: squashfs image at release/<name>.raw (via mksquashfs or genisoimage)
@@ -82,27 +82,27 @@ output_name="${3:-$(basename "$source_dir")}"
 case "$type" in
     sysext)
         [ -d "${source_dir}/usr" ] || die "sysext must have usr/ directory"
-        if [ ! -d "${source_dir}/extension-release.d" ]; then
-            die "sysext must have extension-release.d/ directory"
+        if [ ! -d "${source_dir}/usr/lib/extension-release.d" ]; then
+            die "sysext must have usr/lib/extension-release.d/ directory"
         fi
         # Check at least one .sysext file exists
         found=0
-        for f in "${source_dir}/extension-release.d/"*.sysext; do
+        for f in "${source_dir}/usr/lib/extension-release.d/"*.sysext; do
             [ -f "$f" ] && found=1 && break
         done
-        [ "$found" -eq 1 ] || die "sysext must have at least one .sysext file in extension-release.d/"
+        [ "$found" -eq 1 ] || die "sysext must have at least one .sysext file in usr/lib/extension-release.d/"
         ;;
     confext)
         [ -d "${source_dir}/etc" ] || die "confext must have etc/ directory"
-        if [ ! -d "${source_dir}/extension-release.d" ]; then
-            die "confext must have extension-release.d/ directory"
+        if [ ! -d "${source_dir}/etc/extension-release.d" ]; then
+            die "confext must have etc/extension-release.d/ directory"
         fi
         # Check at least one .confext file exists
         found=0
-        for f in "${source_dir}/extension-release.d/"*.confext; do
+        for f in "${source_dir}/etc/extension-release.d/"*.confext; do
             [ -f "$f" ] && found=1 && break
         done
-        [ "$found" -eq 1 ] || die "confext must have at least one .confext file in extension-release.d/"
+        [ "$found" -eq 1 ] || die "confext must have at least one .confext file in etc/extension-release.d/"
         ;;
     *)
         die "invalid type '${type}' (must be sysext or confext)"

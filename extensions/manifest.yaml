@@ -10,8 +10,8 @@
 #  - extensions/download-sysexts.sh  (download URLs, versions, binary paths)
 #  - extensions/build.sh             (build process, validation)
 #  - Makefile (lines 149-230)        (sysext/confext names, targets, output names)
-#  - sysext/*/extension-release.d/   (sysext metadata)
-#  - confext/*/extension-release.d/  (confext metadata)
+#  - sysext/*/usr/lib/extension-release.d/   (sysext metadata)
+#  - confext/*/etc/extension-release.d/      (confext metadata)
 
 schema_version: 1
 
@@ -37,14 +37,14 @@ build:
       description: "systemd-sysext — overlays usr/ hierarchy, activated by systemd-sysext"
       required_directories:
         - usr
-        - extension-release.d
+        - usr/lib/extension-release.d
       release_file_pattern: "{name}.raw"
 
     - name: confext
       description: "systemd-confext — overlays etc/ hierarchy, activated by systemd-confext"
       required_directories:
         - etc
-        - extension-release.d
+        - etc/extension-release.d
       release_file_pattern: "{name}.raw"
 
   # Output format priority (first available tool wins)
@@ -217,17 +217,6 @@ sysexts:
 # ===========================================================================
 confexts:
   # -----------------------------------------------------------------------
-  # worker: Worker node kubeadm join configuration
-  # -----------------------------------------------------------------------
-  - name: worker
-    source_dir: confext/worker
-    output_name: confext-worker
-    metadata:
-      extension_name: worker
-    config_files:
-      - etc/kubernetes/kubeadm-join-config.yaml
-
-  # -----------------------------------------------------------------------
   # cri-o: CRI-O and container runtime configuration
   # -----------------------------------------------------------------------
   - name: cri-o
@@ -241,7 +230,7 @@ confexts:
       - etc/containers/registries.conf.d/10-k8s-labs.conf
 
   # -----------------------------------------------------------------------
-  # kubernetes: Kubernetes node configuration (kubelet, sysctl, modules)
+  # kubernetes: Kubernetes node configuration (kubelet config only)
   # -----------------------------------------------------------------------
   - name: kubernetes
     source_dir: confext/kubernetes
@@ -250,27 +239,14 @@ confexts:
       extension_name: kubernetes
     config_files:
       - etc/kubernetes/kubelet/config.yaml
-      - etc/sysctl.d/60-kubernetes.conf
-      - etc/modules-load.d/k8s.conf
 
   # -----------------------------------------------------------------------
-  # etcd: etcd configuration
+  # containers: containers/storage image-pull policy
   # -----------------------------------------------------------------------
-  - name: etcd
-    source_dir: confext/etcd
-    output_name: confext-etcd
+  - name: containers
+    source_dir: confext/containers
+    output_name: confext-containers
     metadata:
-      extension_name: etcd
+      extension_name: containers
     config_files:
-      - etc/etcd/etcd.conf.yml
-
-  # -----------------------------------------------------------------------
-  # kubernetes-cp: Control-plane static pod manifests directory (stub)
-  # -----------------------------------------------------------------------
-  - name: kubernetes-cp
-    source_dir: confext/kubernetes-cp
-    output_name: confext-kubernetes-cp
-    metadata:
-      extension_name: kubernetes-cp
-    config_files:
-      - etc/kubernetes/manifests/.gitkeep
+      - etc/containers/policy.json

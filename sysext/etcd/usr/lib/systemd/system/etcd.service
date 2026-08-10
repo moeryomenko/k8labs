@@ -1,6 +1,7 @@
 [Unit]
 Description=etcd: Distributed key-value store
 Documentation=https://etcd.io/docs/
+ConditionPathExists=/etc/etcd/etcd.conf.yml
 
 [Service]
 ExecStart=/usr/bin/etcd --config-file /etc/etcd/etcd.conf.yml

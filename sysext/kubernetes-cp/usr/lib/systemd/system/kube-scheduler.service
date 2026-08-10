@@ -1,6 +1,7 @@
 [Unit]
 Description=kube-scheduler: The Kubernetes Scheduler
 Documentation=https://kubernetes.io/docs/home/
+ConditionPathExists=/etc/kubernetes/scheduler.kubeconfig
 
 [Service]
 ExecStart=/usr/bin/kube-scheduler \
