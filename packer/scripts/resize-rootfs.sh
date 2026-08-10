@@ -11,9 +11,12 @@
 # /usr/local/sbin/resize-rootfs.sh.
 #
 # Layout assumption: the Fedora Cloud Base image partitions the virtio root
-# disk as vda1=ESP, vda2=/boot, vda3=LVM PV (VG fedora_localhost, root LV).
-# The script detects the real layout at runtime and also covers a
-# plain-partition root filesystem, so no partition number is hardcoded.
+# disk as vda1=ESP, vda2=/boot, vda3=root. The root filesystem may be btrfs
+# (Fedora 44 Cloud Base default, mounted as a subvolume -> findmnt reports
+# "/dev/vda3[/root]") or an LVM PV/VG/LV chain (older Fedora Cloud layout,
+# VG fedora_localhost, root LV); the script detects the real layout at
+# runtime and also covers a plain-partition root filesystem, so no partition
+# number is hardcoded.
 #
 # Idempotency: every step is a no-op when the disk is already fully sized —
 # growpart reports NOCHANGE (exit 1) for an already-grown partition, the parted
@@ -123,6 +126,11 @@ resize_filesystem() {
             log "growing xfs filesystem on / with xfs_growfs"
             xfs_growfs /
             ;;
+        btrfs)
+            require_cmd btrfs
+            log "growing btrfs filesystem on / with btrfs filesystem resize"
+            btrfs filesystem resize max /
+            ;;
         *)
             log "unsupported root filesystem type '${fstype}'; partition/LVM growth completed, fs grow skipped"
             ;;
@@ -193,6 +201,16 @@ require_cmd findmnt
 
 root_dev=$(findmnt -no SOURCE /)
 [ -n "${root_dev}" ] || die "cannot determine the root device from /proc/mounts"
+
+root_fstype=$(findmnt -no FSTYPE /)
+if [ "${root_fstype}" = "btrfs" ]; then
+    # btrfs subvolume root: findmnt reports the subvolume path
+    # (/dev/vda3[/root]). Strip the [subvol] suffix so partition/PV operations
+    # target the block device; the filesystem grow itself uses
+    # "btrfs filesystem resize max /" on the mountpoint (resize_filesystem).
+    root_dev=${root_dev%%\[*}
+    log "btrfs root; block device: ${root_dev}"
+fi
 log "root device: ${root_dev}"
 
 root_type=$(lsblk -no TYPE "${root_dev}")
