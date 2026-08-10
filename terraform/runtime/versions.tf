@@ -23,5 +23,11 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.5"
     }
+    null = {
+      # null_resource drives the squashfs confext packaging local-exec
+      # (confexts.tf).
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 }

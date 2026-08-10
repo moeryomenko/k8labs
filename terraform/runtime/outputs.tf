@@ -13,6 +13,27 @@ output "confexts_output_dir" {
   value       = abspath("${path.module}/${var.confexts_output_dir}")
 }
 
+output "confexts_dir" {
+  description = "Absolute directory holding the packaged role-split confext .raw images (build/runtime/confexts with the default)."
+  value       = local.confexts_dir
+}
+
+output "confext_images" {
+  description = "Map of confext image name to its absolute .raw path under confexts_dir (z-etcd, z-kubernetes-cp, z-kubelet-<node>; consumed by the push step)."
+  value = {
+    for name in local.confext_image_names : name => "${local.confexts_dir}/${name}.raw"
+  }
+}
+
+output "node_confexts" {
+  description = "Map of node name to the absolute .raw paths that must be pushed to that node (role-split: control-plane nodes get z-etcd + z-kubernetes-cp + z-kubelet-<node>, workers only z-kubelet-<node>; consumed by the push step)."
+  value = {
+    for name in sort(keys(var.node_ips)) : name => [
+      for image in local.node_confext_names[name] : "${local.confexts_dir}/${image}.raw"
+    ]
+  }
+}
+
 output "cp_ip" {
   description = "Control-plane IP input, re-exposed for downstream phases."
   value       = var.cp_ip

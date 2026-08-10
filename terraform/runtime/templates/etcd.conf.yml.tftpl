@@ -1,0 +1,15 @@
+name: 'cp-1'
+data-dir: '/var/lib/etcd'
+listen-peer-urls: 'http://${cp_ip}:2380'
+listen-client-urls: 'http://${cp_ip}:2379,http://127.0.0.1:2379'
+advertise-client-urls: 'http://${cp_ip}:2379'
+initial-advertise-peer-urls: 'http://${cp_ip}:2380'
+initial-cluster: 'cp-1=http://${cp_ip}:2380'
+initial-cluster-token: 'etcd-cluster'
+initial-cluster-state: 'new'
+# TLS disabled for lab (single-node, isolated network)
+#cert-file: '/etc/kubernetes/pki/etcd.pem'
+#key-file: '/etc/kubernetes/pki/etcd-key.pem'
+client-cert-auth: false
+#trusted-ca-file: '/etc/kubernetes/pki/ca.pem'
+peer-client-cert-auth: false
