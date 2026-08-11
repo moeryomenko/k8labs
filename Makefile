@@ -67,12 +67,9 @@ base-deps: ## Download CLOUDHV.fd firmware and Fedora Cloud Base image
 	fi
 	@echo '==> Converting Fedora Cloud image to raw format (CH is more compatible)...'
 	RAW_DEST="$(FEDORA_CLOUD_DEST:.qcow2=.raw)"; \
-	if [ ! -f "$$RAW_DEST" ]; then \
-		qemu-img convert -O raw "$(FEDORA_CLOUD_DEST)" "$$RAW_DEST"; \
-		echo '    Converted to raw format'; \
-	else \
-		echo '    Raw image already exists'; \
-	fi
+	rm -f "$$RAW_DEST"; \
+	qemu-img convert -O raw "$(FEDORA_CLOUD_DEST)" "$$RAW_DEST"; \
+	echo '    Converted to raw format (always fresh: the bake mutates the raw in place)'
 
 .PHONY: base-ssh-key
 base-ssh-key: ## Generate SSH keypair for Packer provisioning
