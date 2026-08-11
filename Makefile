@@ -465,8 +465,11 @@ runtime-tfvars: ## Generate build/runtime.tfvars from tofu output + DHCP leases
 	scripts/runtime-tfvars.sh
 
 .PHONY: configure
-configure: wait-ips wait-ssh runtime-tfvars ## Configure phase B: generate PKI + role confexts and activate services
-	@echo 'Applying runtime configuration (tofu apply, phase B)...'
+configure: wait-ips wait-ssh ## Configure phase B: generate PKI + role confexts and activate services
+	@set -euo pipefail; \
+	echo 'Generating runtime tfvars (phase B inputs)...'; \
+	scripts/runtime-tfvars.sh; \
+	echo 'Applying runtime configuration (tofu apply, phase B)...'; \
 	tofu -chdir=terraform/runtime apply -auto-approve -var-file=../../build/runtime.tfvars
 
 .PHONY: prereq
