@@ -37,9 +37,14 @@ Deviations from the raw chart render:
   objects (cilium-ca, hubble-server-certs) that contain freshly generated
   private keys — keeping the committed manifests free of secrets per
   the pinned-manifest constraints.
-- No Cilium CRDs are committed: this chart ships none and the cilium-operator
-  registers all cilium.io CRDs at startup
-  (pkg/k8s/apis/cell.go RegisterCRDsCell, --skip-crd-creation=false).
+- cilium.io CRDs are committed separately in 00-crds/ (21 files), extracted
+  verbatim from the pinned v1.19.6 source tree
+  (pkg/k8s/apis/cilium.io/client/crds/{v2,v2alpha1}/), i.e. the exact CRD
+  set the cilium-operator would otherwise register at startup
+  (--skip-crd-creation=false). They are applied before the install manifests
+  so CiliumLoadBalancerIPPool / CiliumL2AnnouncementPolicy /
+  CiliumGatewayClassConfig and the rest exist even while the operator is
+  not yet running (the config-init ClusterIP bootstrap blocks its start).
 - Gateway API CRDs are committed separately in 00-gateway-api-crds.yaml
   from kubernetes-sigs/gateway-api v1.4.0 (standard channel:
   gatewayclasses, gateways, httproutes, referencegrants). Cilium 1.19.6 is

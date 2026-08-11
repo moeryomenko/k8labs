@@ -766,22 +766,51 @@ rbac: ## Apply cluster RBAC (kubelet bootstrap, system:nodes, admin, apiserver-p
 	@echo 'RBAC ready.'
 
 .PHONY: cilium
-cilium: rbac ## Install Cilium from committed manifests (Gateway API CRDs + install + policies)
-	@echo 'Applying Cilium install manifests (Gateway API CRDs first)...'
-	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/install/
-	@echo 'Waiting for Cilium CRDs to be established...'
+cilium: rbac ## Install Cilium from committed manifests (cilium.io CRDs + install + policies)
+	@echo 'Applying cilium.io CRD bundle (v1.19.6) first...'
+	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/install/00-crds/
+	@echo 'Waiting for cilium.io CRDs to be established...'
 	kubectl --kubeconfig $(KUBECONFIG) wait --for=condition=Established \
 		crd/ciliumloadbalancerippools.cilium.io \
 		crd/ciliuml2announcementpolicies.cilium.io \
-		crd/ciliumgatewayclassconfigs.cilium.io --timeout=5m
+		crd/ciliumgatewayclassconfigs.cilium.io \
+		crd/ciliumclusterwidenetworkpolicies.cilium.io \
+		crd/ciliumnetworkpolicies.cilium.io \
+		crd/ciliumcidrgroups.cilium.io \
+		crd/ciliumnodes.cilium.io \
+		crd/ciliumendpoints.cilium.io \
+		crd/ciliumidentities.cilium.io \
+		crd/ciliumegressgatewaypolicies.cilium.io \
+		crd/ciliumenvoyconfigs.cilium.io \
+		crd/ciliumlocalredirectpolicies.cilium.io --timeout=5m
+	@echo 'Applying Cilium install manifests (Gateway API CRDs + install)...'
+	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/install/
+	@echo 'Pointing Cilium at the live control-plane apiserver (config-init bootstrap)...'
+	@set -euo pipefail; \
+	CP_MAC=$$(tofu -chdir=terraform output -json nodes 2>/dev/null | jq -r '.[] | select(.role == "control_plane") | .mac' | head -n1); \
+	if [ -z "$${CP_MAC}" ]; then \
+		echo "ERROR: Cannot determine control-plane MAC. Ensure VMs are deployed (make deploy)." >&2; \
+		exit 1; \
+	fi; \
+	cp_ip=$$(scripts/vm-ip.sh "$${CP_MAC}"); \
+	if [ -z "$${cp_ip}" ]; then \
+		echo "ERROR: Cannot determine control-plane IP (MAC $${CP_MAC}). Ensure VMs have DHCP leases (make wait-ips)." >&2; \
+		exit 1; \
+	fi; \
+	echo "  k8sServiceHost=$${cp_ip} k8sServicePort=6443"; \
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system patch cm cilium-config --type merge \
+		-p "{\"data\":{\"k8sServiceHost\":\"$${cp_ip}\",\"k8sServicePort\":\"6443\"}}"
+	@echo 'Restarting Cilium so agent/operator pick up k8sServiceHost/k8sServicePort...'
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout restart ds/cilium
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout restart deployment/cilium-operator
+	@echo 'Waiting for Cilium daemonset and operator rollout...'
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout status ds/cilium --timeout=5m
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout status deployment/cilium-operator --timeout=5m
 	@echo 'Applying LB pool, L2 policy, and Gateway manifests...'
 	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/gatewayclass.yaml \
 		-f cilium/gateway-class-config.yaml -f cilium/gateway.yaml \
 		-f cilium/http-route.yaml -f cilium/lb-pool.yaml \
 		-f cilium/l2-policy.yaml
-	@echo 'Waiting for Cilium daemonset and operator rollout...'
-	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout status ds/cilium --timeout=5m
-	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout status deployment/cilium-operator --timeout=5m
 	@echo 'Cilium ready.'
 
 # --- Cleanup ---
