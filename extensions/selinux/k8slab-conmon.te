@@ -1,0 +1,177 @@
+# k8slab-conmon: comprehensive init_t permissions for the k8s container stack
+# (validated in the E2E replay).
+#
+# The lab runs the k8s services (crio, kubelet, etcd, kube-apiserver,
+# kube-controller-manager, kube-scheduler) from the base init_t domain: the
+# merged sysext binaries are unlabeled_t (k8slab-merge covers their exec), and
+# no container-selinux type_transition from init_t is installed, so every
+# service and every pod process stays in init_t. Under SELinux Enforcing the
+# An E2E run observed a large denial catalog that
+# blocked service starts, image pulls and pod creation:
+#
+#   init_t -> conmon_exec_t:file execute            (crio 203/EXEC: dnf-baked
+#                                                    conmon is conmon_exec_t,
+#                                                    only container_runtime_t
+#                                                    may exec it by default)
+#   init_t -> unreserved_port_t:tcp_socket name_connect  (apiserver->etcd 2379)
+#   init_t -> http_port_t:tcp_socket name_connect        (crio registry:443)
+#   init_t -> kmsg_device_t:chr_file open/read           (kubelet /dev/kmsg)
+#   init_t -> kernel_t:system syslog_read                (kubelet)
+#   init_t -> container_file_t:sock_file/file/dir create/write
+#                                                    (kubelet device-plugins
+#                                                     kubelet.sock)
+#   init_t -> iptables_var_run_t:file create         (/run/xtables.lock)
+#   init_t -> tmpfs_t/container_file_t:filesystem relabelfrom/relabelto
+#                                                    (crio shm tmpfs)
+#   init_t -> devpts_t:filesystem relabel            (crun devpts)
+#   init_t -> fs_t:filesystem relabelfrom/relabelto  (crio overlay storage mount)
+#   init_t -> ifconfig_var_run_t:file create         (crio pinns ns files)
+#   init_t -> container_runtime_tmpfs_t:dir rmdir    (sandbox shm cleanup)
+#   init_t -> fusefs_t:file/lnk_file/dir + fusermount_exec_t:file execute
+#                                                    (fuse-overlayfs rootfs
+#                                                     over btrfs)
+#   init_t -> process setpgid                        (crio/conmon)
+#   init_t -> container_t:key create/search/read/... (crun container keyring)
+#   init_t -> container_ro_file_t:file exec + entrypoint + process transition
+#                                                    (crun starts the sandbox/
+#                                                     container binary)
+#   init_t -> container_var_run_t:fifo_file/file     (conmon ctl fifo,
+#                                                     storage locks)
+#
+# A node-local diagnostic module covering exactly these rules made
+# crio/kubelet/etcd/apiserver/cm/scheduler and pods run under Enforcing; this
+# module ships that coverage in the base image. Scoped to the catalog classes;
+# no broader domain grant is made.
+
+policy_module(k8slab-conmon, 1.0)
+
+require {
+    type init_t;
+    type conmon_exec_t;
+    type unreserved_port_t;
+    type http_port_t;
+    type kmsg_device_t;
+    type kernel_t;
+    type container_file_t;
+    type container_var_run_t;
+    type container_runtime_tmpfs_t;
+    type iptables_var_run_t;
+    type ifconfig_var_run_t;
+    type tmpfs_t;
+    type devpts_t;
+    type fs_t;
+    type container_t;
+    type container_ro_file_t;
+    type fusefs_t;
+    type fusermount_exec_t;
+    class file { execute execute_no_trans map open read create write getattr setattr ioctl lock append rename unlink };
+    class dir { search read open create write getattr setattr ioctl lock add_name remove_name rmdir unlink };
+    class lnk_file { read getattr open };
+    class sock_file { create open read write getattr setattr ioctl lock append };
+    class fifo_file { create open read write getattr setattr ioctl lock append };
+    class tcp_socket { name_connect };
+    class chr_file { open read getattr };
+    class filesystem { relabelfrom relabelto mount getattr associate };
+    class key { view read write search link setattr create };
+    class system { syslog_read };
+    class process { setpgid signal transition dyntransition };
+    class process2 { nnp_transition nosuid_transition };
+}
+
+# conmon: crio (init_t) execs the dnf-baked conmon (conmon_exec_t). No
+# type_transition from init_t exists, so conmon stays in init_t and both
+# execute and execute_no_trans are required (E2E: crio.service 203/EXEC).
+allow init_t conmon_exec_t:file { execute execute_no_trans map open read getattr };
+
+# Ports: apiserver -> etcd 2379 (unreserved), crio -> registry 443 (http).
+allow init_t unreserved_port_t:tcp_socket name_connect;
+allow init_t http_port_t:tcp_socket name_connect;
+
+# kubelet: /dev/kmsg + kernel syslog_read.
+allow init_t kmsg_device_t:chr_file { open read getattr };
+allow init_t kernel_t:system syslog_read;
+
+# kubelet device-plugins socket + crio/container storage under /var/lib/kubelet
+# and /var/lib/containers (container_file_t). Note: on Fedora 44 the sock_file
+# class carries only file-object permissions (bind/connect moved to the
+# unix_stream_socket/unix_dgram_socket classes in modern kernels).
+allow init_t container_file_t:sock_file { create open read write getattr setattr ioctl lock append };
+# execute/execute_no_trans on the writable-layer files: crun's access check on
+# the sandbox/container binary after the rootfs is relabeled with the sandbox
+# MCS (container_file_t:s0:c<cats>; scratch proof from test boot 2).
+allow init_t container_file_t:file { create open read write getattr setattr ioctl lock append rename unlink execute execute_no_trans map };
+allow init_t container_file_t:dir { create open read write getattr setattr ioctl lock add_name remove_name rmdir search };
+allow init_t container_file_t:lnk_file { create open read write getattr setattr ioctl lock append unlink };
+
+# iptables: /run/xtables.lock (crio/kubelet iptables use).
+allow init_t iptables_var_run_t:file { create open read write getattr setattr ioctl lock append };
+allow init_t iptables_var_run_t:dir { create open read write getattr setattr ioctl lock add_name remove_name rmdir search };
+
+# crio pinns: netns files under /run (ifconfig_var_run_t).
+allow init_t ifconfig_var_run_t:file { create open read write getattr setattr ioctl lock append rename unlink };
+allow init_t ifconfig_var_run_t:dir { create open read write getattr setattr ioctl lock add_name remove_name rmdir search };
+
+# container runtime var dirs + conmon ctl fifo (/run/containers/storage,
+# /run/crio, conmon fifo; E2E raw: overlay-false + mountpoints.lock creates).
+allow init_t container_var_run_t:file { create open read write getattr setattr ioctl lock append rename unlink };
+allow init_t container_var_run_t:dir { create open read write getattr setattr ioctl lock add_name remove_name rmdir search };
+allow init_t container_var_run_t:fifo_file { create open read write getattr setattr ioctl lock append };
+
+# Sandbox shm tmpfs (container_runtime_tmpfs_t): cleanup after pod teardown.
+allow init_t container_runtime_tmpfs_t:dir { create open read write getattr setattr ioctl lock add_name remove_name rmdir search };
+allow init_t container_runtime_tmpfs_t:file { create open read write getattr setattr ioctl lock append rename unlink };
+allow init_t container_runtime_tmpfs_t:sock_file { create open read write getattr setattr ioctl lock append };
+allow init_t container_runtime_tmpfs_t:fifo_file { create open read write getattr setattr ioctl lock append };
+
+# Filesystem relabels for container mounts: crio shm tmpfs (tmpfs_t +
+# container_file_t), crun devpts (devpts_t), and the overlay storage mount
+# (fs_t — crio relabels the overlay fs at startup).
+# Note: the filesystem class has relabelfrom/relabelto (no bare "relabel"
+# permission in Fedora 44 policy).
+allow init_t tmpfs_t:filesystem { relabelfrom relabelto mount getattr associate };
+allow init_t container_file_t:filesystem { relabelfrom relabelto mount getattr associate };
+allow init_t devpts_t:filesystem { relabelfrom relabelto mount getattr associate };
+allow init_t fs_t:filesystem { relabelfrom relabelto };
+
+# Container kernel keyring: crun (init_t)
+# creates the container's keyring labeled container_t:s0:c<mcs>. Writing
+# /proc/self/attr/keycreate checks init_t -> container_t:key create (kernel
+# selinux_setprocattr LSM_ATTR_KEYCREATE; PROCESS setkeycreate is already in
+# the base init_t grant — no AVC was logged for it), and the keyring is then
+# searched/read by the runtime. Mirrors container-selinux's
+# container_runtime_t -> container_t:key grant.
+allow init_t container_t:key { view read write search link setattr create };
+
+# Container process exec chain: crun (init_t)
+# execs the sandbox/container binary from the read-only image layer
+# (container_ro_file_t) and the process transitions to the container domain
+# (container_t:s0:c<mcs>). Mirrors container-selinux's
+# container_runtime_domain grants: can_exec(container_ro_file_t), entrypoint,
+# and container_domain process transition (container.te lines ~129, 294, 319,
+# 131). Without these the sandbox fails at "the path /pause exists but it is
+# not executable: Operation not permitted" (avc: denied { execute } on
+# container_ro_file_t).
+allow init_t container_ro_file_t:file { execute execute_no_trans map open read getattr ioctl lock };
+allow init_t container_ro_file_t:dir { search read open getattr ioctl lock };
+allow init_t container_ro_file_t:lnk_file { read getattr open };
+allow init_t container_ro_file_t:file entrypoint;
+allow init_t container_t:process { transition dyntransition };
+allow init_t container_t:process2 { nnp_transition nosuid_transition };
+
+# Container -> runtime pipes: the container
+# processes (container_t) write to the conmon pipe pairs owned by init_t —
+# conmon runs in init_t in this lab (no type_transition installed), so
+# container-selinux's container_domain <-> container_runtime_domain fifo rw
+# grants do not apply. Without this the container runs but every log/stdin
+# pipe write is denied (avc: container_t -> init_t:fifo_file { write }).
+allow container_t init_t:fifo_file { read write getattr open ioctl append };
+
+# fuse-overlayfs fallback (overlay unsupported over btrfs): init_t reads/execs
+# the fusefs rootfs and runs fusermount3.
+allow init_t fusefs_t:file { execute execute_no_trans map open read getattr ioctl lock };
+allow init_t fusefs_t:dir { search read open getattr ioctl lock };
+allow init_t fusefs_t:lnk_file { read getattr open };
+allow init_t fusermount_exec_t:file { execute execute_no_trans map open read getattr };
+
+# crio/conmon process management (E2E: process setpgid).
+allow init_t init_t:process { setpgid signal };
