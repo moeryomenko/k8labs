@@ -797,10 +797,12 @@ cilium: rbac ## Install Cilium from committed manifests (cilium.io CRDs + instal
 		echo "ERROR: Cannot determine control-plane IP (MAC $${CP_MAC}). Ensure VMs have DHCP leases (make wait-ips)." >&2; \
 		exit 1; \
 	fi; \
-	echo "  k8sServiceHost=$${cp_ip} k8sServicePort=6443"; \
-	kubectl --kubeconfig $(KUBECONFIG) -n kube-system patch cm cilium-config --type merge \
-		-p "{\"data\":{\"k8sServiceHost\":\"$${cp_ip}\",\"k8sServicePort\":\"6443\"}}"
-	@echo 'Restarting Cilium so agent/operator pick up k8sServiceHost/k8sServicePort...'
+	echo "  KUBERNETES_SERVICE_HOST=$${cp_ip} KUBERNETES_SERVICE_PORT=6443 (pod-template env override)"; \
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system patch ds cilium --type strategic \
+		-p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"cilium-agent\",\"env\":[{\"name\":\"KUBERNETES_SERVICE_HOST\",\"value\":\"$${cp_ip}\"},{\"name\":\"KUBERNETES_SERVICE_PORT\",\"value\":\"6443\"}]}],\"initContainers\":[{\"name\":\"config\",\"env\":[{\"name\":\"KUBERNETES_SERVICE_HOST\",\"value\":\"$${cp_ip}\"},{\"name\":\"KUBERNETES_SERVICE_PORT\",\"value\":\"6443\"}]}]}}}}"; \
+	kubectl --kubeconfig $(KUBECONFIG) -n kube-system patch deployment cilium-operator --type strategic \
+		-p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"cilium-operator\",\"env\":[{\"name\":\"KUBERNETES_SERVICE_HOST\",\"value\":\"$${cp_ip}\"},{\"name\":\"KUBERNETES_SERVICE_PORT\",\"value\":\"6443\"}]}]}}}}"
+	@echo 'Restarting Cilium so agent/operator/config-init pick up the apiserver endpoint...'
 	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout restart ds/cilium
 	kubectl --kubeconfig $(KUBECONFIG) -n kube-system rollout restart deployment/cilium-operator
 	@echo 'Waiting for Cilium daemonset and operator rollout...'
