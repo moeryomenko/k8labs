@@ -1,4 +1,7 @@
 #!/bin/sh
+# shellcheck shell=sh # POSIX sh script; declare the real shell so ShellCheck
+#                     # applies the sh ruleset (repo .shellcheckrc defaults to
+#                     # bash; [[ ]] is not POSIX).
 set -eux
 
 # Create directories for extension metadata and the baked extension payloads.
@@ -59,11 +62,36 @@ EOF
 systemctl daemon-reload
 systemctl enable k8slab-merge
 
-# Load the baked SELinux ebpf-fix policy module into the policy store. The .pp
-# was uploaded to /root/ebpf-fix.pp by a Packer file provisioner that runs
-# before this script; semodule makes the module persistent in the image
-# (bake-time).
-semodule -i /root/ebpf-fix.pp
+# Load the baked SELinux policy modules into the policy store. The .pp files
+# were uploaded to /root/ by Packer file provisioners that run before this
+# script; semodule makes the modules persistent in the image.
+# A module is only "loaded" once it appears in `semodule --list` (the active
+# policy store). libsemanage's commit can be interrupted transiently (observed
+# in bakes: the module lands in the tmp staging store and the policy binary
+# carries its rules, but the active store listing is never finalized), so
+# verify and retry while /etc is still writable (post-merge /etc is read-only
+# and a later semodule can never commit).
+install_selinux_module() {
+    _pp="$1"
+    _name="$2"
+    for _attempt in 1 2 3; do
+        semodule -i "${_pp}"
+        _listed=$(semodule --list 2>/dev/null | grep -c "${_name}" || true)
+        if [ "${_listed}" -ne 0 ]; then
+            echo "SELinux module ${_name} installed (attempt ${_attempt})"
+            return 0
+        fi
+        echo "WARNING: SELinux module ${_name} not committed to the policy store after semodule -i (attempt ${_attempt}/3); retrying" >&2
+    done
+    echo "ERROR: SELinux module ${_name} could not be committed to the policy store" >&2
+    return 1
+}
+
+install_selinux_module /root/ebpf-fix.pp ebpf-fix
+# k8slab-merge: allow init_t to execute the merged sysext binaries
+# (unlabeled_t — squashfs strips SELinux xattrs) so crio/kubelet/etcd etc. do
+# not fail with status=203/EXEC under SELinux Enforcing.
+install_selinux_module /root/k8slab-merge.pp k8slab-merge
 
 # Make the baked first-boot resize helper executable. The file
 # provisioner preserves the source mode, but the exec bit is load-bearing so
@@ -76,3 +104,11 @@ chmod +x /usr/local/sbin/resize-rootfs.sh
 # Remove machine-id so each VM gets unique ID on first boot
 rm -f /etc/machine-id
 touch /etc/machine-id
+
+# Flush all writes to disk before the packer plugin shuts the VM down. The
+# cloud-hypervisor plugin force-deletes the VM after its ACPI shutdown timeout
+# (the guest does not complete a clean poweroff), and unsynced pages are lost
+# with the kill — observed losing the freshly committed SELinux module store
+# entries even though semodule -i succeeded and semodule --list verified them
+# during provisioning. sync ensures the semodule transaction is durable.
+sync

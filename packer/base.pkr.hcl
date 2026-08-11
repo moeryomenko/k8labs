@@ -104,6 +104,14 @@ build {
     destination = "/root/ebpf-fix.pp"
   }
 
+  # SELinux k8slab-merge policy module: allows init_t to execute the
+  # merged sysext binaries (unlabeled_t); loaded into the policy store by
+  # 03-seal.sh after this upload.
+  provisioner "file" {
+    source      = "../extensions/selinux/k8slab-merge.pp"
+    destination = "/root/k8slab-merge.pp"
+  }
+
   # First-boot root filesystem resize helper.
   provisioner "file" {
     source      = "${var.packer_scripts_dir}/resize-rootfs.sh"
