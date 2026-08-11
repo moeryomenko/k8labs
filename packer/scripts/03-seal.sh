@@ -92,6 +92,17 @@ install_selinux_module /root/ebpf-fix.pp ebpf-fix
 # (unlabeled_t — squashfs strips SELinux xattrs) so crio/kubelet/etcd etc. do
 # not fail with status=203/EXEC under SELinux Enforcing.
 install_selinux_module /root/k8slab-merge.pp k8slab-merge
+# k8slab-conmon: the k8s stack runs as init_t (no
+# container-selinux type_transition is installed), so under Enforcing it needs
+# the container-runtime permission catalog the base policy grants only to
+# container_runtime_t: conmon exec, name_connect on unreserved/http ports,
+# kmsg+syslog_read, container_file_t/iptables_var_run_t/ifconfig_var_run_t/
+# container_runtime_tmpfs_t/container_var_run_t file/dir/sock/fifo creates,
+# tmpfs+container_file_t+devpts filesystem relabel, fusefs_t+fusermount
+# (fuse-overlayfs over btrfs), process setpgid. The E2E proved a node-local
+# module covering exactly these rules makes crio/kubelet/etcd/apiserver/cm/
+# scheduler and pods run under Enforcing; this module ships that coverage.
+install_selinux_module /root/k8slab-conmon.pp k8slab-conmon
 
 # Make the baked first-boot resize helper executable. The file
 # provisioner preserves the source mode, but the exec bit is load-bearing so

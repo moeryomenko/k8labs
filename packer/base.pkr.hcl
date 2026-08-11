@@ -112,6 +112,17 @@ build {
     destination = "/root/k8slab-merge.pp"
   }
 
+  # SELinux k8slab-conmon policy module: grants init_t the
+  # container-runtime permission catalog (conmon exec, port name_connect,
+  # kmsg/syslog, container/iptables/ifconfig/container_var_run file creates,
+  # tmpfs/devpts relabel, fusefs/fusermount, setpgid, fifo) so the k8s stack
+  # runs under Enforcing without container-selinux transitions; loaded into
+  # the policy store by 03-seal.sh after this upload.
+  provisioner "file" {
+    source      = "../extensions/selinux/k8slab-conmon.pp"
+    destination = "/root/k8slab-conmon.pp"
+  }
+
   # First-boot root filesystem resize helper.
   provisioner "file" {
     source      = "${var.packer_scripts_dir}/resize-rootfs.sh"
