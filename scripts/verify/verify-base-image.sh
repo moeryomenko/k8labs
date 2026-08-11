@@ -231,7 +231,38 @@ check_resize() {
     fi
 }
 
-check_enabled() {
+check_merge_enabled() {
+    # Deferred-merge contract (ratified in the E2E replay): the image must enable
+    # k8slab-merge.service — a oneshot ordered After=cloud-config.service /
+    # Before=multi-user.target that runs the sysext/confext refresh. The merge
+    # must not happen at sysinit (that renders /etc read-only before cloud-init
+    # can write its network profile). After=cloud-init.target is NOT used: on
+    # Fedora 44 it has After=multi-user.target, which forms an ordering cycle
+    # (multi-user.target -> k8slab-merge -> cloud-init.target -> multi-user.target)
+    # that systemd skips the unit entirely; cloud-config.service is the last
+    # cloud-init stage that writes /etc and has no multi-user.target dependency.
+    found=0
+    for wants in sysinit.target.wants multi-user.target.wants; do
+        if fs_ls "/etc/systemd/system/${wants}" | grep -qx "k8slab-merge.service"; then
+            found=1
+            break
+        fi
+    done
+    if [ "${found}" -eq 0 ] && fs_test_L "/etc/systemd/system/k8slab-merge.service"; then
+        found=1
+    fi
+    if [ "${found}" -eq 1 ]; then
+        say_pass "k8slab-merge.service enabled in image (unit symlink present)"
+    else
+        say_fail "k8slab-merge.service not enabled in image (no unit symlink found)"
+    fi
+}
+
+check_autostart_disabled() {
+    # Deferred-merge contract: systemd-sysext/systemd-confext must NOT
+    # be auto-enabled at sysinit — their boot-time merge renders /etc read-only
+    # before cloud-init, breaking first-boot network config. The merge
+    # is deferred to k8slab-merge.service (check_merge_enabled).
     for svc in systemd-sysext systemd-confext; do
         found=0
         for wants in sysinit.target.wants multi-user.target.wants; do
@@ -244,9 +275,9 @@ check_enabled() {
             found=1
         fi
         if [ "${found}" -eq 1 ]; then
-            say_pass "${svc} enabled in image (unit symlink present)"
+            say_fail "${svc} auto-enabled in image (unit symlink present in enablement dirs — breaks cloud-init first boot)"
         else
-            say_fail "${svc} not enabled in image (no unit symlink found)"
+            say_pass "${svc} not auto-enabled in image (no unit symlink in enablement dirs)"
         fi
     done
 }
@@ -255,7 +286,8 @@ check_sysext_dir
 check_confext_dir
 check_conmon
 check_resize
-check_enabled
+check_merge_enabled
+check_autostart_disabled
 
 if [ "${failed}" -eq 1 ]; then
     exit 1
