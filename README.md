@@ -39,9 +39,11 @@ The cluster environment is built in stages, each producing an artifact consumed 
 | Layer | Technology |
 |---|---|
 | Hypervisor | KVM (Cloud-Hypervisor) |
-| Base OS | Fedora (kernel 7.1) |
-| VM provisioning | OpenTofu / Terraform (cloudhypervisor provider) |
+| Base OS | Fedora 44 (kernel 7.1) |
+| VM provisioning | OpenTofu / Terraform (cloudhypervisor provider, `registry.terraform.io/community/cloudhypervisor`) |
 | Image baking | Packer (cloudhypervisor builder on Fedora Cloud) |
+| Sysext/confext baking | packer-plugin-systemd-ext (`systemd-ext-sysext` / `systemd-ext-confext` provisioners) |
+| Runtime confext delivery | tf-confext-provisioner (`terraform-provisioner-confext`) |
 | Node configuration | Image-baked systemd-sysext / systemd-confext + tofu-pushed runtime confexts |
 | PKI | OpenTofu `tls` provider (phase B) |
 | Container runtime | CRI-O with crun |
@@ -49,9 +51,20 @@ The cluster environment is built in stages, each producing an artifact consumed 
 | Service discovery | etcd |
 | OS extensions | systemd-sysext / systemd-confext |
 
+### Plugins
+
+The lab toolchain is built around four third-party plugins maintained under the `moeryomenko` GitHub account. The first two are wired into the pipeline; the other two implement the same extension-image mechanics the pipeline performs with its own scripts and are documented as upstream references.
+
+| Plugin | Role | Wiring in k8labs |
+|---|---|---|
+| [packer-plugin-cloud-hypervisor](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) | Cloud-Hypervisor Packer builder that produces the base image | Used by `make base`; built from source with `make plugin`, pinned at commit `952aa92` (Makefile `PACKER_PLUGIN_VERSION`), installed to `~/.packer.d/plugins/packer-plugin-cloud-hypervisor` |
+| [packer-plugin-systemd-ext](https://github.com/moeryomenko/packer-plugin-systemd-ext) | Bakes or persists systemd extension images during a Packer build (`systemd-ext-sysext` overlays `/usr`, `systemd-ext-confext` overlays `/etc`) | Not wired into the current pipeline — k8labs builds the `.raw` images with `extensions/build.sh` (mksquashfs) and bakes them into the base image with plain Packer `file` provisioners |
+| [tf-provider-cloud-hypervisor](https://github.com/moeryomenko/tf-provider-cloud-hypervisor) | Cloud-Hypervisor provider for phase A VM provisioning | Used by `make deploy`; consumed as `registry.terraform.io/community/cloudhypervisor` via the `terraform/.opentofu.rc` filesystem mirror (not published on the OpenTofu registry) |
+| [tf-confext-provisioner](https://github.com/moeryomenko/tf-confext-provisioner) | Third-party `terraform-provisioner-confext`: packages local `/etc` trees into confext images and merges/unmerges them over SSH (`systemd-confext merge`) | Not wired into the current pipeline — phase B packages and pushes confexts with `terraform/runtime/package-confext.sh` + `push-confext.sh` (scp + `systemd-confext refresh`) |
+
 ## Quick Start
 
-Requirements: a Linux host with KVM-capable hardware, `cloud-hypervisor` (>= v38), `tofu` (or `terraform`), `packer`, `openssl`, `mkdosfs` (dosfstools), `mcopy` (mtools), and `dnsmasq`. Run `make prereq` to validate core tools. The Packer plugin must be built from source with `make plugin`.
+Requirements: a Linux host with KVM-capable hardware, `cloud-hypervisor` (>= v38), `tofu` (or `terraform`), `packer`, `openssl`, `mkdosfs` (dosfstools), `mcopy` (mtools), and `dnsmasq`. Run `make prereq` to validate core tools. The Packer plugin must be built from source with `make plugin` (pinned at commit `952aa92`, Makefile `PACKER_PLUGIN_VERSION`, installed to `~/.packer.d/plugins/packer-plugin-cloud-hypervisor`).
 
 The full cluster build pipeline is driven through a single Makefile:
 
@@ -71,7 +84,7 @@ Individual pipeline stages can be run separately:
 | `make base-rebuild` | Force rebuild base image |
 | `make base-deps` | Download CLOUDHV.fd firmware + Fedora Cloud Base qcow2 |
 | `make base-cloudinit` | Generate FAT16 CIDATA disk for Packer SSH key injection |
-| `make plugin` | Build and install [cloudhypervisor Packer plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) from source |
+| `make plugin` | Build and install [cloudhypervisor Packer plugin](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) from source (pinned at commit `952aa92`, Makefile `PACKER_PLUGIN_VERSION`) to `~/.packer.d/plugins/packer-plugin-cloud-hypervisor` |
 
 **Extensions:**
 
@@ -80,6 +93,7 @@ Individual pipeline stages can be run separately:
 | `make sysexts` | Build all system extension images |
 | `make confexts` | Build all configuration extension overlays |
 | `make extensions` | Build all extensions (both sysext and confext) |
+| `make download-sysexts` | Download pre-built sysext binaries from upstream (kubelet, CRI-O, crun, CNI, etcd, kubernetes-cp, tracebox) |
 
 **Networking:**
 
@@ -92,6 +106,7 @@ Individual pipeline stages can be run separately:
 
 | Target | Description |
 |--------|-------------|
+| `make tfvars` | Generate `terraform.tfvars` from defaults for deployment |
 | `make deploy` | Phase A: provision cluster VMs via OpenTofu (cloudhypervisor provider) |
 | `make wait-ips` | Poll until all VMs have DHCP-assigned IPs |
 | `make wait-ssh` | Poll until SSH is reachable on all VMs |
@@ -104,7 +119,7 @@ Individual pipeline stages can be run separately:
 | Target | Description |
 |--------|-------------|
 | `make rbac` | Apply cluster RBAC (kubelet bootstrap, `system:nodes`, admin, apiserver-proxy) |
-| `make cilium` | Install Cilium from committed manifests (Gateway API CRDs, LB pool, L2 policy) |
+| `make cilium` | Install Cilium v1.19.6 from committed manifests (Gateway API CRDs, LB pool, L2 policy) |
 | `make smoke-test` | Validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling, CoreDNS DNS regression) |
 | `make coredns` | Deploy CoreDNS cluster DNS (kube-dns Service at 10.96.0.10) |
 | `make metrics-server` | Enable `kubectl top` (metrics API via aggregation layer) |
@@ -114,21 +129,48 @@ Individual pipeline stages can be run separately:
 
 Pre-built dependencies are cached: re-running `make cluster` skips stages whose artifacts already exist. Use `make base-rebuild` to force re-baking the base image.
 
+Run `make validate` to check both the Packer template and the OpenTofu configuration (both root modules) without building anything.
+
 ## Project Structure
 
 The repository is organized by concern, not by lifecycle stage:
 
 - `packer/` — Packer templates (`base.pkr.hcl`), cloud-init configs, and provisioning scripts for base image baking (bakes the sysext/confext images)
-- `terraform/` — OpenTofu/Terraform configuration for VM definitions (cloudhypervisor provider, phase A), bridge TAP networking, and cloud-init
+- `terraform/` — OpenTofu/Terraform configuration for VM definitions (cloudhypervisor provider, phase A), bridge TAP networking, and cloud-init; the provider source is pinned in `terraform/.opentofu.rc`
 - `terraform/runtime/` — Phase-B root module: PKI generation (tls provider) and role-confext rendering/pushing
+- `network/` — Declarative systemd-networkd + nftables + dnsmasq config for the lab bridge/TAP/DHCP/DNS (see [network/README.md](network/README.md))
 - `extensions/` — Build scripts and download utilities for systemd-sysext and systemd-confext packaging
 - `sysext/` — Raw system extension directory structures (binaries, systemd units)
 - `confext/` — Raw configuration extension directory structures (kubelet config, CRI-O config, container policy)
 - `certs/` — Generated TLS certificates (output artifact, gitignored except `.gitkeep`)
 - `cilium/` — Cilium manifest templates (L2 announcement policy, LB IP pool, Gateway API manifests)
 - `coredns/` — CoreDNS cluster DNS manifests (Corefile ConfigMap, RBAC, Deployment, kube-dns Service)
+- `rbac/` — Cluster RBAC manifests (kubelet bootstrap, `system:nodes`, admin, apiserver-proxy)
+- `research/` — CPU throttling/EEVDF scheduler experiments against the live cluster (see [Research](#research))
 - `scripts/` — Standalone helper scripts
 - `build/` — Build artifacts (base image, extensions, temporary files)
+
+## Version Pins
+
+Component versions are pinned in the sources below — keep them in sync when bumping.
+
+| Component | Version | Source of truth |
+|---|---|---|
+| OpenTofu | 1.8.0 | `mise.toml` |
+| Packer | 1.11.2 | `mise.toml` |
+| kubectl | 1.32.0 | `mise.toml` |
+| Base OS | Fedora 44 | `packer/variables.pkr.hcl` |
+| Kernel | 7.1 | `extensions/download-sysexts.sh` |
+| kubelet | v1.32.13 | `extensions/download-sysexts.sh` |
+| cri-o | v1.35.5 | `extensions/download-sysexts.sh` |
+| crun | 1.28 | `extensions/download-sysexts.sh` |
+| CNI plugins | v1.9.1 | `extensions/download-sysexts.sh` |
+| etcd | v3.5.17 | `extensions/download-sysexts.sh` |
+| kubernetes-cp | v1.32.13 | `extensions/download-sysexts.sh` |
+| tracebox (perfetto) | v57.2 | `extensions/download-sysexts.sh` |
+| Cilium | v1.19.6 | `cilium/install/VERSION` |
+| Gateway API CRDs | v1.4.0 | `cilium/install/00-gateway-api-crds.yaml` |
+| packer-plugin-cloud-hypervisor | 952aa92 | Makefile `PACKER_PLUGIN_VERSION` |
 
 ## Design Decisions
 
@@ -143,6 +185,12 @@ The repository is organized by concern, not by lifecycle stage:
 - **Headless Packer build**: The base image is built without a display using a Fedora Cloud Base image with cloud-init SSH key injection — no kickstart or ISO modification needed.
 
 - **Cloud-Hypervisor VMM**: CH was adopted for its fast VM startup (~200--400 ms per VM), smaller binary, stateless operation (no libvirtd daemon), and cloud-native VMM design (virtio-only, no legacy emulation).
+
+## Research
+
+`research/` is a sub-project for scheduler research against the live cluster: container process lifecycle tracing, CPU throttling characterization (cgroup v2 `cpu.stat` under varying CPU limits), and CPU request/limit guidance, including EEVDF scheduler experiments. Workloads are Go services in `research/workloads/` (cpu-burner, api-server, db-simulator); analysis is Python in `research/analysis/` (deps in `pyproject.toml`); Perfetto tracing uses the baked `perfetto` sysext.
+
+Experiments are driven with `make experiment-*` from `research/` and write gitignored data under `research/experiments/data/` and `research/analysis/output/`. They require a live, healthy cluster (3 Ready nodes) and a working kubeconfig. See [research/README.md](research/README.md) for the full guide.
 
 ## Gateway API
 
