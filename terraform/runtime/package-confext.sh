@@ -12,6 +12,14 @@
 #
 # Usage: package-confext.sh <trees-dir> <output-dir>
 #
+# Enablement symlinks: before packaging, each role tree gets its unit
+# enablement symlinks created INSIDE the tree under
+# etc/systemd/system/multi-user.target.wants/ (the exact links `systemctl
+# enable` would write for these WantedBy=multi-user.target units). Shipping
+# them inside the image means the systemd-confext merge itself enables the
+# units — no post-boot write into the read-only merged /etc is ever needed
+# (verified in the E2E replay; phase-B push/refresh contract).
+#
 # Idempotent: -noappend rebuilds the image in place, so re-running after a
 # content change replaces the .raw without needing a clean step. Each image
 # is logged on stdout; any failure exits non-zero.
@@ -51,6 +59,30 @@ if ! mkdir -p "${output_dir}"; then
 fi
 
 packaged=0
+
+# add_enablement_symlinks <tree> <name> — create the enablement symlinks that
+# `systemctl enable` would write, INSIDE the confext tree, so the merge
+# activates the units without any post-boot write into the read-only merged
+# /etc. Every k8s unit's [Install] is WantedBy=multi-user.target,
+# so enablement is exactly these symlinks; absolute targets mirror systemd's
+# own /etc/systemd/system/<wants> links and resolve to the sysext-provided
+# unit files on the merged node.
+add_enablement_symlinks() {
+    _tree=$1
+    _name=$2
+    case "${_name}" in
+        z-etcd) _units="etcd.service" ;;
+        z-kubernetes-cp) _units="kube-apiserver.service kube-controller-manager.service kube-scheduler.service" ;;
+        z-kubelet-*) _units="crio.service kubelet.service" ;;
+        *) return 0 ;;
+    esac
+    _wants="${_tree}/etc/systemd/system/multi-user.target.wants"
+    mkdir -p "${_wants}"
+    for _unit in ${_units}; do
+        ln -sf "/usr/lib/systemd/system/${_unit}" "${_wants}/${_unit}"
+    done
+}
+
 for tree in "${trees_dir}"/*; do
     if [ ! -d "${tree}" ]; then
         continue
@@ -68,6 +100,7 @@ for tree in "${trees_dir}"/*; do
     if [ ! -d "${tree}/etc/extension-release.d" ]; then
         die "${name}: missing etc/extension-release.d/ metadata directory"
     fi
+    add_enablement_symlinks "${tree}" "${name}"
     output_file="${output_dir}/${name}.raw"
     echo "package-confext: packaging ${name} -> ${output_file}"
     if ! mksquashfs "${tree}" "${output_file}" -noappend -all-root; then

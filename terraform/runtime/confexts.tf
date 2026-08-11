@@ -108,6 +108,10 @@ resource "local_file" "confext_tree" {
 resource "null_resource" "package_confexts" {
   triggers = {
     fingerprint = local.confext_fingerprint
+    # The packaging script also contributes content to the images (the
+    # enablement symlinks it creates per tree), so a change to it must re-run
+    # mksquashfs on the next apply.
+    package_script_sha = filesha256("${path.module}/package-confext.sh")
   }
 
   depends_on = [local_file.confext_tree]

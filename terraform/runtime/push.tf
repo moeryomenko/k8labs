@@ -25,8 +25,8 @@
 locals {
   push_ssh_key        = var.ssh_private_key != "" ? pathexpand(var.ssh_private_key) : ""
   push_ssh_extra_opts = local.push_ssh_key != "" ? " -i ${local.push_ssh_key}" : ""
-  push_ssh_opts       = "-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new${local.push_ssh_extra_opts}"
-  push_scp_opts       = local.push_ssh_extra_opts
+  push_ssh_opts       = "-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null${local.push_ssh_extra_opts}"
+  push_scp_opts       = "-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null${local.push_ssh_extra_opts}"
 
   # Per-node push pieces: ssh target and the node's .raw image paths
   # (role-split per confexts.tf node_confext_names).

@@ -19,19 +19,16 @@
 #      no restart). Different/missing -> `scp <raw-file>
 #      <target>:/var/lib/confexts/<name>.raw`.
 #   2. If at least one image changed:
-#      - ENABLE FIRST, while /etc is still writable: write each unit's
-#        enablement symlink into /etc/systemd/system/multi-user.target.wants/
-#        (every k8s unit's [Install] is WantedBy=multi-user.target, so
-#        `systemctl enable` would create exactly these symlinks; running
-#        `systemctl enable` after the confext refresh that renders /etc
-#        read-only fails EROFS). Each link is its own ssh invocation so the
-#        sequence is observable.
 #      - `ssh <target> systemd-confext refresh`
 #      - `ssh <target> systemctl daemon-reload`
 #      - start/restart in dependency order, each as its OWN ssh invocation so
 #        the sequence is observable; units whose image changed and
 #        that are already active are then explicitly restarted so the new
-#        confext content is loaded:
+#        confext content is loaded. Enablement is NOT done here: the
+#        enablement symlinks ship inside the z- confext images
+#        (etc/systemd/system/multi-user.target.wants/), so the merge enables
+#        the units and /etc is already read-only when phase B runs — any
+#        enable/write into /etc would fail EROFS.
 #        control-plane (role derived from the image set: presence of
 #        z-etcd.raw / z-kubernetes-cp.raw):
 #          systemctl start crio.service
@@ -53,7 +50,8 @@
 #        probe said the unit was already active, an explicit
 #        `systemctl restart <unit>` follows so the running service picks up the
 #        new merged content. A first activation (unit inactive) is started once
-#        by start and is not double-started.
+#        by start and is not double-started. start/restart never write into
+#        /etc (read-only merged overlay), so they are safe on every phase-B run.
 #   3. If no image changed: only the sha256 probe ssh runs.
 #   4. Errors: missing local .raw, unparseable host arg (no '@' and not
 #      'localhost'), or missing scp/ssh in PATH -> exit non-zero with a clear
@@ -110,7 +108,7 @@ if ! command -v scp >/dev/null 2>&1; then
     die "scp not found in PATH (required to push confext images)"
 fi
 if ! command -v ssh >/dev/null 2>&1; then
-    die "ssh not found in PATH (required for the remote sha256 probe and service enable)"
+    die "ssh not found in PATH (required for the remote sha256 probe and service start/restart)"
 fi
 
 for raw in "$@"; do
@@ -181,9 +179,9 @@ wait_for_apiserver() {
 
 # start_or_restart <target> <unit> <changed> — start the unit, then, when the
 # unit was already active and its image changed, restart it so the new merged
-# confext content is loaded by the running service. The unit was
-# already enabled by enable_symlinks (before the confext refresh), so this step
-# only starts/restarts and never writes into the read-only merged /etc.
+# confext content is loaded by the running service. Enablement is
+# shipped inside the confext images themselves, so this step only
+# starts/restarts and never writes into the read-only merged /etc.
 # The is-active probe runs before start so a first activation (unit inactive)
 # is started once and not double-started. Each step is its own ssh invocation
 # so the sequence is observable.
@@ -198,25 +196,6 @@ start_or_restart() {
         # shellcheck disable=SC2029 # unit name is client-constructed (trusted literals from start_units), expansion is intended
         ssh ${SSH_OPTS} "$1" systemctl restart "$2"
     fi
-}
-
-# enable_symlinks <target> <role> — write each unit's enablement symlink into
-# /etc/systemd/system/multi-user.target.wants/ while /etc is still writable,
-# i.e. BEFORE the confext refresh that renders it read-only. Every k8s
-# unit's [Install] is WantedBy=multi-user.target, so `systemctl enable` would
-# create exactly these symlinks; the unit files already exist in the merged
-# /usr from the boot-time sysext merge. Each link is its own ssh invocation so
-# the sequence is observable. kubelet is enabled on ALL nodes
-# (ordered-start); on control-plane it follows the scheduler in the enable order.
-enable_symlinks() {
-    _units="crio.service kubelet.service"
-    if [ "$2" = "control-plane" ]; then
-        _units="crio.service etcd.service kube-apiserver.service kube-controller-manager.service kube-scheduler.service kubelet.service"
-    fi
-    for _unit in ${_units}; do
-        # shellcheck disable=SC2029 # unit name is client-constructed (trusted literals from the role lists), expansion is intended
-        ssh ${SSH_OPTS} "$1" ln -sf "/usr/lib/systemd/system/${_unit}" "/etc/systemd/system/multi-user.target.wants/${_unit}"
-    done
 }
 
 # start_units <target> <role> <etcd_changed> <kcp_changed> <kubelet_changed>
@@ -294,9 +273,6 @@ if [ "${changed}" -eq 0 ]; then
     echo "push-confext: no changes for ${target}; all images already match"
     exit 0
 fi
-
-echo "push-confext: enable units on ${target} (role=${role}) before confext refresh"
-enable_symlinks "${target}" "${role}"
 
 echo "push-confext: refresh confext overlay on ${target}"
 ssh ${SSH_OPTS} "${target}" systemd-confext refresh
