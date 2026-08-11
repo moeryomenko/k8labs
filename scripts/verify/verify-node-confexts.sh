@@ -67,7 +67,7 @@ case "${HOST}" in
             *@*) SSH_TARGET="${HOST}" ;;
             *) SSH_TARGET="root@${HOST}" ;;
         esac
-        SSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${SSH_TARGET}"
+        SSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${SSH_TARGET}"
         # shellcheck disable=SC2086 # intentional word splitting of ssh options
         if ! ${SSH_CMD} true 2>/dev/null; then
             say_skip "node ${SSH_TARGET} is not reachable; cannot verify phase-B confext state"
