@@ -66,8 +66,11 @@ require {
     type fs_t;
     type container_t;
     type container_ro_file_t;
+    type spc_t;
     type fusefs_t;
     type fusermount_exec_t;
+    type unlabeled_t;
+    attribute domain;
     class file { execute execute_no_trans map open read create write getattr setattr ioctl lock append rename unlink };
     class dir { search read open create write getattr setattr ioctl lock add_name remove_name rmdir unlink };
     class lnk_file { read getattr open };
@@ -79,14 +82,20 @@ require {
     class netlink_xfrm_socket { create bind read write getattr setattr };
     class netlink_generic_socket { create bind read write getattr setattr };
     class bpf { prog_load prog_run map_create map_read map_write };
-    class perf_event { open read write };
+    class perf_event { cpu kernel open read write tracepoint };
     class chr_file { create open read write getattr setattr ioctl };
     class blk_file { create open read write getattr setattr ioctl };
     class filesystem { relabelfrom relabelto mount getattr associate };
     class key { view read write search link setattr create };
-    class system { syslog_read };
+    class system { syslog_read module_load };
     class process { setpgid signal transition dyntransition };
     class process2 { nnp_transition nosuid_transition };
+    class capability { chown kill fowner fsetid mknod net_admin net_bind_service net_raw setfcap sys_resource dac_override sys_admin sys_ptrace sys_module };
+    class capability2 { mac_override mac_admin };
+    class tun_socket { create bind read write getattr setattr };
+    class rawip_socket { create bind read write getattr setattr };
+    class packet_socket { create bind read write getattr setattr };
+    class socket { create bind read write getattr setattr };
 }
 
 # conmon: crio (init_t) execs the dnf-baked conmon (conmon_exec_t). No
@@ -220,8 +229,62 @@ allow init_t NetworkManager_t:bpf { prog_run };
 
 # Cilium signal manager perf ring: the agent (init_t) creates a
 # perf_event ring buffer for the signals map; SELinux denied perf_event open.
-allow init_t init_t:perf_event { open read write };
+allow init_t init_t:perf_event { cpu kernel open read write tracepoint };
 
 # kube-apiserver -> kubelet: apiserver (init_t) connects
 # to the kubelet secure port 10250 (kubernetes_port_t) for logs/exec/top.
 allow init_t kubernetes_port_t:tcp_socket { name_connect };
+
+# ---------------------------------------------------------------------------
+# spc_t domain for Cilium (correct SELinux configuration — plan
+# TASK-B). Cilium's pods request seLinuxOptions type:spc_t in the committed
+# manifests (the chart default; see cilium/install/04-workloads.yaml and
+# container-selinux container.te:810-916). The base policy has no spc_t, so
+# the pods fell back to init_t and every datapath operation needed a new
+# init_t grant. Define spc_t here and wire the init_t -> spc_t transition so
+# the committed requests take effect: spc_t is the container-selinux blessed
+# highly-privileged domain, granted an unconfined-style permission set, which
+# is exactly why container.te has zero per-perm perf_event/netlink rules for
+# it (the Cilium datapath: perf ring PERF_TYPE_SOFTWARE+BPF_OUTPUT, bpf
+# prog_load/prog_run/map ops, netlink xfrm/route, capabilities).
+# ---------------------------------------------------------------------------
+type spc_t;
+domain_type(spc_t)
+role system_r types spc_t;
+
+# init_t (the container runtime in this lab) -> spc_t (container processes).
+allow init_t spc_t:process { transition dyntransition };
+allow init_t spc_t:process2 { nnp_transition nosuid_transition };
+allow init_t { container_file_t container_ro_file_t unlabeled_t }:file { execute execute_no_trans map open read getattr ioctl lock };
+allow spc_t { container_file_t container_ro_file_t unlabeled_t }:file entrypoint;
+type_transition init_t container_file_t:process spc_t;
+type_transition init_t container_ro_file_t:process spc_t;
+allow spc_t { container_file_t container_ro_file_t }:file execmod;
+
+# spc_t self grants (port of container.te spc section + Cilium datapath).
+allow spc_t self:process execmem;
+allow spc_t self:capability { chown kill fowner fsetid mknod net_admin net_bind_service net_raw setfcap sys_resource dac_override sys_admin sys_ptrace sys_module };
+allow spc_t self:netlink_route_socket { create bind read write getattr setattr };
+allow spc_t self:netlink_xfrm_socket { create bind read write getattr setattr };
+allow spc_t self:netlink_generic_socket { create bind read write getattr setattr };
+allow spc_t self:netlink_socket { create bind read write getattr setattr };
+allow spc_t self:perf_event { cpu kernel open read write tracepoint };
+allow spc_t self:key { view read write search link setattr create };
+allow spc_t self:tun_socket { create bind read write getattr setattr };
+allow spc_t self:rawip_socket { create bind read write getattr setattr };
+allow spc_t self:packet_socket { create bind read write getattr setattr };
+allow spc_t self:socket { create bind read write getattr setattr };
+allow spc_t self:filesystem associate;
+allow spc_t self:dir mounton;
+allow spc_t self:file mounton;
+allow spc_t { container_ro_file_t container_file_t }:system module_load;
+allow spc_t unlabeled_t:key { view read write search link setattr create };
+allow spc_t domain:bpf { map_create map_read map_write prog_load prog_run };
+allow spc_t self:bpf { map_create map_read map_write prog_load prog_run };
+
+# Unconfined-style catch-all for spc_t (the mechanism container-selinux uses
+# so Cilium's full datapath works without per-perm grants). If the interface
+# does not resolve in this module build, the explicit grants above cover the
+# known denial catalog and the compiler error will say so.
+unconfined_domain_noaudit(spc_t)
+domain_transition_all(spc_t)
