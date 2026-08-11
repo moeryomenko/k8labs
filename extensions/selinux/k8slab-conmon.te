@@ -72,7 +72,8 @@ require {
     class sock_file { create open read write getattr setattr ioctl lock append };
     class fifo_file { create open read write getattr setattr ioctl lock append };
     class tcp_socket { name_connect };
-    class chr_file { open read getattr };
+    class chr_file { create open read write getattr setattr ioctl };
+    class blk_file { create open read write getattr setattr ioctl };
     class filesystem { relabelfrom relabelto mount getattr associate };
     class key { view read write search link setattr create };
     class system { syslog_read };
@@ -98,6 +99,8 @@ allow init_t kernel_t:system syslog_read;
 # class carries only file-object permissions (bind/connect moved to the
 # unix_stream_socket/unix_dgram_socket classes in modern kernels).
 allow init_t container_file_t:sock_file { create open read write getattr setattr ioctl lock append };
+allow init_t container_file_t:blk_file { create open read write getattr setattr ioctl };
+allow init_t container_file_t:chr_file { create open read write getattr setattr ioctl };
 # execute/execute_no_trans on the writable-layer files: crun's access check on
 # the sandbox/container binary after the rootfs is relabeled with the sandbox
 # MCS (container_file_t:s0:c<cats>; scratch proof from test boot 2).
