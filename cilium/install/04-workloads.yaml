@@ -281,7 +281,7 @@ spec:
         - name: CGROUP_ROOT
           value: /run/cilium/cgroupv2
         - name: BIN_PATH
-          value: /opt/cni/bin
+          value: /run/cni/bin
         command:
         - bash
         - -ec
@@ -316,7 +316,7 @@ spec:
         imagePullPolicy: IfNotPresent
         env:
         - name: BIN_PATH
-          value: /opt/cni/bin
+          value: /run/cni/bin
         command:
         - bash
         - -ec
@@ -434,7 +434,7 @@ spec:
         terminationMessagePolicy: FallbackToLogsOnError
         volumeMounts:
           - name: cni-path
-            mountPath: /host/opt/cni/bin # .Values.cni.install
+            mountPath: /host/run/cni/bin # .Values.cni.install
       restartPolicy: Always
       priorityClassName: system-node-critical
       serviceAccountName: "cilium"
@@ -485,7 +485,7 @@ spec:
       # To install cilium cni plugin in the host
       - name: cni-path
         hostPath:
-          path:  /opt/cni/bin
+          path:  /run/cni/bin
           type: DirectoryOrCreate
         # To install cilium cni configuration in the host
       - name: etc-cni-netd

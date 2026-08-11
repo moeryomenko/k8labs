@@ -123,6 +123,13 @@ allow init_t container_runtime_tmpfs_t:file { create open read write getattr set
 allow init_t container_runtime_tmpfs_t:sock_file { create open read write getattr setattr ioctl lock append };
 allow init_t container_runtime_tmpfs_t:fifo_file { create open read write getattr setattr ioctl lock append };
 
+# Cilium CNI binary install on /run: the Cilium init containers run
+# as init_t (this lab has no container-selinux type_transition) and must
+# create/write the CNI bin dir /run/cni/bin on the tmpfs /run hierarchy after
+# the CNI conf dir was relocated out of the read-only /opt.
+allow init_t tmpfs_t:dir { search read write add_name create remove_name rmdir };
+allow init_t tmpfs_t:file { create open read write getattr setattr rename unlink };
+
 # Filesystem relabels for container mounts: crio shm tmpfs (tmpfs_t +
 # container_file_t), crun devpts (devpts_t), and the overlay storage mount
 # (fs_t — crio relabels the overlay fs at startup).
