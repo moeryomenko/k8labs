@@ -18,6 +18,11 @@
 # runtime and also covers a plain-partition root filesystem, so no partition
 # number is hardcoded.
 #
+# lsblk pads column output with spaces (e.g. `lsblk -no PARTN /dev/vda3`
+# prints " 3", right-aligned), so every PARTN/PKNAME/SIZE/END value is
+# whitespace-trimmed (`tr -d ' '`) before it is used as a number or device
+# name — growpart rejects a padded partition number.
+#
 # Idempotency: every step is a no-op when the disk is already fully sized —
 # growpart reports NOCHANGE (exit 1) for an already-grown partition, the parted
 # fallback is guarded by a partition-end size check, pvresize is a no-op when
@@ -74,8 +79,8 @@ grow_partition() {
         # the disk. The last usable GPT sector is a few KiB short of the raw
         # disk end (backup header + entries); allow 4 MiB slack so a
         # fully-grown partition is never re-grown on subsequent boots.
-        disk_bytes=$(lsblk -bno SIZE "${disk_dev}")
-        part_end_bytes=$(lsblk -bno END "${disk_dev}${partnum}")
+        disk_bytes=$(lsblk -bno SIZE "${disk_dev}" | tr -d ' ')
+        part_end_bytes=$(lsblk -bno END "${disk_dev}${partnum}" | tr -d ' ')
         if [ -n "${disk_bytes}" ] && [ -n "${part_end_bytes}" ] && \
             [ "$((disk_bytes - part_end_bytes))" -le 4194304 ]; then
             log "partition ${disk_dev}${partnum} already fills the disk; nothing to do"
@@ -98,8 +103,8 @@ grow_partition() {
 # grow_partition_of PV — grow the partition backing LVM PV "pv" (if any).
 grow_partition_of() {
     pv=$1
-    disk=$(lsblk -no PKNAME "${pv}")
-    partnum=$(lsblk -no PARTN "${pv}")
+    disk=$(lsblk -no PKNAME "${pv}" | tr -d ' ')
+    partnum=$(lsblk -no PARTN "${pv}" | tr -d ' ')
     if [ -z "${disk}" ] || [ -z "${partnum}" ]; then
         log "PV ${pv} is not backed by a partition; skipping partition grow"
         return 0
@@ -179,8 +184,8 @@ grow_lvm_root() {
 # root filesystem sits directly on a partition.
 grow_plain_root() {
     root_dev=$1
-    disk=$(lsblk -no PKNAME "${root_dev}")
-    partnum=$(lsblk -no PARTN "${root_dev}")
+    disk=$(lsblk -no PKNAME "${root_dev}" | tr -d ' ')
+    partnum=$(lsblk -no PARTN "${root_dev}" | tr -d ' ')
     [ -n "${disk}" ] || die "cannot determine disk for root device ${root_dev}"
     [ -n "${partnum}" ] || die "cannot determine partition number for root device ${root_dev}"
     log "root partition ${root_dev} is partition ${partnum} of /dev/${disk}"
