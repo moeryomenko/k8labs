@@ -417,6 +417,9 @@ spec:
         imagePullPolicy: IfNotPresent
         command:
           - "/install-plugin.sh"
+        env:
+          - name: CNI_DIR
+            value: /host/run/cni
         resources:
           limits:
             cpu: 1
