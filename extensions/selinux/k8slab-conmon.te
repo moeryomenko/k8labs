@@ -54,6 +54,8 @@ require {
     type kernel_t;
     type container_file_t;
     type container_var_run_t;
+    type var_run_t;
+    type init_var_run_t;
     type container_runtime_tmpfs_t;
     type iptables_var_run_t;
     type ifconfig_var_run_t;
@@ -129,6 +131,17 @@ allow init_t container_runtime_tmpfs_t:fifo_file { create open read write getatt
 # the CNI conf dir was relocated out of the read-only /opt.
 allow init_t tmpfs_t:dir { search read write add_name create remove_name rmdir };
 allow init_t tmpfs_t:file { create open read write getattr setattr rename unlink };
+
+# Cilium CNI binary EXEC: the config-init container creates
+# /run/cni (and /run/cni/bin) with the init_var_run_t label (matchpathcon
+# expects var_run_t), and the mount-cgroup init container must then exec
+# /run/cni/bin/cilium-mount — init_t is denied execute on init_var_run_t.
+# Allow init_t to execute binaries under either /run label (var_run_t or the
+# runtime-created init_var_run_t).
+allow init_t var_run_t:dir { search read open getattr ioctl };
+allow init_t var_run_t:file { execute execute_no_trans map open read getattr };
+allow init_t init_var_run_t:dir { search read open getattr ioctl };
+allow init_t init_var_run_t:file { execute execute_no_trans map open read getattr };
 
 # Filesystem relabels for container mounts: crio shm tmpfs (tmpfs_t +
 # container_file_t), crun devpts (devpts_t), and the overlay storage mount
