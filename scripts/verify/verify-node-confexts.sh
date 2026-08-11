@@ -82,7 +82,12 @@ node_run() {
         "$@"
     else
         # shellcheck disable=SC2086 # intentional word splitting of ssh options
-        ${SSH_CMD} "$*"
+        # 2>/dev/null: drop ssh's own stderr ("Warning: Permanently added ..."
+        # host-key line appears on every connection with
+        # UserKnownHostsFile=/dev/null); callers capture remote stdout with
+        # 2>&1 for the string-equality checks, and the ssh noise used to
+        # poison is-enabled/is-active/http-code/body comparisons.
+        ${SSH_CMD} "$*" 2>/dev/null
     fi
 }
 

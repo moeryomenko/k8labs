@@ -23,31 +23,39 @@
 #            ssh <user@host> sha256sum /var/lib/confexts/<name>.raw
 #        (or `ssh <user@host> cat /var/lib/confexts/<name>.raw` piped through
 #        local sha256sum); the probe exits 1 / prints nothing when the remote
-#        file does not exist yet.
+#        file does not exist yet. The probe is bounded-retried on transient
+#        ssh failure (PROBE_RETRY_ATTEMPTS x PROBE_RETRY_SLEEP); only after
+#        exhaustion does the script treat the node as unreachable.
 #        Identical hash -> skip the scp for that image.
 #        Different hash -> scp <raw-file> <user@host>:/var/lib/confexts/<name>.raw
 #     2. If at least one image changed:
 #        - ssh <user@host> systemd-confext refresh            (exact command)
 #        - ssh <user@host> systemctl daemon-reload            (exact command)
-#        - enable/start in dependency order with health gates, each as its
+#        - start/restart in dependency order with health gates, each as its
 #          OWN ssh invocation so the sequence is observable:
 #            control-plane (role derived from the image set: presence of
 #            z-etcd.raw, matching outputs.tf node_confexts):
-#              systemctl enable --now crio.service
-#              systemctl enable --now etcd.service
+#              systemctl start crio.service
+#              systemctl start etcd.service
 #              ssh <user@host> etcdctl endpoint health         (wait, exit 0)
-#              systemctl enable --now kube-apiserver.service
+#              systemctl start kube-apiserver.service
 #              ssh <user@host> curl -k -sf https://<cp_ip>:6443/healthz (wait)
-#              systemctl enable --now kube-controller-manager.service
-#              systemctl enable --now kube-scheduler.service
+#              systemctl start kube-controller-manager.service
+#              systemctl start kube-scheduler.service
+#              systemctl start kubelet.service
 #            worker:
-#              systemctl enable --now crio.service
-#              systemctl enable --now kubelet.service
-#        (enable/start may also be `systemctl enable <unit>` + `systemctl
-#        start <unit>`; the unit names and their relative order are what the
-#        tests check, not the exact flag spelling.)
+#              systemctl start crio.service
+#              systemctl start kubelet.service
+#        No enablement is performed by the push step: the units are enabled
+#        by the confext merge itself — package-confext.sh ships each role
+#        image's enablement symlinks inside
+#        etc/systemd/system/multi-user.target.wants/, so the systemd-confext
+#        refresh activates them. The push step must
+#        NOT write into /etc at all (no `ln -sf` into /etc/systemd/, no
+#        `systemctl enable`) — merged /etc is read-only and enable-before-
+#        refresh deterministically fails EROFS.
 #     3. If NO image changed: no scp, no refresh, no daemon-reload, no
-#        enable/start — only the sha256 probe ssh.
+#        start/restart — only the sha256 probe ssh.
 #     4. Errors: missing local .raw, unparseable host arg (no '@' and not
 #        'localhost'), or missing scp/ssh in PATH -> exit non-zero with a
 #        clear message naming the problem.
@@ -110,6 +118,7 @@ TOOLBOX="${WORK}/toolbox"
 LOCAL_DIR="${WORK}/local"
 SCP_LOG="${WORK}/log/scp.log"
 SSH_LOG="${WORK}/log/ssh.log"
+PROBE_FAIL_FILE="${WORK}/log/probe-fail.count"
 mkdir -p "${MOCK_BIN}" "${FAKE_NODE}/var/lib/confexts" "${TOOLBOX}" "${LOCAL_DIR}" "${WORK}/log"
 
 # ---------------------------------------------------------------------------
@@ -183,17 +192,22 @@ for _a in "$@"; do
         _skip=0
         continue
     fi
+    if [ -n "$_host" ]; then
+        # Everything after the destination is the remote command, verbatim
+        # (real ssh semantics): option-looking tokens such as ln -sf's "-sf"
+        # or curl's "-sf" are part of the command, not client options.
+        if [ -z "$_cmd" ]; then
+            _cmd=$_a
+        else
+            _cmd="$_cmd $_a"
+        fi
+        continue
+    fi
     case "${_a}" in
         -i|-o|-p|-l|-F|-E|-J|-W) _skip=1 ;;
         -*) : ;;
         *)
-            if [ -z "$_host" ]; then
-                _host=$_a
-            elif [ -z "$_cmd" ]; then
-                _cmd=$_a
-            else
-                _cmd="$_cmd $_a"
-            fi
+            _host=$_a
             ;;
     esac
 done
@@ -206,6 +220,22 @@ case "$_cmd" in
             _path=$_tok
             break
         done
+        # Transient-failure injection (probe-retry test): while
+        # SSH_PROBE_FAIL_FILE holds a positive count, fail the probe with a
+        # generic ssh error so the push script's bounded retry loop is
+        # exercised; each failure decrements the counter file.
+        _fail_file="${SSH_PROBE_FAIL_FILE:-}"
+        if [ -n "${_fail_file}" ] && [ -f "${_fail_file}" ]; then
+            _left=$(cat "${_fail_file}" 2>/dev/null || true)
+            case "${_left}" in
+                ''|*[!0-9]*) _left=0 ;;
+            esac
+            if [ "${_left}" -gt 0 ]; then
+                printf '%s\n' "$((_left - 1))" > "${_fail_file}"
+                printf 'ssh: connect to host %s port 22: Connection refused\n' "$_host" >&2
+                exit 1
+            fi
+        fi
         if [ -f "${FAKE_NODE_DIR}${_path}" ]; then
             sha256sum "${FAKE_NODE_DIR}${_path}" | sed "s|${FAKE_NODE_DIR}||"
             exit 0
@@ -282,6 +312,23 @@ check_lt() {
     fi
 }
 
+# check_no_enable LOG LABEL — FAIL if the log shows enablement writes into
+# /etc (FIXER-E contract): `ln -sf ... /etc/systemd/...` enablement symlink
+# writes or `systemctl enable`. Enablement ships inside the confext images,
+# so the push step must never touch /etc — merged /etc is read-only and
+# enable-before-refresh fails EROFS.
+check_no_enable() {
+    if grep -F 'ln -sf' "$1" 2>/dev/null | grep -F '/etc/systemd' >/dev/null; then
+        fail "$2: enablement ln -sf write into /etc/systemd ran (must not; enablement ships inside the confext images)"
+        return
+    fi
+    if grep -F 'systemctl enable' "$1" >/dev/null 2>&1; then
+        fail "$2: systemctl enable ran (must not; enablement ships inside the confext images)"
+        return
+    fi
+    pass "$2: no enable/ln -sf writes to /etc/systemd"
+}
+
 # ---------------------------------------------------------------------------
 # Test 1 — identical hash: no push/refresh/enable
 # ---------------------------------------------------------------------------
@@ -305,9 +352,9 @@ else
     pass "t1 identical-hash: no scp PUSH"
 fi
 if grep -qE 'systemd-confext|daemon-reload|systemctl|etcdctl|curl' "${SSH_LOG}" 2>/dev/null; then
-    fail "t1 identical-hash: refresh/daemon-reload/enable/health ssh commands ran (must be skipped)"
+    fail "t1 identical-hash: refresh/daemon-reload/start/health ssh commands ran (must be skipped)"
 else
-    pass "t1 identical-hash: no refresh/enable ssh commands (only the sha256 probe is allowed)"
+    pass "t1 identical-hash: no refresh/start ssh commands (only the sha256 probe is allowed)"
 fi
 if cmp -s "${LOCAL_DIR}/z-etcd.raw" "${FAKE_NODE}/var/lib/confexts/z-etcd.raw"; then
     pass "t1 identical-hash: remote z-etcd.raw unchanged"
@@ -316,7 +363,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 2 — changed hash on cp1: push + refresh + ordered enable
+# Test 2 — changed hash on cp1: push + refresh + ordered start/restart
+# (no enablement writes to /etc)
 # ---------------------------------------------------------------------------
 printf 'etcd-v2\n' > "${LOCAL_DIR}/z-etcd.raw"
 printf 'etcd-v1\n' > "${FAKE_NODE}/var/lib/confexts/z-etcd.raw"
@@ -353,14 +401,17 @@ _a=$(first_sysctl_line "${SSH_LOG}" "kube-apiserver")
 _hz=$(first_line "${SSH_LOG}" "healthz")
 _cm=$(first_sysctl_line "${SSH_LOG}" "kube-controller-manager")
 _sd=$(first_sysctl_line "${SSH_LOG}" "kube-scheduler")
+_k=$(first_sysctl_line "${SSH_LOG}" "kubelet")
 check_lt "${_r}" "${_d}" "t2 order: systemd-confext refresh before systemctl daemon-reload"
-check_lt "${_d}" "${_c}" "t2 order: daemon-reload before crio enable"
-check_lt "${_c}" "${_e}" "t2 order: crio before etcd enable"
-check_lt "${_e}" "${_h}" "t2 order: etcd enable before etcdctl endpoint health wait"
-check_lt "${_h}" "${_a}" "t2 order: etcd health gate before kube-apiserver enable"
-check_lt "${_a}" "${_hz}" "t2 order: apiserver enable before /healthz wait"
-check_lt "${_hz}" "${_cm}" "t2 order: /healthz gate before kube-controller-manager enable"
-check_lt "${_hz}" "${_sd}" "t2 order: /healthz gate before kube-scheduler enable"
+check_lt "${_d}" "${_c}" "t2 order: daemon-reload before crio start"
+check_lt "${_c}" "${_e}" "t2 order: crio before etcd start"
+check_lt "${_e}" "${_h}" "t2 order: etcd start before etcdctl endpoint health wait"
+check_lt "${_h}" "${_a}" "t2 order: etcd health gate before kube-apiserver start"
+check_lt "${_a}" "${_hz}" "t2 order: apiserver start before /healthz wait"
+check_lt "${_hz}" "${_cm}" "t2 order: /healthz gate before kube-controller-manager start"
+check_lt "${_hz}" "${_sd}" "t2 order: /healthz gate before kube-scheduler start"
+check_lt "${_sd}" "${_k}" "t2 order: scheduler before kubelet start"
+check_no_enable "${SSH_LOG}" "t2 changed"
 
 # ---------------------------------------------------------------------------
 # Test 3 — worker: crio -> kubelet, no control-plane units
@@ -385,17 +436,18 @@ fi
 _d=$(first_line "${SSH_LOG}" "daemon-reload")
 _c=$(first_sysctl_line "${SSH_LOG}" "crio")
 _k=$(first_sysctl_line "${SSH_LOG}" "kubelet")
-check_lt "${_d}" "${_c}" "t3 worker order: daemon-reload before crio enable"
-check_lt "${_c}" "${_k}" "t3 worker order: crio before kubelet enable"
+check_lt "${_d}" "${_c}" "t3 worker order: daemon-reload before crio start"
+check_lt "${_c}" "${_k}" "t3 worker order: crio before kubelet start"
+check_no_enable "${SSH_LOG}" "t3 worker"
 if grep -F "systemctl" "${SSH_LOG}" 2>/dev/null | grep -qE 'etcd|kube-apiserver|kube-controller-manager|kube-scheduler'; then
-    fail "t3 worker: control-plane units must not be enabled on a worker"
+    fail "t3 worker: control-plane units must not be started/enabled on a worker"
 else
-    pass "t3 worker: no control-plane units enabled"
+    pass "t3 worker: no control-plane units started/enabled"
 fi
 
 # ---------------------------------------------------------------------------
-# Test 4 — partial change: push only the changed image, still refresh + enable
-# the affected unit
+# Test 4 — partial change: push only the changed image, still refresh +
+# start/restart the affected unit
 # ---------------------------------------------------------------------------
 printf 'etcd-v3\n' > "${LOCAL_DIR}/z-etcd.raw"
 printf 'etcd-v1\n' > "${FAKE_NODE}/var/lib/confexts/z-etcd.raw"
@@ -432,10 +484,11 @@ else
     fail "t4 partial: systemctl daemon-reload did not run"
 fi
 if grep -F "systemctl" "${SSH_LOG}" 2>/dev/null | grep -F "etcd" >/dev/null; then
-    pass "t4 partial: affected unit etcd was (re)started/enabled"
+    pass "t4 partial: affected unit etcd was (re)started"
 else
-    fail "t4 partial: affected unit etcd was not (re)started/enabled"
+    fail "t4 partial: affected unit etcd was not (re)started"
 fi
+check_no_enable "${SSH_LOG}" "t4 partial"
 
 # ---------------------------------------------------------------------------
 # Test 5 — missing scp/ssh in PATH -> clear failure naming the tool
@@ -486,6 +539,62 @@ if [ "${rc}" -ne 0 ] && [ -n "${out}" ]; then
     pass "t8 no args: push script fails with a usage message"
 else
     fail "t8 no args: push script must fail with a usage message (rc=${rc})"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 9 — probe retries preserved: transient ssh failures are retried, not
+# silently skipped; exhaustion still logs WARNING and exits 0 so a
+# fixture apply stays safe (FIXER-E keeps probe_remote_hash bounded retries)
+# ---------------------------------------------------------------------------
+printf 'etcd-retry\n' > "${LOCAL_DIR}/z-etcd.raw"
+printf 'etcd-retry-old\n' > "${FAKE_NODE}/var/lib/confexts/z-etcd.raw"
+printf '2\n' > "${PROBE_FAIL_FILE}"
+: > "${SCP_LOG}"
+: > "${SSH_LOG}"
+out=$(PROBE_RETRY_ATTEMPTS=5 PROBE_RETRY_SLEEP=0 SSH_PROBE_FAIL_FILE="${PROBE_FAIL_FILE}" run_push root@cp1 "${LOCAL_DIR}/z-etcd.raw" 2>&1)
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+    pass "t9 retry: push script exits 0 after transient probe failures"
+else
+    fail "t9 retry: push script exited ${rc} (expected 0 after retries)"
+    printf '%s\n' "${out}" >&2
+fi
+_probe_count=$(grep -c 'sha256sum' "${SSH_LOG}" 2>/dev/null || true)
+if [ "${_probe_count:-0}" -ge 3 ]; then
+    pass "t9 retry: sha256 probe retried (${_probe_count} probe ssh calls for 1 image)"
+else
+    fail "t9 retry: sha256 probe not retried (${_probe_count} probe ssh calls, expected >= 3)"
+fi
+if grep -F "PUSH ${LOCAL_DIR}/z-etcd.raw" "${SCP_LOG}" >/dev/null 2>&1; then
+    pass "t9 retry: image pushed after transient probe failures"
+else
+    fail "t9 retry: image not pushed after transient probe failures"
+fi
+# exhaustion: all PROBE_RETRY_ATTEMPTS probes fail -> WARNING + exit 0
+printf '5\n' > "${PROBE_FAIL_FILE}"
+: > "${SCP_LOG}"
+: > "${SSH_LOG}"
+out=$(PROBE_RETRY_ATTEMPTS=5 PROBE_RETRY_SLEEP=0 SSH_PROBE_FAIL_FILE="${PROBE_FAIL_FILE}" run_push root@cp1 "${LOCAL_DIR}/z-etcd.raw" 2>&1)
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+    pass "t9 exhaust: push script exits 0 after probe exhaustion (fixture-safe)"
+else
+    fail "t9 exhaust: push script exited ${rc} (expected 0, WARNING path)"
+fi
+case "${out}" in
+    *WARNING*) pass "t9 exhaust: WARNING logged after ${PROBE_RETRY_ATTEMPTS:-5} failed probes" ;;
+    *) fail "t9 exhaust: no WARNING in output after probe exhaustion" ;;
+esac
+_exhaust_probes=$(grep -c 'sha256sum' "${SSH_LOG}" 2>/dev/null || true)
+if [ "${_exhaust_probes:-0}" -eq 5 ]; then
+    pass "t9 exhaust: exactly 5 probe attempts before WARNING"
+else
+    fail "t9 exhaust: ${_exhaust_probes} probe attempts (expected 5)"
+fi
+if grep -q '^PUSH ' "${SCP_LOG}" 2>/dev/null; then
+    fail "t9 exhaust: scp PUSH ran although the probe never succeeded"
+else
+    pass "t9 exhaust: no scp PUSH on probe exhaustion"
 fi
 
 # ---------------------------------------------------------------------------
