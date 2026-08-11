@@ -1,0 +1,31 @@
+# k8slab-merge: allow execution of merged sysext binaries.
+#
+# systemd-sysext merges the baked sysext .raw images (squashfs) into /usr via
+# overlayfs. squashfs entries carry no SELinux xattrs, so the merged binaries
+# (/usr/bin/crio, /usr/bin/kubelet, /usr/bin/etcd, /usr/bin/kube-apiserver, ...)
+# are presented as system_u:object_r:unlabeled_t. systemd launches these
+# services from the base init_t domain (no container-selinux type_transition is
+# installed), and the default policy denies init_t execute on unlabeled_t:
+#
+#   avc: denied  { execute }  pid=34504 comm="(crio)" name="crio" dev="overlay"
+#     scontext=system_u:system_r:init_t:s0
+#     tcontext=system_u:object_r:unlabeled_t:s0 tclass=file
+#
+# -> systemctl start crio.service = status=203/EXEC "Permission denied".
+# This module lets init_t execute the merged unlabeled binaries and read the
+# merged overlay paths the exec needs (dir search/read for the path walk,
+# open/read/map for the ELF, execute_no_trans because init_t does not
+# transition). Scoped to the exact denial class + the exec-path companion
+# permissions; no broader unlabeled_t access is granted.
+
+policy_module(k8slab-merge, 1.0)
+
+require {
+    type init_t;
+    type unlabeled_t;
+    class dir { search read };
+    class file { execute execute_no_trans map open read };
+}
+
+allow init_t unlabeled_t:dir { search read };
+allow init_t unlabeled_t:file { execute execute_no_trans map open read };
