@@ -12,45 +12,54 @@
 #   1. For each <raw-file> (must exist locally) the remote path is always
 #      /var/lib/confexts/<name>.raw where <name> is the basename without .raw.
 #      The remote sha256 is probed with `ssh <target> sha256sum
-#      /var/lib/confexts/<name>.raw`; a probe that fails because the remote
+#      /var/lib/confexts/<name>.raw`, with bounded retries for transient
+#      failures on a booting node; a probe that fails because the remote
 #      file does not exist ("No such file" from sha256sum) means the image
 #      must be pushed. Identical hash -> skip that image (no scp, no refresh,
 #      no restart). Different/missing -> `scp <raw-file>
 #      <target>:/var/lib/confexts/<name>.raw`.
 #   2. If at least one image changed:
+#      - ENABLE FIRST, while /etc is still writable: write each unit's
+#        enablement symlink into /etc/systemd/system/multi-user.target.wants/
+#        (every k8s unit's [Install] is WantedBy=multi-user.target, so
+#        `systemctl enable` would create exactly these symlinks; running
+#        `systemctl enable` after the confext refresh that renders /etc
+#        read-only fails EROFS). Each link is its own ssh invocation so the
+#        sequence is observable.
 #      - `ssh <target> systemd-confext refresh`
 #      - `ssh <target> systemctl daemon-reload`
-#      - enable/start in dependency order, each as its OWN ssh invocation so
+#      - start/restart in dependency order, each as its OWN ssh invocation so
 #        the sequence is observable; units whose image changed and
 #        that are already active are then explicitly restarted so the new
 #        confext content is loaded:
 #        control-plane (role derived from the image set: presence of
 #        z-etcd.raw / z-kubernetes-cp.raw):
-#          systemctl enable --now crio.service
-#          systemctl enable --now etcd.service
+#          systemctl start crio.service
+#          systemctl start etcd.service
 #          wait: ssh <target> etcdctl endpoint health
-#          systemctl enable --now kube-apiserver.service
+#          systemctl start kube-apiserver.service
 #          wait: ssh <target> curl -k -sf https://127.0.0.1:6443/healthz
-#          systemctl enable --now kube-controller-manager.service
-#          systemctl enable --now kube-scheduler.service
+#          systemctl start kube-controller-manager.service
+#          systemctl start kube-scheduler.service
+#          systemctl start kubelet.service        (kubelet on ALL nodes)
 #        worker:
-#          systemctl enable --now crio.service
-#          systemctl enable --now kubelet.service
+#          systemctl start crio.service
+#          systemctl start kubelet.service
 #        The affected-unit set is derived from the changed images (z-etcd ->
 #        etcd; z-kubernetes-cp -> kube-apiserver/kube-controller-manager/
 #        kube-scheduler; z-kubelet-<node> -> kubelet) plus crio, which always
 #        applies. For an affected unit the sequence is: probe
-#        `systemctl is-active --quiet <unit>`; `systemctl enable --now <unit>`;
-#        if the probe said the unit was already active, an explicit
+#        `systemctl is-active --quiet <unit>`; `systemctl start <unit>`; if the
+#        probe said the unit was already active, an explicit
 #        `systemctl restart <unit>` follows so the running service picks up the
 #        new merged content. A first activation (unit inactive) is started once
-#        by enable --now and is not double-started.
+#        by start and is not double-started.
 #   3. If no image changed: only the sha256 probe ssh runs.
 #   4. Errors: missing local .raw, unparseable host arg (no '@' and not
 #      'localhost'), or missing scp/ssh in PATH -> exit non-zero with a clear
 #      message naming the problem. An unreachable host (the probe ssh cannot
-#      connect) logs a WARNING and exits 0 so a fixture apply stays safe; the
-#      real path is validated in E2E.
+#      connect after PROBE_RETRY_ATTEMPTS bounded retries) logs a WARNING and
+#      exits 0 so a fixture apply stays safe; the real path is validated in E2E.
 #
 # Environment:
 #   PUSH_SSH_OPTS  extra ssh options (default: batch-mode + 5s connect timeout,
@@ -59,6 +68,10 @@
 #   PUSH_SCP_OPTS  extra scp options (default: none)
 #   ETCD_WAIT_ATTEMPTS / ETCD_WAIT_SLEEP        etcdctl health retry bounds
 #   APISERVER_WAIT_ATTEMPTS / APISERVER_WAIT_SLEEP  /healthz retry bounds
+#   PROBE_RETRY_ATTEMPTS / PROBE_RETRY_SLEEP    remote sha256 probe retry
+#                  bounds (default 5 attempts x 5s); a transient ssh failure
+#                  on a booting node is retried before the host is treated as
+#                  unreachable
 #
 # POSIX sh only (AGENTS.md); no bashisms, no pipefail.
 # =============================================================================
@@ -106,6 +119,40 @@ for raw in "$@"; do
     fi
 done
 
+# probe_remote_hash <target> <remote-path> — bounded-retry remote sha256 probe
+# Prints the remote hash on success and returns 0; prints an empty line
+# for a missing remote file (sha256sum "No such file") and returns 0 (treated
+# as changed, will push); returns 1 only after PROBE_RETRY_ATTEMPTS transient
+# failures, so a node whose sshd is still coming up is retried instead of being
+# silently skipped.
+probe_remote_hash() {
+    _attempt=0
+    while [ "${_attempt}" -lt "${PROBE_RETRY_ATTEMPTS:-5}" ]; do
+        # shellcheck disable=SC2029 # remote-path is client-constructed (fixed dir + local basename), expansion is intended
+        if _probe_out=$(ssh ${SSH_OPTS} "$1" sha256sum "$2" 2>&1); then
+            printf '%s\n' "${_probe_out%% *}"
+            return 0
+        fi
+        case "${_probe_out}" in
+            *sha256sum:*"No such file"*)
+                # Remote image absent -> treated as changed, will push.
+                printf '\n'
+                return 0
+                ;;
+            *)
+                # Genuine probe failure (host unreachable, sshd still coming
+                # up): retry below, then treat as unreachable when exhausted.
+                :
+                ;;
+        esac
+        _attempt=$((_attempt + 1))
+        if [ "${_attempt}" -lt "${PROBE_RETRY_ATTEMPTS:-5}" ]; then
+            sleep "${PROBE_RETRY_SLEEP:-5}"
+        fi
+    done
+    return 1
+}
+
 # wait_for_etcd <target> — poll `etcdctl endpoint health` over ssh.
 wait_for_etcd() {
     _attempt=0
@@ -132,31 +179,53 @@ wait_for_apiserver() {
     die "kube-apiserver /healthz did not return ok after ${APISERVER_WAIT_ATTEMPTS:-30} attempts"
 }
 
-# start_or_restart <target> <unit> <changed> — enable --now the unit, then, when
-# the unit was already active and its image changed, restart it so the new
-# merged confext content is loaded by the running service. The
-# is-active probe runs before enable so a first activation (unit inactive) is
-# started once by enable --now and not double-started. Each step is its own ssh
-# invocation so the sequence is observable.
+# start_or_restart <target> <unit> <changed> — start the unit, then, when the
+# unit was already active and its image changed, restart it so the new merged
+# confext content is loaded by the running service. The unit was
+# already enabled by enable_symlinks (before the confext refresh), so this step
+# only starts/restarts and never writes into the read-only merged /etc.
+# The is-active probe runs before start so a first activation (unit inactive)
+# is started once and not double-started. Each step is its own ssh invocation
+# so the sequence is observable.
 start_or_restart() {
     _was_active=0
     if ssh ${SSH_OPTS} "$1" systemctl is-active --quiet "$2"; then
         _was_active=1
     fi
-    ssh ${SSH_OPTS} "$1" systemctl enable --now "$2"
+    # shellcheck disable=SC2029 # unit name is client-constructed (trusted literals from start_units), expansion is intended
+    ssh ${SSH_OPTS} "$1" systemctl start "$2"
     if [ "${_was_active}" -eq 1 ] && [ "$3" -eq 1 ]; then
-        # shellcheck disable=SC2029 # unit name is client-constructed (trusted literals from enable_units), expansion is intended
+        # shellcheck disable=SC2029 # unit name is client-constructed (trusted literals from start_units), expansion is intended
         ssh ${SSH_OPTS} "$1" systemctl restart "$2"
     fi
 }
 
-# enable_units <target> <role> <etcd_changed> <kcp_changed> <kubelet_changed>
-# — systemctl enable --now in dependency order with health gates, one ssh
+# enable_symlinks <target> <role> — write each unit's enablement symlink into
+# /etc/systemd/system/multi-user.target.wants/ while /etc is still writable,
+# i.e. BEFORE the confext refresh that renders it read-only. Every k8s
+# unit's [Install] is WantedBy=multi-user.target, so `systemctl enable` would
+# create exactly these symlinks; the unit files already exist in the merged
+# /usr from the boot-time sysext merge. Each link is its own ssh invocation so
+# the sequence is observable. kubelet is enabled on ALL nodes
+# (ordered-start); on control-plane it follows the scheduler in the enable order.
+enable_symlinks() {
+    _units="crio.service kubelet.service"
+    if [ "$2" = "control-plane" ]; then
+        _units="crio.service etcd.service kube-apiserver.service kube-controller-manager.service kube-scheduler.service kubelet.service"
+    fi
+    for _unit in ${_units}; do
+        # shellcheck disable=SC2029 # unit name is client-constructed (trusted literals from the role lists), expansion is intended
+        ssh ${SSH_OPTS} "$1" ln -sf "/usr/lib/systemd/system/${_unit}" "/etc/systemd/system/multi-user.target.wants/${_unit}"
+    done
+}
+
+# start_units <target> <role> <etcd_changed> <kcp_changed> <kubelet_changed>
+# — systemctl start in dependency order with health gates, one ssh
 # invocation per step. crio always applies (it is the first step on
 # every changed-content run); the control-plane units restart only when
 # z-kubernetes-cp changed, etcd only when z-etcd changed, kubelet only when
 # z-kubelet-<node> changed.
-enable_units() {
+start_units() {
     start_or_restart "$1" crio.service 1
     if [ "$2" = "control-plane" ]; then
         start_or_restart "$1" etcd.service "$3"
@@ -165,6 +234,7 @@ enable_units() {
         wait_for_apiserver "$1"
         start_or_restart "$1" kube-controller-manager.service "$4"
         start_or_restart "$1" kube-scheduler.service "$4"
+        start_or_restart "$1" kubelet.service "$5"
     else
         start_or_restart "$1" kubelet.service "$5"
     fi
@@ -192,21 +262,17 @@ for raw in "$@"; do
     local_hash=${local_hash%% *}
 
     # shellcheck disable=SC2029 # remote_path is client-constructed (fixed dir + local basename), expansion is intended
-    if remote_out=$(ssh ${SSH_OPTS} "${target}" sha256sum "${remote_path}" 2>&1); then
-        remote_hash=${remote_out%% *}
-    else
-        case "${remote_out}" in
-            *sha256sum:*"No such file"*)
-                # Remote image absent -> treated as changed, will push.
-                remote_hash=""
-                ;;
-            *)
-                # The probe itself failed (host unreachable, bad identity,
-                # etc.). Keep fixture applies safe: WARNING, no push.
-                echo "push-confext: WARNING: node ${target} unreachable or ssh probe failed; skipping push for this apply" >&2
-                exit 0
-                ;;
-        esac
+    _probe_rc=0
+    # shellcheck disable=SC2310,SC2311 # probe failure is handled by the caller (WARNING + exit 0), not by set -e; POSIX sh has no inherit_errexit
+    remote_hash=$(probe_remote_hash "${target}" "${remote_path}") || _probe_rc=$?
+    if [ "${_probe_rc}" -ne 0 ]; then
+        # The probe failed after all retries (host unreachable, bad identity,
+        # etc.). Keep fixture applies safe: WARNING, no push. Real nodes are
+        # retried for PROBE_RETRY_ATTEMPTS x PROBE_RETRY_SLEEP before this is
+        # reached, so a transient sshd race on a booting node no longer skips
+        # the push silently.
+        echo "push-confext: WARNING: node ${target} unreachable or ssh probe failed after ${PROBE_RETRY_ATTEMPTS:-5} attempts; skipping push for this apply" >&2
+        exit 0
     fi
 
     if [ "${local_hash}" = "${remote_hash}" ]; then
@@ -229,13 +295,16 @@ if [ "${changed}" -eq 0 ]; then
     exit 0
 fi
 
+echo "push-confext: enable units on ${target} (role=${role}) before confext refresh"
+enable_symlinks "${target}" "${role}"
+
 echo "push-confext: refresh confext overlay on ${target}"
 ssh ${SSH_OPTS} "${target}" systemd-confext refresh
 
 echo "push-confext: reload systemd on ${target}"
 ssh ${SSH_OPTS} "${target}" systemctl daemon-reload
 
-echo "push-confext: enable/start services on ${target} (role=${role})"
-enable_units "${target}" "${role}" "${etcd_changed}" "${kcp_changed}" "${kubelet_changed}"
+echo "push-confext: start/restart services on ${target} (role=${role})"
+start_units "${target}" "${role}" "${etcd_changed}" "${kcp_changed}" "${kubelet_changed}"
 
 exit 0

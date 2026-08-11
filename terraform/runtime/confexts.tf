@@ -63,6 +63,7 @@ locals {
     {
       "z-kubernetes-cp/etc/kubernetes/cp.env"                                     = templatefile("${path.module}/templates/cp.env.tftpl", { cp_ip = var.cp_ip })
       "z-kubernetes-cp/etc/kubernetes/pki/ca.pem"                                 = local_file.ca_cert.content
+      "z-kubernetes-cp/etc/kubernetes/pki/ca-key.pem"                             = local_file.ca_key.content
       "z-kubernetes-cp/etc/kubernetes/pki/kubernetes.pem"                         = local_file.apiserver_cert.content
       "z-kubernetes-cp/etc/kubernetes/pki/kubernetes-key.pem"                     = local_file.apiserver_key.content
       "z-kubernetes-cp/etc/kubernetes/pki/front-proxy-ca.pem"                     = local_file.front_proxy_ca_cert.content
