@@ -231,7 +231,7 @@ spec:
           mountPath: /var/run/cilium/netns
           mountPropagation: HostToContainer
         - name: etc-cni-netd
-          mountPath: /host/etc/cni/net.d
+          mountPath: /host/run/cni/net.d
         - name: clustermesh-secrets
           mountPath: /var/lib/cilium/clustermesh
           readOnly: true
@@ -490,7 +490,7 @@ spec:
         # To install cilium cni configuration in the host
       - name: etc-cni-netd
         hostPath:
-          path: /etc/cni/net.d
+          path: /run/cni/net.d
           type: DirectoryOrCreate
         # To be able to load kernel modules
       - name: lib-modules

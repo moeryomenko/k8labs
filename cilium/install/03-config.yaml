@@ -181,7 +181,11 @@ data:
   enable-k8s-networkpolicy: "true"
   enable-endpoint-lockdown-on-policy-overflow: "false"
   # Tell the agent to generate and write a CNI configuration file
-  write-cni-conf-when-ready: /host/etc/cni/net.d/05-cilium.conflist
+  # /etc/cni/net.d is read-only once confexts merge; cri-o reads
+  # confs from /run/cni/net.d (confext-cri-o crio.conf network_dir), so the
+  # agent must write there. /host/run maps to the host /run via the
+  # etc-cni-netd volume in 04-workloads.yaml.
+  write-cni-conf-when-ready: /host/run/cni/net.d/05-cilium.conflist
   cni-exclusive: "true"
   cni-log-file: "/var/run/cilium/cilium-cni.log"
   enable-endpoint-health-checking: "true"

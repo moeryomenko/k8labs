@@ -5,7 +5,6 @@ cgroupDriver: systemd
 failSwapOn: false
 staticPodPath: ""
 # clusterDNS: pods resolve via the CoreDNS kube-dns Service (10.96.0.10).
-# Keep in sync with twin template: ansible/roles/kubelet/templates/config.yaml.j2
 clusterDNS:
   - 10.96.0.10
 # clusterDomain must match the kube-dns Service search domain (see plan assumption log)
@@ -16,7 +15,11 @@ authentication:
   webhook:
     enabled: true
   x509:
-    clientCAFile: /var/lib/kubelet/pki/ca.pem
+    # CA ships at /etc/kubernetes/pki/ca.pem via the z-kubelet-<node> runtime
+    # confext. The former /var/lib path for this file was
+    # unreachable: confext merges into /etc ONLY, so that path was
+    # never populated and kubelet crash-looped.
+    clientCAFile: /etc/kubernetes/pki/ca.pem
 authorization:
   mode: Webhook
 healthzBindAddress: 0.0.0.0
