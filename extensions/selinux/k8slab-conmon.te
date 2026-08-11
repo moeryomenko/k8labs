@@ -70,7 +70,9 @@ require {
     type fusefs_t;
     type fusermount_exec_t;
     type unlabeled_t;
+    type container_var_lib_t;
     attribute domain;
+    attribute port_type;
     class file { execute execute_no_trans map open read create write getattr setattr ioctl lock append rename unlink };
     class dir { search read open create write getattr setattr ioctl lock add_name remove_name rmdir unlink };
     class lnk_file { read getattr open };
@@ -288,3 +290,18 @@ allow spc_t self:bpf { map_create map_read map_write prog_load prog_run };
 # known denial catalog and the compiler error will say so.
 unconfined_domain_noaudit(spc_t)
 domain_transition_all(spc_t)
+
+# kubelet/CRI-O port connects: kubelet (init_t) probes pod readiness
+# on arbitrary labeled ports (http_cache_port_t 8080, intermapper_port_t 8181,
+# ephemeral_port_t streaming) and was denied name_connect. Grant init_t tcp
+# name_connect to EVERY port type (port_type attribute) — matching what the
+# container runtime domain gets (corenet_tcp_connect_all_ports).
+allow init_t port_type:tcp_socket name_connect;
+
+# CRI-O short-name cache: cri-o resolves short image names by
+# creating /var/cache/containers/short-name-aliases.conf.lock, which was
+# denied { create } on the default var_t label. Bake the cache dir as
+# container_var_lib_t (03-seal fcontext) and let init_t manage it.
+allow init_t container_var_lib_t:dir { create open read write getattr setattr ioctl lock add_name remove_name rmdir search };
+allow init_t container_var_lib_t:file { create open read write getattr setattr ioctl lock append rename unlink };
+allow init_t container_var_lib_t:lnk_file { create open read write getattr setattr ioctl lock append unlink };
