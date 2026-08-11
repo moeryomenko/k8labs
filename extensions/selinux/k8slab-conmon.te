@@ -79,6 +79,7 @@ require {
     class netlink_xfrm_socket { create bind read write getattr setattr };
     class netlink_generic_socket { create bind read write getattr setattr };
     class bpf { prog_load prog_run map_create map_read map_write };
+    class perf_event { open read write };
     class chr_file { create open read write getattr setattr ioctl };
     class blk_file { create open read write getattr setattr ioctl };
     class filesystem { relabelfrom relabelto mount getattr associate };
@@ -216,6 +217,10 @@ allow init_t init_t:netlink_xfrm_socket { create bind read write getattr setattr
 allow init_t init_t:netlink_generic_socket { create bind read write getattr setattr };
 allow init_t init_t:bpf { prog_load prog_run map_create map_read map_write };
 allow init_t NetworkManager_t:bpf { prog_run };
+
+# Cilium signal manager perf ring: the agent (init_t) creates a
+# perf_event ring buffer for the signals map; SELinux denied perf_event open.
+allow init_t init_t:perf_event { open read write };
 
 # kube-apiserver -> kubelet: apiserver (init_t) connects
 # to the kubelet secure port 10250 (kubernetes_port_t) for logs/exec/top.
