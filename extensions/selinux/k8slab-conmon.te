@@ -50,6 +50,8 @@ require {
     type conmon_exec_t;
     type unreserved_port_t;
     type http_port_t;
+    type kubernetes_port_t;
+    type NetworkManager_t;
     type kmsg_device_t;
     type kernel_t;
     type container_file_t;
@@ -72,6 +74,11 @@ require {
     class sock_file { create open read write getattr setattr ioctl lock append };
     class fifo_file { create open read write getattr setattr ioctl lock append };
     class tcp_socket { name_connect };
+    class netlink_socket { create bind read write getattr setattr };
+    class netlink_route_socket { create bind read write getattr setattr };
+    class netlink_xfrm_socket { create bind read write getattr setattr };
+    class netlink_generic_socket { create bind read write getattr setattr };
+    class bpf { prog_load prog_run map_create map_read map_write };
     class chr_file { create open read write getattr setattr ioctl };
     class blk_file { create open read write getattr setattr ioctl };
     class filesystem { relabelfrom relabelto mount getattr associate };
@@ -198,3 +205,18 @@ allow init_t fusermount_exec_t:file { execute execute_no_trans map open read get
 
 # crio/conmon process management (E2E: process setpgid).
 allow init_t init_t:process { setpgid signal };
+
+# Cilium agent datapath: the cilium-agent main container runs as
+# init_t and its route-reconciler creates netlink sockets (incl. xfrm) and
+# loads/runs BPF programs; SELinux denied netlink_xfrm_socket { create } and
+# bpf { prog_run } on a NetworkManager_t program, killing the agent.
+allow init_t init_t:netlink_socket { create bind read write getattr setattr };
+allow init_t init_t:netlink_route_socket { create bind read write getattr setattr };
+allow init_t init_t:netlink_xfrm_socket { create bind read write getattr setattr };
+allow init_t init_t:netlink_generic_socket { create bind read write getattr setattr };
+allow init_t init_t:bpf { prog_load prog_run map_create map_read map_write };
+allow init_t NetworkManager_t:bpf { prog_run };
+
+# kube-apiserver -> kubelet: apiserver (init_t) connects
+# to the kubelet secure port 10250 (kubernetes_port_t) for logs/exec/top.
+allow init_t kubernetes_port_t:tcp_socket { name_connect };
