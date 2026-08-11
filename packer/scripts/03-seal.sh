@@ -104,6 +104,19 @@ install_selinux_module /root/k8slab-merge.pp k8slab-merge
 # scheduler and pods run under Enforcing; this module ships that coverage.
 install_selinux_module /root/k8slab-conmon.pp k8slab-conmon
 
+# CRI-O short-name cache label: cri-o resolves short image names by
+# creating /var/cache/containers/short-name-aliases.conf.lock; with no fcontext
+# the file is labeled var_t and init_t is denied create. Pre-create the dir in
+# the image with the container_var_lib_t context (the same label container.fc
+# uses) so the runtime can manage it (k8slab-conmon grants init_t manage).
+mkdir -p /var/cache/containers
+if command -v semanage >/dev/null 2>&1; then
+    semanage fcontext -a -t container_var_lib_t '/var/cache/containers(/.*)?' 2>/dev/null || true
+    restorecon -R /var/cache/containers 2>/dev/null || true
+else
+    chcon -R -t container_var_lib_t /var/cache/containers 2>/dev/null || true
+fi
+
 # Make the baked first-boot resize helper executable. The file
 # provisioner preserves the source mode, but the exec bit is load-bearing so
 # it is asserted explicitly.
