@@ -383,6 +383,8 @@ destroy-full: destroy ## Destroy all artifacts (VMs + runtime state + kubeconfig
 	@rm -f terraform/runtime/terraform.tfstate*
 	@echo '==> Removing build/runtime...'
 	@rm -rf build/runtime
+	@echo '==> Removing VM root disks (fresh recreate needs fresh disks)...'
+	@rm -rf build/vm-disks
 	@echo '==> Removing generated certificates...'
 	@find certs/ -type f ! -name '.gitkeep' -delete
 	@find certs/ -type d -empty -delete
