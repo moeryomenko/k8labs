@@ -29,19 +29,33 @@ CLOUDINIT_DISK := build/cloudinit.img
 SSH_KEY := build/packer-ssh-key
 TAP := packer-tap
 PACKER_PLUGIN_SRC := /home/eryoma/workspace/packer-plugin-cloud-hypervisor
-PACKER_PLUGIN := ~/.packer.d/plugins/packer-plugin-cloud-hypervisor
+PACKER_PLUGIN := $(HOME)/.packer.d/plugins/packer-plugin-cloud-hypervisor
+# Pinned commit of the plugin source. Bump when the plugin changes; the
+# `plugin` target rebuilds automatically when the source is newer than the
+# installed binary (communicator validation fix, 952aa92).
+PACKER_PLUGIN_VERSION := 952aa92
 
-.PHONY: plugin
-plugin: ## Build and install Cloud-Hypervisor Packer plugin
+.PHONY: plugin plugin-rebuild
+plugin: ## Build and install Cloud-Hypervisor Packer plugin (rebuilds when the source is newer)
 	@echo '==> Building Cloud-Hypervisor Packer plugin...'
-	@if [ ! -f "$(PACKER_PLUGIN)" ]; then \
-		mkdir -p ~/.packer.d/plugins; \
+	@set -euo pipefail; \
+	if [ -f "$(PACKER_PLUGIN)" ] && [ ! "$(PACKER_PLUGIN_SRC)/go.mod" -nt "$(PACKER_PLUGIN)" ]; then \
+		echo '    Plugin up to date'; \
+	else \
+		mkdir -p "$(HOME)/.packer.d/plugins"; \
 		$(MAKE) -C "$(PACKER_PLUGIN_SRC)" build; \
 		cp "$(PACKER_PLUGIN_SRC)/packer-plugin-cloud-hypervisor" "$(PACKER_PLUGIN)"; \
 		echo '    Installed Packer plugin'; \
-	else \
-		echo '    Plugin already installed'; \
 	fi
+
+plugin-rebuild: ## Force rebuild and reinstall the Cloud-Hypervisor Packer plugin
+	@echo '==> Forcing Cloud-Hypervisor Packer plugin rebuild...'
+	@set -euo pipefail; \
+	rm -f "$(PACKER_PLUGIN)"; \
+	mkdir -p "$(HOME)/.packer.d/plugins"; \
+	$(MAKE) -C "$(PACKER_PLUGIN_SRC)" build; \
+	cp "$(PACKER_PLUGIN_SRC)/packer-plugin-cloud-hypervisor" "$(PACKER_PLUGIN)"; \
+	echo '    Rebuilt and installed Packer plugin'
 
 .PHONY: base-deps
 base-deps: ## Download CLOUDHV.fd firmware and Fedora Cloud Base image
