@@ -1,6 +1,9 @@
 base_image_path = "../build/k8labs-base.qcow2"
 firmware_path  = "../build/CLOUDHV.fd"
 
+# Node identity: every node entry carries name/cpu/ram/disk. mac is optional —
+# when omitted, `make nodes-generate`/`make scale` assigns the next address in
+# the c6:e5:50:1c:ec family and writes it back into the tfvars file.
 control_plane = {
   name = "cp1"
   cpu  = 2

@@ -131,6 +131,31 @@ Pre-built dependencies are cached: re-running `make cluster` skips stages whose 
 
 Run `make validate` to check both the Packer template and the OpenTofu configuration (both root modules) without building anything.
 
+## Node Scaling
+
+`build/deploy.tfvars` (seeded by `make tfvars` from `terraform/terraform.tfvars.example`) is the single source of truth for node identity: the `control_plane` block and every `workers[]` entry carry `name`, `cpu`, `ram`, `disk`, and an optional `mac`. Everything downstream — per-node TAP configs, root disks, VMs, runtime confexts — is derived from this file.
+
+### Adding a worker
+
+1. Append an entry to the `workers` list in `build/deploy.tfvars` with `name`, `cpu`, `ram`, `disk`. The `mac` field is optional: when omitted, `make scale` assigns the next free address in the `c6:e5:50:1c:ec` family and writes it back into the file.
+2. Run `make scale`. The target converges the cluster in order: sync Python tooling (`node-tools`), regenerate and install per-node TAP configs (`network-up`, which also fills missing MACs), create root disks (`vm-disks`), apply phase A (`deploy`) and phase B (`configure`), then RBAC, Cilium, CoreDNS, and finally the smoke test.
+
+### Inspecting the node table
+
+`make nodes` prints one row per node — `name role cpu ram disk mac [ip]` — in parser order (control-plane first, then workers). The IP column comes from the DHCP lease via `scripts/vm-ip.sh` and is blank until a lease exists, so a freshly added node shows its auto-assigned MAC before it has an IP.
+
+### Removing a worker
+
+Removal is symmetric:
+
+1. Delete the worker's entry from `build/deploy.tfvars`.
+2. Run `make scale` — the node's TAP config, root disk, VM, and runtime confext are converged away.
+3. Delete the lingering Kubernetes Node object (the kubelet never removes itself): `kubectl delete node <name>`.
+
+Node definitions are validated without a cluster by `make validate-nodes` (always checks `terraform/terraform.tfvars.example`, plus `build/deploy.tfvars` when present) and as part of `make validate`.
+
+The `research/cpu-sched` tooling derives its worker MAC list from the same tfvars file through the root parser. Override the derivation with exported `WORKER_MACS` (exact list, no derivation) or `WORKER_MACS_TFVARS` (point the derivation at a different tfvars file); see `research/cpu-sched/README.md` for details.
+
 ## Project Structure
 
 The repository is organized by concern, not by lifecycle stage:
