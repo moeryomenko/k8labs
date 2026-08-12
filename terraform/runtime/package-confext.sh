@@ -8,7 +8,10 @@
 # `mksquashfs -noappend -all-root` — the same mechanics as
 # extensions/build.sh. The tree directory name is the image name, so the
 # z-etcd, z-kubernetes-cp and z-kubelet-<node> trees become the .raw files
-# the phase-B push step scps to /var/lib/confexts on each node.
+# the phase-B push step scps to /var/lib/confexts on each node. After
+# packaging, any *.raw whose tree no longer exists under <trees-dir> (e.g. a
+# removed node's z-kubelet image) is pruned, so the output dir converges to
+# the current tree set; non-.raw files are never touched.
 #
 # Usage: package-confext.sh <trees-dir> <output-dir>
 #
@@ -111,6 +114,27 @@ done
 
 if [ "${packaged}" -eq 0 ]; then
     die "no confext trees found under ${trees_dir}"
+fi
+
+# Reconcile the output dir with the current tree set: delete every *.raw
+# whose tree directory is gone (a removed node's z-kubelet-<node> image or
+# any other orphaned image). Non-.raw files are never touched, and images
+# for current trees are kept (they were just rebuilt above).
+pruned=0
+for image in "${output_dir}"/*.raw; do
+    # With no *.raw files the glob stays literal; skip it.
+    if [ ! -f "${image}" ]; then
+        continue
+    fi
+    name=$(basename "${image}" .raw)
+    if [ ! -d "${trees_dir}/${name}" ]; then
+        echo "package-confext: pruning stale image ${image}"
+        rm -f "${image}"
+        pruned=$((pruned + 1))
+    fi
+done
+if [ "${pruned}" -gt 0 ]; then
+    echo "package-confext: pruned ${pruned} stale image(s)"
 fi
 
 echo "package-confext: packaged ${packaged} confext image(s) into ${output_dir}"

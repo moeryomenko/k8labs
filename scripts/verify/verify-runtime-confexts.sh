@@ -19,7 +19,7 @@
 #      etc/kubernetes/pki/ca.pem, admin/controller-manager/scheduler
 #      kubeconfigs, etc/kubernetes/encryption-config.yaml, and the
 #      etc/extension-release.d/extension-release.z-kubernetes-cp metadata.
-#   3. z-kubelet-<node>.raw (cp1, w1, w2): contains etc/kubernetes/kubelet.conf,
+#   3. z-kubelet-<node>.raw (one per node): contains etc/kubernetes/kubelet.conf,
 #      etc/kubernetes/pki/ca.pem, a per-node kubelet cert/key pair, and
 #      etc/extension-release.d/extension-release.z-kubelet-<node> metadata.
 #   4. Every image contains no content outside etc/ (systemd-confext merges
@@ -41,8 +41,8 @@
 # ENVIRONMENT:
 #   CONFEXTS_DIR   rendered confext output directory (default:
 #                  <repo>/build/runtime/confexts)
-#   TFVARS_FILE    tfvars fixture providing cp_ip (default:
-#                  <repo>/terraform/runtime/test.tfvars)
+#   TFVARS_FILE    tfvars fixture providing cp_ip and the node_ips node set
+#                  (default: <repo>/terraform/runtime/test.tfvars)
 #   CP_IP          explicit control-plane IP; overrides the fixture
 #
 # NOTES:
@@ -136,7 +136,7 @@ check_confext_metadata() {
 # Check 0 — output directory exists and holds at least one rendered image
 # ---------------------------------------------------------------------------
 if [ ! -d "${CONFEXTS_DIR}" ]; then
-    fail "output directory does not exist: ${CONFEXTS_DIR} (run the terraform/runtime module apply; confexts_output_dir must resolve here)"
+    fail "output directory does not exist: ${CONFEXTS_DIR} (run make configure first; confexts_output_dir must resolve here)"
     printf 'RESULT: FAIL (%d pass, %d fail, %d skip)\n' "${PASS}" "${FAIL}" "${SKIP}"
     exit 1
 fi
@@ -147,7 +147,7 @@ for _raw in "${CONFEXTS_DIR}"/*.raw; do
     fi
 done
 if [ "${_image_count}" -eq 0 ]; then
-    fail "no .raw confext images rendered in ${CONFEXTS_DIR}"
+    fail "no .raw confext images rendered in ${CONFEXTS_DIR} (run make configure first)"
     printf 'RESULT: FAIL (%d pass, %d fail, %d skip)\n' "${PASS}" "${FAIL}" "${SKIP}"
     exit 1
 fi
@@ -163,6 +163,24 @@ if [ -z "${cp_ip}" ]; then
 fi
 if [ -z "${cp_ip}" ]; then
     fail "cp_ip could not be determined (expected in ${TFVARS_FILE} or via CP_IP env)"
+fi
+
+# --- resolve the expected node set from the tfvars node_ips map ------------
+# The checked node set is derived, never hardcoded. The expected nodes come
+# from the runtime tfvars' node_ips map (a glob over the images on disk cannot
+# detect that a node's image is absent, so the tfvars map is the completeness
+# source); the on-disk z-kubelet-*.raw glob then supplies any additional
+# images (e.g. a node rendered after this tfvars snapshot) for content checks.
+expected_nodes=""
+if [ -f "${TFVARS_FILE}" ]; then
+    _node_ips_block=$(sed -n '/^[[:space:]]*node_ips[[:space:]]*=[[:space:]]*{/,/^[[:space:]]*}/p' "${TFVARS_FILE}" || true)
+    # shellcheck disable=SC2086  # intentional: a name per line becomes words
+    expected_nodes=$(printf '%s\n' "${_node_ips_block}" | sed -n 's/^[[:space:]]*\([A-Za-z0-9._-][A-Za-z0-9._-]*\)[[:space:]]*=[[:space:]]*"[^"]*".*/\1/p' | tr '\n' ' ' || true)
+else
+    fail "node_ips could not be determined (expected ${TFVARS_FILE} with a node_ips = { ... } map)"
+fi
+if [ -z "${expected_nodes}" ] && [ -f "${TFVARS_FILE}" ]; then
+    fail "node_ips map not found in ${TFVARS_FILE} (expected a node_ips = { ... } block)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -270,14 +288,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Check 3 — z-kubelet-<node>.raw (cp1, w1, w2): kubelet.conf + CA + cert/key
+# Check 3 — z-kubelet-<node>.raw (one per node): kubelet.conf + CA + cert/key
 # ---------------------------------------------------------------------------
-for _node in cp1 w1 w2; do
+# Derive the checked node set: every node expected by the tfvars node_ips map
+# (missing image = hard FAIL naming the node) plus every z-kubelet-*.raw image
+# on disk (extra images are content-checked, never rejected). Each node is
+# checked exactly once.
+_checked=""
+for _node in ${expected_nodes}; do
+    # shellcheck disable=SC2086  # intentional: space-separated node list
     kubelet_raw="${CONFEXTS_DIR}/z-kubelet-${_node}.raw"
     if [ ! -f "${kubelet_raw}" ]; then
         fail "check-3 z-kubelet-${_node}.raw missing: ${kubelet_raw}"
         continue
     fi
+    _checked="${_checked} ${_node}"
+done
+for _raw in "${CONFEXTS_DIR}"/z-kubelet-*.raw; do
+    [ -e "${_raw}" ] || continue
+    _node=$(basename "${_raw}" .raw)
+    _node=${_node#z-kubelet-}
+    case " ${_checked} " in
+        *" ${_node} "*) : ;;
+        *) _checked="${_checked} ${_node}" ;;
+    esac
+done
+for _node in ${_checked}; do
+    kubelet_raw="${CONFEXTS_DIR}/z-kubelet-${_node}.raw"
     if [ -z "${UNSQUASHFS}" ]; then
         skip "check-3 z-kubelet-${_node}.raw content check (unsquashfs not found)"
         continue
