@@ -10,10 +10,6 @@ files that replace the imperative bash scripts (`scripts/create-taps.sh`,
 |---|---|
 | `k8sbr0.netdev` | Declares the `k8sbr0` Linux bridge. |
 | `k8sbr0.network` | Assigns `192.168.124.1/24` to the bridge and runs systemd-networkd's built-in DHCP server (pool 192.168.124.20–200, 12h lease, domain `k8s.local`, static lease for the Packer VM at .10). Declares the LB-pool route declaratively as `[Route] Destination=10.0.10.0/24` (`Scope=link`) — this replaced the former imperative `ip route add` in the Makefile, so the route survives networkd reloads and is removed cleanly on teardown. |
-| `k8s-cp1.netdev` | Declares the `k8s-cp1` TAP device for the control-plane VM. |
-| `k8s-cp1.network` | Enslaves `k8s-cp1` TAP to `k8sbr0` bridge. |
-| `k8s-w1.netdev` | Declares the `k8s-w1` TAP device for the first worker VM. |
-| `k8s-w1.network` | Enslaves `k8s-w1` TAP to `k8sbr0` bridge. |
 | `packer-tap.netdev` | Declares the `packer-tap` TAP device for the Packer base-image build VM. |
 | `packer-tap.network` | Enslaves `packer-tap` to `k8sbr0` bridge. |
 | `dnsmasq-k8sbr0.conf` | dnsmasq DNS forwarder for cluster VMs, bound only to the bridge address (192.168.124.1:53). Requires an active `conf-dir=/etc/dnsmasq.d/,*.conf` in `/etc/dnsmasq.conf` (see DNS forwarding). |
@@ -102,30 +98,15 @@ default route through the tunnel (no bypass rule is added) and is double-NAT'd
 to the VPN endpoint; VM egress therefore depends on tunnel health. This is a
 deliberate, documented behavior.
 
-## Enslaving TAPs to the Bridge
+## Per-node TAPs
 
-The `.netdev` files create the TAP devices but do **not** automatically
-attach them to `k8sbr0`. In systemd-networkd, bridge membership is
-configured through `.network` files that match each TAP interface.
-
-For each TAP, create a `.network` file like:
-
-```ini
-# k8s-cp1.network
-[Match]
-Name=k8s-cp1
-
-[Network]
-Bridge=k8sbr0
-```
-
-Copy to `/etc/systemd/network/` alongside the other files.
-
-## Extending for More Workers
-
-To add TAP devices for additional workers, create `k8s-w2.netdev`,
-`k8s-w3.netdev`, etc. and matching `.network` files to enslave them
-to the bridge.
+Per-node TAP devices — one `k8s-<node>.netdev` / `k8s-<node>.network` pair
+per cluster node — are not committed here. `make nodes-generate` derives them
+from `build/deploy.tfvars` into `build/network/`; `make network-up` installs
+them to `/etc/systemd/network/` and removes any stale `k8s-*` pair left over
+from a node that was dropped from tfvars. To add or remove a node's TAP, edit
+the tfvars file and re-run `make network-up`. This directory holds only the
+shared static configs listed above.
 
 ## Requirements
 

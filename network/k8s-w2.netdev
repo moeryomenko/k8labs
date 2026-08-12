@@ -1,9 +1,0 @@
-# k8s-w2.netdev — TAP device for worker node 2
-#
-# Creates a persistent TAP device that the second worker
-# QEMU VM connects to. Must be enslaved to k8sbr0 via a
-# .network file (see README).
-
-[NetDev]
-Name=k8s-w2
-Kind=tap
