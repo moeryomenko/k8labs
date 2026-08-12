@@ -152,13 +152,19 @@ base-rebuild: base-deps base-cloudinit sysexts confexts ## Force rebuild of the 
 
 # --- Networking ---
 
+.PHONY: nodes-generate
+nodes-generate: ## Generate node MACs and per-node systemd-networkd TAP configs from tfvars
+	@echo '==> Assigning missing MACs and generating per-node network configs...'
+	@set -euo pipefail; \
+	REPO="$$(CDPATH='' cd -- "$$(dirname -- "$(lastword $(MAKEFILE_LIST))")" && pwd -P)"; \
+	uv run python "$$REPO/scripts/nodes.py" --fill-macs --tfvars "$$REPO/$(TFVARS)"; \
+	uv run python "$$REPO/scripts/gen-network.py" --tfvars "$$REPO/$(TFVARS)" --output-dir "$$REPO/build/network"
+
 .PHONY: network-up
-network-up: ## Configure bridge+TAP networking + NAT/forwarding + DNS forwarder
+network-up: nodes-generate ## Configure bridge+TAP networking + NAT/forwarding + DNS forwarder
 	@echo '==> Installing systemd-networkd bridge and TAP configs...'
 	sudo cp network/k8sbr0.netdev network/k8sbr0.network /etc/systemd/network/
-	sudo cp network/k8s-cp1.netdev network/k8s-cp1.network /etc/systemd/network/
-	sudo cp network/k8s-w1.netdev network/k8s-w1.network /etc/systemd/network/
-	sudo cp network/k8s-w2.netdev network/k8s-w2.network /etc/systemd/network/
+	sudo scripts/network-reconcile.py build/network /etc/systemd/network
 	sudo cp network/packer-tap.netdev network/packer-tap.network /etc/systemd/network/
 	sudo mkdir -p /etc/systemd/networkd.conf.d
 	sudo cp network/90-k8slab-foreign-rules.conf /etc/systemd/networkd.conf.d/
@@ -190,9 +196,9 @@ network-up: ## Configure bridge+TAP networking + NAT/forwarding + DNS forwarder
 network-down: ## Remove networking configs and scoped k8slab nftables table
 	@echo '==> Removing network configs...'
 	sudo rm -f /etc/systemd/network/k8sbr0.netdev /etc/systemd/network/k8sbr0.network
-	sudo rm -f /etc/systemd/network/k8s-cp1.netdev /etc/systemd/network/k8s-cp1.network
-	sudo rm -f /etc/systemd/network/k8s-w1.netdev /etc/systemd/network/k8s-w1.network
-	sudo rm -f /etc/systemd/network/k8s-w2.netdev /etc/systemd/network/k8s-w2.network
+	rm -rf build/network-empty
+	mkdir -p build/network-empty
+	sudo scripts/network-reconcile.py build/network-empty /etc/systemd/network
 	sudo rm -f /etc/systemd/network/packer-tap.netdev /etc/systemd/network/packer-tap.network
 	sudo rm -f /etc/dnsmasq.d/k8sbr0.conf
 	sudo systemctl restart systemd-networkd
@@ -308,6 +314,7 @@ tfvars: ## Generate terraform.tfvars from defaults for deployment
 vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backing chain)
 	@echo 'Creating VM root disks from base image...'
 	@set -euo pipefail; \
+	REPO="$$(CDPATH='' cd -- "$$(dirname -- "$(lastword $(MAKEFILE_LIST))")" && pwd -P)"; \
 	if [ ! -f "$(BASE_IMAGE_DEST)" ]; then \
 		echo 'ERROR: base image not found: $(BASE_IMAGE_DEST) (run make base first)' >&2; \
 		exit 1; \
@@ -316,13 +323,13 @@ vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backi
 		echo 'ERROR: $(TFVARS) not found (run make tfvars first)' >&2; \
 		exit 1; \
 	fi; \
+	NODES_JSON="$$($${VM_DISKS_NODES_CMD:-uv run python "$$REPO/scripts/nodes.py" --list --tfvars "$(TFVARS)"})"; \
+	PAIRS="$$(printf '%s\n' "$$NODES_JSON" | grep -E '"name"|"disk"' | tr -d ' ,"' | awk -F: '{print $$2}' | paste - -)"; \
 	mkdir -p build/vm-disks; \
 	VDIR="$$(pwd)/build/vm-disks"; \
 	BASE="$$(pwd)/$(BASE_IMAGE_DEST)"; \
-	{ \
-		grep -A8 '^control_plane' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk -F= '{print $$2}'; \
-		grep -A8 'name = "w' "$(TFVARS)" | grep -E 'name|disk' | tr -d ' ,"' | awk -F= '{print $$2}'; \
-	} | paste - - 2>/dev/null | while read -r node size; do \
+	printf '%s\n' "$$PAIRS" | while IFS=$$'\t' read -r node size; do \
+		[ -n "$$node" ] || continue; \
 		disk="$${VDIR}/$${node}-root.qcow2"; \
 		if [ ! -f "$$disk" ]; then \
 			echo "  Creating $$disk ($${size} MiB)..."; \
@@ -330,6 +337,14 @@ vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backi
 			qemu-img resize "$$disk" "$${size}M" >/dev/null; \
 		else \
 			echo "  $$disk already exists"; \
+		fi; \
+	done; \
+	for disk in "$$VDIR"/*-root.qcow2; do \
+		[ -e "$$disk" ] || continue; \
+		node="$$(basename "$$disk" -root.qcow2)"; \
+		if ! printf '%s\n' "$$PAIRS" | cut -f1 | grep -F -qx "$$node"; then \
+			echo "  Deleting orphaned disk: $$disk"; \
+			rm -f "$$disk"; \
 		fi; \
 	done; \
 	echo '  VM disks ready'
@@ -486,7 +501,7 @@ configure: wait-ips wait-ssh ## Configure phase B: generate PKI + role confexts 
 	tofu -chdir=terraform/runtime apply -auto-approve -var-file=../../build/runtime.tfvars
 
 .PHONY: prereq
-prereq: ## Validate required build tools (tofu, cloud-hypervisor, openssl, nft, systemctl, jq, python3)
+prereq: ## Validate required build tools (tofu, cloud-hypervisor, openssl, nft, systemctl, jq, python3) and Python venv
 	@set -euo pipefail; \
 	fail=0; \
 	for cmd in tofu cloud-hypervisor openssl nft systemctl jq python3; do \
@@ -495,6 +510,10 @@ prereq: ## Validate required build tools (tofu, cloud-hypervisor, openssl, nft, 
 			fail=1; \
 		fi; \
 	done; \
+	if [ ! -d ".venv" ]; then \
+		echo "ERROR: Python virtual environment '.venv' not found - run make node-tools first" >&2; \
+		fail=1; \
+	fi; \
 	exit $$fail
 
 .PHONY: cluster
@@ -527,6 +546,36 @@ cluster: network-up base tfvars vm-disks sysexts confexts ## Full pipeline: netw
 	echo '  Step 6: Smoke test...'; \
 	$(MAKE) smoke-test; \
 	echo 'Cluster build complete.'
+
+# --- Node Scaling ---
+#
+# build/deploy.tfvars is the single source of truth for node identity: the
+# control_plane block and every workers[] entry carry name/cpu/ram/disk with
+# an optional mac. These targets converge host state (TAP configs, root
+# disks, VMs, runtime confexts) to match the file and report the resulting
+# table. `make nodes` honors two environment overrides: NODES_TFVARS (tfvars
+# path, default $(TFVARS)) and VM_IP_CMD (MAC-to-IP resolver, default
+# scripts/vm-ip.sh).
+
+.PHONY: scale
+scale: node-tools network-up vm-disks deploy configure rbac cilium coredns smoke-test ## Converge the cluster to match tfvars (node-tools -> network-up -> vm-disks -> deploy -> configure -> rbac -> cilium -> coredns -> smoke-test)
+	@echo '==> Scaling cluster to match tfvars...'
+
+.PHONY: nodes
+nodes: ## Print the node table (name role cpu ram disk mac [ip]) from tfvars + DHCP leases
+	@set -euo pipefail; \
+	REPO="$$(CDPATH='' cd -- "$$(dirname -- "$(lastword $(MAKEFILE_LIST))")" && pwd -P)"; \
+	NODES_TFVARS="$${NODES_TFVARS:-$(TFVARS)}"; \
+	VM_IP_CMD="$${VM_IP_CMD:-scripts/vm-ip.sh}"; \
+	NODES_JSON="$$(uv run python "$$REPO/scripts/nodes.py" --list --tfvars "$$NODES_TFVARS")"; \
+	printf '%s\n' "$$NODES_JSON" | jq -r '.[] | [.name, .role, (.cpu|tostring), (.ram|tostring), (.disk|tostring), .mac] | @tsv' | while IFS=$$'\t' read -r name role cpu ram disk mac; do \
+		row="$$name $$role $$cpu $$ram $$disk $$mac"; \
+		if [ -n "$$mac" ]; then \
+			ip="$$("$$VM_IP_CMD" "$$mac" 2>/dev/null || true)"; \
+			[ -n "$$ip" ] && row="$$row $$ip"; \
+		fi; \
+		echo "$$row"; \
+	done
 
 # --- kubeconfig ---
 
@@ -835,6 +884,18 @@ clean: ## Remove build artifacts
 	@echo 'Removing build artifacts...'
 	rm -rf build/ extensions/release/*.raw
 
+# --- Python Tooling ---
+
+.PHONY: node-tools
+node-tools: ## Sync Python tooling with uv (creates .venv, idempotent)
+	@echo '==> Syncing Python tooling (uv sync)...'
+	uv sync
+
+.PHONY: test
+test: ## Run the Python test suite (pytest)
+	@echo '==> Running Python tests (pytest)...'
+	uv run pytest tests/
+
 # --- Validation ---
 
 .PHONY: validate-packer
@@ -850,7 +911,20 @@ validate-terraform: ## Validate Terraform/OpenTofu configuration (both root modu
 	tofu -chdir=terraform validate
 	tofu -chdir=terraform/runtime validate
 
+.PHONY: validate-nodes
+validate-nodes: ## Validate node definitions in tfvars (example always, deploy.tfvars when present)
+	@set -euo pipefail; \
+	REPO="$$(CDPATH='' cd -- "$$(dirname -- "$(lastword $(MAKEFILE_LIST))")" && pwd -P)"; \
+	echo 'Validating node definitions in terraform/terraform.tfvars.example...'; \
+	uv run python "$$REPO/scripts/nodes.py" --validate --tfvars "$$REPO/terraform/terraform.tfvars.example"; \
+	if [ -f "$$REPO/$(TFVARS)" ]; then \
+		echo "Validating node definitions in $(TFVARS)..."; \
+		uv run python "$$REPO/scripts/nodes.py" --validate --tfvars "$$REPO/$(TFVARS)"; \
+	else \
+		echo "    $(TFVARS) not present, skipping deploy tfvars validation"; \
+	fi
+
 .PHONY: validate
-validate: validate-packer validate-terraform ## Run all validations (packer + terraform)
+validate: node-tools validate-packer validate-terraform validate-nodes ## Run all validations (packer + tofu + node consistency)
 	@echo 'All validations passed.'
 

@@ -3,6 +3,7 @@
 opentofu = "1.8.0"
 packer = "1.11.2"
 kubectl = "1.32.0"
+uv = "0.12.3"
 
 [env]
 # Use project-wide kubeconfig so kubectl works without --kubeconfig flag
