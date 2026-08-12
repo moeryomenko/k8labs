@@ -854,32 +854,3 @@ validate-terraform: ## Validate Terraform/OpenTofu configuration (both root modu
 validate: validate-packer validate-terraform ## Run all validations (packer + terraform)
 	@echo 'All validations passed.'
 
-# --- Research Experiments ---
-
-.PHONY: experiment-weight-share
-experiment-weight-share: ## Run weight-share experiment (delegates to research)
-	$(MAKE) -C research experiment-weight-share
-
-.PHONY: experiment-request-limit-matrix
-experiment-request-limit-matrix: ## Run request-limit-matrix experiment (delegates to research)
-	$(MAKE) -C research experiment-request-limit-matrix
-
-.PHONY: experiment-qos-hierarchy
-experiment-qos-hierarchy: ## Run qos-hierarchy experiment (delegates to research)
-	$(MAKE) -C research experiment-qos-hierarchy
-
-.PHONY: experiment-latency-interference
-experiment-latency-interference: ## Run latency-interference experiment (delegates to research)
-	$(MAKE) -C research experiment-latency-interference
-
-.PHONY: experiment-cpu-burst
-experiment-cpu-burst: ## Run cpu-burst experiment (delegates to research)
-	$(MAKE) -C research experiment-cpu-burst
-
-.PHONY: experiment-tunables-contention
-experiment-tunables-contention: ## Run tunables-contention experiment (delegates to research)
-	$(MAKE) -C research experiment-tunables-contention
-
-.PHONY: interaction-report
-interaction-report: ## Regenerate interaction-report.md from staged data (delegates to research)
-	$(MAKE) -C research interaction-report
