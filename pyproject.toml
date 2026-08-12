@@ -1,0 +1,45 @@
+[project]
+name = "k8labs-node-tooling"
+version = "0.1.0"
+description = "Declarative node-scaling tooling for k8labs"
+requires-python = ">=3.11"
+dependencies = [
+    "python-hcl2==8.1.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-custom_exit_code>=0.3.0",
+    "ruff>=0.9",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+# The research sub-project is its own uv project, and .plans/.agent/.specs are
+# orchestration-artifact trees; keep them out of the root tooling lint scope.
+# extend-exclude is additive to ruff's default exclude list.
+extend-exclude = ["research", ".plans", ".agent", ".specs"]
+target-version = "py311"
+
+[tool.pytest.ini_options]
+# Root tests live under tests/ (created by later tasks). research/ is a
+# separate project and the default norecursedirs list must be spelled out
+# because setting the option replaces it. pytest-custom_exit_code maps the
+# empty-suite exit code 5 to 0 so the initial bootstrap state passes.
+testpaths = ["tests"]
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "research",
+]
+addopts = "--suppress-no-test-exit-code"

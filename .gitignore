@@ -4,6 +4,9 @@ build/base/
 *.qcow2
 *.iso
 
+# Python virtual environment — created by uv sync
+.venv/
+
 # Extension release artifacts — squashfs images and directory-mode copies (reproducible)
 extensions/release/*.raw
 extensions/release/*/
@@ -40,6 +43,12 @@ crash.*.log
 # .tfvars files contain sensitive data — never commit
 *.tfvars
 *.tfvars.json
+
+# Parser test fixtures are intentionally committed (canonical parser inputs)
+!tests/fixtures/*.tfvars
+
+# Research bats fixtures are intentionally committed (derivation test inputs)
+!research/cpu-sched/experiments/tests/fixtures/*.tfvars
 
 # Override files are local-only
 override.tf
