@@ -22,9 +22,12 @@ in ``tests/fixtures/`` are shared with the parser tests; ``example.tfvars``
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = REPO_ROOT / "scripts" / "gen-network.py"
@@ -152,6 +155,28 @@ def test_output_dir_is_recreated_from_scratch(tmp_path: Path) -> None:
     assert proc.returncode == 0
     assert sorted(entry.name for entry in output_dir.iterdir()) == EXPECTED_FILES
     assert not (output_dir / "junk-subdir").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses permission checks")
+def test_output_dir_with_unremovable_content_fails_with_permission_cause(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "network"
+    output_dir.mkdir(parents=True)
+    locked = output_dir / "locked-subdir"
+    locked.mkdir()
+    (locked / "junk.bin").write_bytes(b"\x00\x01")
+    locked.chmod(0o000)
+    try:
+        proc = run_generator(FIXTURES / "example.tfvars", output_dir)
+    finally:
+        # Restore permissions so pytest's tmp_path cleanup can remove the tree.
+        locked.chmod(0o700)
+
+    assert proc.returncode != 0
+    assert proc.stdout == ""
+    assert str(output_dir) in proc.stderr
+    assert "Permission" in proc.stderr
 
 
 def test_missing_tfvars_exits_nonzero_with_message(tmp_path: Path) -> None:
