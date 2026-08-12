@@ -102,9 +102,8 @@ log_error() { printf '[ERROR] %s\n' "$*" >&2; }
 # ($DNSMASQ_LEASES) by MAC address. VMs are configured with predictable MACs
 # in terraform.tfvars. get_worker_ips prints IPs in WORKER_MACS order.
 
-# MAC addresses for node resolution (must match terraform.tfvars)
+# Control-plane MAC for node resolution (must match terraform.tfvars)
 : "${CP_MAC:=c6:e5:50:1c:ec:01}"
-: "${WORKER_MACS:=c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03}"
 
 get_cp_ip() {
     get_node_ip "$CP_MAC"

@@ -94,9 +94,6 @@ require_cluster() {
 # resolve node IPs from the systemd-networkd DHCP server lease (authoritative)
 # with a dnsmasq fallback, ordered by WORKER_MACS.
 
-# Worker MACs for node resolution (must match terraform.tfvars)
-: "${WORKER_MACS:=c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03}"
-
 # ---- Template Substitution ----
 
 # ---------------------------------------------------------------------------

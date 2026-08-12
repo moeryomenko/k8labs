@@ -1,0 +1,37 @@
+{
+  "BootID": "d7f5041316de4f1f992a8a2822218a71",
+  "Address": [192, 168, 124, 1],
+  "PrefixLength": 24,
+  "Leases": [
+    {
+      "ClientId": [1, 198, 229, 80, 28, 236, 2],
+      "AddressString": "192.168.124.26",
+      "Address": [192, 168, 124, 26],
+      "Hostname": "w1",
+      "HardwareAddressType": 1,
+      "HardwareAddressLength": 6,
+      "HardwareAddress": [198, 229, 80, 28, 236, 2],
+      "ExpirationRealtimeUSec": 1785791504658855
+    },
+    {
+      "ClientId": [1, 198, 229, 80, 28, 236, 3],
+      "AddressString": "192.168.124.27",
+      "Address": [192, 168, 124, 27],
+      "Hostname": "w2",
+      "HardwareAddressType": 1,
+      "HardwareAddressLength": 6,
+      "HardwareAddress": [198, 229, 80, 28, 236, 3],
+      "ExpirationRealtimeUSec": 1785791504658855
+    },
+    {
+      "ClientId": [1, 198, 229, 80, 28, 236, 4],
+      "AddressString": "192.168.124.29",
+      "Address": [192, 168, 124, 29],
+      "Hostname": "w3",
+      "HardwareAddressType": 1,
+      "HardwareAddressLength": 6,
+      "HardwareAddress": [198, 229, 80, 28, 236, 4],
+      "ExpirationRealtimeUSec": 1785791504658855
+    }
+  ]
+}

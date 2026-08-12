@@ -193,6 +193,26 @@ research/cpu-sched/experiments/data/
 
 ## Research Tooling
 
+### Worker MAC Resolution (`WORKER_MACS`)
+
+Worker IP discovery (`get_worker_ips` in `bin/lease-common.sh`) resolves the
+cluster's worker MACs from the k8labs tfvars source of truth instead of a
+hardcoded list. When `WORKER_MACS` is unset or empty, sourcing
+`lease-common.sh` derives the list from the root parser
+(`scripts/nodes.py --worker-macs`, run via the root venv) against
+`build/deploy.tfvars`; any derivation failure (missing tfvars/venv/parser)
+falls back non-fatally to the historical two-MAC default
+(`c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03`). A successful parse that yields zero
+workers leaves the list empty so resolution fails loudly.
+
+Override the derivation:
+
+- `export WORKER_MACS="c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03"` — use this exact
+  list as-is; no derivation runs. Useful when the live cluster differs from
+  tfvars or the tfvars file is absent.
+- `export WORKER_MACS_TFVARS=/path/to/deploy.tfvars` — point the derivation at
+  a different tfvars file (default `<repo-root>/build/deploy.tfvars`).
+
 ### Cgroup Observation Tools (`research/cpu-sched/bin/`)
 
 | Tool | Description |

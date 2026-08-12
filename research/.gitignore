@@ -5,6 +5,7 @@ cpu-sched/analysis/output/
 *.json
 !cpu-sched/data/tunable-sets.json
 !cpu-sched/data/tunable-baseline.json
+!cpu-sched/experiments/tests/fixtures/*.json
 *.png
 *.pyc
 __pycache__/

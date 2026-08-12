@@ -16,9 +16,12 @@
 #   get_node_ip <mac> [--lease-file PATH] -> IP for a single MAC
 #
 # Environment (overridable before sourcing):
-#   SYSTEMD_LEASES   systemd-networkd DHCP server lease JSON path
-#   DNSMASQ_LEASES   dnsmasq lease fallback path
-#   WORKER_MACS      space-separated worker MACs (w1 then w2)
+#   SYSTEMD_LEASES     systemd-networkd DHCP server lease JSON path
+#   DNSMASQ_LEASES     dnsmasq lease fallback path
+#   WORKER_MACS        space-separated worker MACs; when unset or empty it is
+#                      derived from tfvars at source time (see below)
+#   WORKER_MACS_TFVARS tfvars file used by the WORKER_MACS derivation
+#                      (default: <repo-root>/build/deploy.tfvars)
 #
 # Usage in scripts:
 #   source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/lease-common.sh"
@@ -35,7 +38,65 @@ set -Eeuo pipefail
 # ---- Lease paths (overridable via env) ----
 : "${SYSTEMD_LEASES:=/var/lib/systemd/network/dhcp-server-lease/k8sbr0}"
 : "${DNSMASQ_LEASES:=/var/lib/misc/dnsmasq/k8sbr0.leases}"
-: "${WORKER_MACS:=c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03}"
+
+# ---------------------------------------------------------------------------
+# _lease_find_project_root — Print the k8labs repository root, or nothing.
+#
+# Mirrors cgroup-common.sh's find_project_root: git rev-parse first, then an
+# upward walk for Makefile + terraform/ markers. Prints the root (or nothing
+# when not found); always returns 0 so the caller can use a plain assignment
+# under strict mode. Used by the WORKER_MACS derivation, which must run the
+# root parser (scripts/nodes.py via the root venv) from the repository root.
+# ---------------------------------------------------------------------------
+_lease_find_project_root() {
+    local dir
+    dir="$(git rev-parse --show-toplevel 2>/dev/null)" && {
+        printf '%s\n' "${dir}"
+        return 0
+    }
+
+    dir="${PWD}"
+    while [[ "${dir}" != "/" ]]; do
+        if [[ -f "${dir}/Makefile" && -d "${dir}/terraform" ]]; then
+            printf '%s\n' "${dir}"
+            return 0
+        fi
+        dir="$(dirname "${dir}")"
+    done
+
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# WORKER_MACS derivation (source-time, once per process)
+#
+# When WORKER_MACS is unset or empty, derive the worker MAC list from the
+# root parser: `uv run python scripts/nodes.py --worker-macs` against the
+# tfvars file named by $WORKER_MACS_TFVARS (default:
+# <repo-root>/build/deploy.tfvars). An exported non-empty WORKER_MACS wins
+# and no derivation runs. Any derivation failure (missing tfvars/venv,
+# missing scripts/nodes.py, parser error, non-zero exit) falls back
+# non-fatally to the historical two-MAC default; a successful parse that
+# yields zero workers leaves WORKER_MACS empty so resolution fails loudly
+# later.
+# ---------------------------------------------------------------------------
+if [[ -z "${WORKER_MACS:-}" ]]; then
+    _LEASE_ROOT="$( _lease_find_project_root 2>/dev/null )"
+
+    _LEASE_TFVARS="${WORKER_MACS_TFVARS:-}"
+    if [[ -z "${_LEASE_TFVARS}" && -n "${_LEASE_ROOT}" ]]; then
+        _LEASE_TFVARS="${_LEASE_ROOT}/build/deploy.tfvars"
+    fi
+
+    if [[ -n "${_LEASE_TFVARS}" ]] && _LEASE_DERIVED="$(
+        cd -- "${_LEASE_ROOT}" 2>/dev/null &&
+        uv run python scripts/nodes.py --worker-macs --tfvars "${_LEASE_TFVARS}" 2>/dev/null
+    )"; then
+        WORKER_MACS="${_LEASE_DERIVED}"
+    else
+        WORKER_MACS="c6:e5:50:1c:ec:02 c6:e5:50:1c:ec:03"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # read_leases_systemd — Print "mac ip" lines from the systemd-networkd DHCP
@@ -98,7 +159,7 @@ read_leases_dnsmasq() {
 }
 
 # ---------------------------------------------------------------------------
-# _lease_map — Print the effective MAC->IP mapping ("mac ip" lines).
+# _lease_map — Print the effective MAC and IP mapping ("mac ip" lines).
 #
 # systemd lease first (inventory.py order); the dnsmasq lease is used only
 # when the systemd mapping is empty (missing file, malformed JSON, or no
