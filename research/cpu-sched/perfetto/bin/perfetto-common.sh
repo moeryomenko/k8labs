@@ -101,7 +101,7 @@ check_tracebox_available() {
 # ---------------------------------------------------------------------------
 # upload_config — SCP a local trace config file to /tmp/ on the node
 #
-# Looks for the config file in research/perfetto/configs/ relative to the
+# Looks for the config file in research/cpu-sched/perfetto/configs/ relative to the
 # script directory.
 # ---------------------------------------------------------------------------
 upload_config() {

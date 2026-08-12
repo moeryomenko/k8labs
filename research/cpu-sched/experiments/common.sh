@@ -595,7 +595,7 @@ collect_kubectl_top() {
 #
 # Arguments:
 #   $1 — experiment name
-#   $2 — base data directory (default: <project_root>/research/experiments/data)
+#   $2 — base data directory (default: <project_root>/research/cpu-sched/experiments/data)
 # Returns: directory path on stdout
 # ---------------------------------------------------------------------------
 make_data_dir() {

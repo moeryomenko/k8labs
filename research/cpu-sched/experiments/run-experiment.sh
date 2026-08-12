@@ -82,7 +82,7 @@ Arguments:
   config.yaml       Experiment configuration file (required)
 
 Options:
-  --output-dir DIR  Output directory (default: research/experiments/data)
+  --output-dir DIR  Output directory (default: research/cpu-sched/experiments/data)
   --dry-run         Validate configuration and show what would run without
                     actually deploying anything
   --perfetto        Enable Perfetto tracing on workload nodes
@@ -92,7 +92,7 @@ Options:
                     measurement window (JSON snapshots + per-task time series)
   -h, --help        Show this help and exit
 
-Config format: See research/experiments/configs/*.yaml for examples.
+Config format: See research/cpu-sched/experiments/configs/*.yaml for examples.
 
 The config file uses flat YAML structure with a matrix of CPU parameter
 combinations. Each combination is run as a separate cell with the specified

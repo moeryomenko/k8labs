@@ -24,9 +24,9 @@ cooldown: 20
 #
 # HELPER CONTRACT (manual, per cell): before each cell, apply the
 # named tunable set on the workers and restore it after the cell:
-#   research/scripts/tunable-sweep.sh apply <tunables>    # e.g. base-slice-low
+#   research/cpu-sched/scripts/tunable-sweep.sh apply <tunables>    # e.g. base-slice-low
 #   ... run the cell ...
-#   research/scripts/tunable-sweep.sh restore
+#   research/cpu-sched/scripts/tunable-sweep.sh restore
 # The sweep drives /sys/kernel/debug/sched/base_slice_ns (and friends) via
 # tunable-sets.json. The runner does NOT apply or restore tunables itself.
 #

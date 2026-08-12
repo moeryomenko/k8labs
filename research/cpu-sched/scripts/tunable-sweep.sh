@@ -15,8 +15,8 @@
 #   set       Apply specific tunable=value pairs directly (no config file)
 #
 # Options:
-#   --file path   Path to tunable sets JSON (default: research/data/tunable-sets.json)
-#                 For restore, path to baseline JSON (default: research/data/tunable-baseline.json)
+#   --file path   Path to tunable sets JSON (default: research/cpu-sched/data/tunable-sets.json)
+#                 For restore, path to baseline JSON (default: research/cpu-sched/data/tunable-baseline.json)
 #   --dry-run     Print what would be done without making changes
 #   -h, --help    Show this help and exit
 #

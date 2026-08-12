@@ -15,7 +15,7 @@
 #   list       Print discovered scheduler tunables (/sys/kernel/debug/sched/) on the local machine.
 #
 # Options:
-#   --file path   Path to baseline JSON file (default: research/data/tunable-baseline.json)
+#   --file path   Path to baseline JSON file (default: research/cpu-sched/data/tunable-baseline.json)
 #   --dry-run     Print what would be done without making changes
 #   -h, --help    Show this help and exit
 #

@@ -375,7 +375,7 @@ cpu-sched-eevdf-plots: ## Generate EEVDF plots from analysis
 
 .PHONY: cpu-sched-eevdf-report
 cpu-sched-eevdf-report: ## Generate EEVDF deep-dive report
-	@echo "EEVDF deep-dive report: research/EEVDF-DEEP-DIVE.md"
+	@echo "EEVDF deep-dive report: research/cpu-sched/analysis/output/DEEP-DIVE-EEVDF-EXEC.md"
 	@echo "To regenerate, re-run experiments and analysis pipeline."
 
 # ---- All Experiments ----

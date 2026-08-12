@@ -12,13 +12,13 @@ measurement:
 # not supported by run-experiment.sh's single-workload loop.
 #
 # Usage:
-#   1. kubectl apply -f research/workloads/combined/deploy.yaml
-#   2. research/experiments/load-generator.sh http://api-server:8080 --rate 50 --duration 120 --output latency.csv
+#   1. kubectl apply -f research/cpu-sched/workloads/combined/deploy.yaml
+#   2. research/cpu-sched/experiments/load-generator.sh http://api-server:8080 --rate 50 --duration 120 --output latency.csv
 #   3. Measure cgroup + eevdf data with standard tooling:
-#      ssh root@<worker> research/bin/eevdf-observe.sh api-server
-#      ssh root@<worker> research/bin/eevdf-observe.sh db-simulator
+#      ssh root@<worker> research/cpu-sched/bin/eevdf-observe.sh api-server
+#      ssh root@<worker> research/cpu-sched/bin/eevdf-observe.sh db-simulator
 #   4. Collect perfetto traces: run-experiment.sh this-config --perfetto --perfetto-config eevdf-deep
 #
-# See research/workloads/combined/deploy.yaml for template markers:
+# See research/cpu-sched/workloads/combined/deploy.yaml for template markers:
 #   {{API_CPU_REQUEST}}, {{API_CPU_LIMIT}} — api-server CPU params
 #   {{DB_CPU_REQUEST}}, {{DB_CPU_LIMIT}}   — db-simulator CPU params

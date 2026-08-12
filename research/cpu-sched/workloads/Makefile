@@ -1,6 +1,6 @@
 # k8labs CPU throttling research — Workload build and deploy
 # All images are built locally with podman and loaded into CRI-O.
-# For cluster access, the kubeconfig file is expected at ../../kubeconfig.
+# For cluster access, the kubeconfig file is expected at ../../../kubeconfig.
 #
 # Usage:
 #   make stress-ng-image        — build stress-ng image
@@ -14,7 +14,7 @@
 SHELL := /bin/bash
 .ONESHELL:
 
-KUBECONFIG := ../../kubeconfig
+KUBECONFIG := ../../../kubeconfig
 BUILDER := podman
 IMAGE_TAG := latest
 
