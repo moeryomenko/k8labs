@@ -64,7 +64,7 @@ The lab toolchain is built around four third-party plugins maintained under the 
 
 ## Quick Start
 
-Requirements: a Linux host with KVM-capable hardware, `cloud-hypervisor` (>= v38), `tofu` (or `terraform`), `packer`, `openssl`, `mkdosfs` (dosfstools), `mcopy` (mtools), and `dnsmasq`. Run `make prereq` to validate core tools. The Packer plugin must be built from source with `make plugin` (pinned at commit `952aa92`, Makefile `PACKER_PLUGIN_VERSION`, installed to `~/.packer.d/plugins/packer-plugin-cloud-hypervisor`).
+Requirements: a Linux host with KVM-capable hardware, `cloud-hypervisor` (>= v38), `tofu` (or `terraform`), `packer`, `uv`, `openssl`, `mkdosfs` (dosfstools), `mcopy` (mtools), and `dnsmasq`. Run `make node-tools` first (syncs Python tooling with uv, creating `.venv`), then `make prereq` to validate the core tools (`tofu cloud-hypervisor openssl nft systemctl jq python3`) and the `.venv` directory. The Packer plugin must be built from source with `make plugin` (pinned at commit `952aa92`, Makefile `PACKER_PLUGIN_VERSION`, installed to `~/.packer.d/plugins/packer-plugin-cloud-hypervisor`).
 
 The full cluster build pipeline is driven through a single Makefile:
 
@@ -72,7 +72,7 @@ The full cluster build pipeline is driven through a single Makefile:
 make cluster
 ```
 
-This executes the complete sequence: bake the base OS image with the system and configuration extensions baked in, provision VMs via OpenTofu (phase A), wait for DHCP leases and SSH connectivity, generate PKI and push role confexts via `make configure` (phase B), apply RBAC/Cilium/CoreDNS, and fetch a working kubeconfig before running the smoke test.
+This executes the complete sequence: bring up the lab network first (`network-up`, which generates and installs per-node TAP configs), bake the base OS image with the system and configuration extensions baked in, provision VMs via OpenTofu (phase A), wait for DHCP leases and SSH connectivity (`wait-ips`/`wait-ssh` inside `make configure`), generate PKI and push role confexts via `make configure` (phase B), apply RBAC/Cilium/CoreDNS, and fetch a working kubeconfig before running the smoke test.
 
 Individual pipeline stages can be run separately:
 
@@ -99,41 +99,53 @@ Individual pipeline stages can be run separately:
 
 | Target | Description |
 |--------|-------------|
-| `sudo make network-up` | Create bridge `k8sbr0` + TAP devices + DHCP via systemd-networkd |
-| `sudo make network-down` | Tear down TAPs, bridge, and remove k8slab nftables table |
+| `sudo make network-up` | Configure bridge+TAP networking + NAT/forwarding + DNS forwarder |
+| `sudo make network-down` | Tear down TAPs, bridge, and remove k8slab nftables table; reconciles the managed per-node configs away |
+
+Per-node TAP configs are generated from tfvars into `build/network/` by `make nodes-generate`; `network-up` installs and reconciles them (stale `k8s-*` pairs removed).
 
 **VM provisioning:**
 
 | Target | Description |
 |--------|-------------|
 | `make tfvars` | Generate `terraform.tfvars` from defaults for deployment |
-| `make deploy` | Phase A: provision cluster VMs via OpenTofu (cloudhypervisor provider) |
+| `make vm-disks` | Create per-VM root disk images from the base image |
+| `make deploy` | Apply Terraform/OpenTofu infrastructure (phase A: provision cluster VMs via cloudhypervisor provider) |
 | `make wait-ips` | Poll until all VMs have DHCP-assigned IPs |
 | `make wait-ssh` | Poll until SSH is reachable on all VMs |
 | `make configure` | Phase B: generate PKI + role confexts and activate services (`terraform/runtime`) |
 | `make destroy` | Tear down all VMs |
 | `make destroy-full` | Destroy VMs, runtime state, certs, and kubeconfig |
+| `make scale` | Converge the cluster to match tfvars (node-tools -> network-up -> vm-disks -> deploy -> configure -> rbac -> cilium -> coredns -> smoke-test) |
 
 **Cluster operations:**
 
 | Target | Description |
 |--------|-------------|
 | `make rbac` | Apply cluster RBAC (kubelet bootstrap, `system:nodes`, admin, apiserver-proxy) |
-| `make cilium` | Install Cilium v1.19.6 from committed manifests (Gateway API CRDs, LB pool, L2 policy) |
-| `make smoke-test` | Validate cluster health (nodes Ready, pods Running, Cilium healthy, Gateway API resources, test pod scheduling, CoreDNS DNS regression) |
+| `make cilium` | Install Cilium from committed manifests (cilium.io CRDs + install + policies, v1.19.6) |
+| `make smoke-test` | Validate cluster health end-to-end (nodes Ready, Cilium, Gateway, CoreDNS) |
 | `make coredns` | Deploy CoreDNS cluster DNS (kube-dns Service at 10.96.0.10) |
 | `make metrics-server` | Enable `kubectl top` (metrics API via aggregation layer) |
 | `make start` / `make stop` | Start/stop VMs via ch-remote API (ACPI shutdown) |
 | `make kubeconfig` | Fetch DHCP-resistant kubeconfig from control-plane |
-| `make update-kubeconfig` | Refresh kubeconfig after DHCP IP change |
+| `make update-kubeconfig` | Alias for kubeconfig — explicitly signals refresh |
+| `make test` | Run the Python test suite (pytest) |
 
 Pre-built dependencies are cached: re-running `make cluster` skips stages whose artifacts already exist. Use `make base-rebuild` to force re-baking the base image.
 
-Run `make validate` to check both the Packer template and the OpenTofu configuration (both root modules) without building anything.
+Run `make validate` to check the Packer template, both OpenTofu root modules, and node definitions in tfvars (syncing Python tooling first) without building anything.
 
 ## Node Scaling
 
 `build/deploy.tfvars` (seeded by `make tfvars` from `terraform/terraform.tfvars.example`) is the single source of truth for node identity: the `control_plane` block and every `workers[]` entry carry `name`, `cpu`, `ram`, `disk`, and an optional `mac`. Everything downstream — per-node TAP configs, root disks, VMs, runtime confexts — is derived from this file.
+
+| Target | Description |
+|--------|-------------|
+| `make node-tools` | Sync Python tooling with uv (creates .venv, idempotent) |
+| `make nodes-generate` | Generate node MACs and per-node systemd-networkd TAP configs from tfvars |
+| `make nodes` | Print the node table (name role cpu ram disk mac [ip]) from tfvars + DHCP leases |
+| `make validate-nodes` | Validate node definitions in tfvars (example always, deploy.tfvars when present) |
 
 ### Adding a worker
 
@@ -163,7 +175,7 @@ The repository is organized by concern, not by lifecycle stage:
 - `packer/` — Packer templates (`base.pkr.hcl`), cloud-init configs, and provisioning scripts for base image baking (bakes the sysext/confext images)
 - `terraform/` — OpenTofu/Terraform configuration for VM definitions (cloudhypervisor provider, phase A), bridge TAP networking, and cloud-init; the provider source is pinned in `terraform/.opentofu.rc`
 - `terraform/runtime/` — Phase-B root module: PKI generation (tls provider) and role-confext rendering/pushing
-- `network/` — Declarative systemd-networkd + nftables + dnsmasq config for the lab bridge/TAP/DHCP/DNS (see [network/README.md](network/README.md))
+- `network/` — Declarative systemd-networkd + nftables + dnsmasq config for the lab bridge/TAP/DHCP/DNS; per-node TAP configs are derived from tfvars into `build/network/` at runtime (see [network/README.md](network/README.md))
 - `extensions/` — Build scripts and download utilities for systemd-sysext and systemd-confext packaging
 - `sysext/` — Raw system extension directory structures (binaries, systemd units)
 - `confext/` — Raw configuration extension directory structures (kubelet config, CRI-O config, container policy)
@@ -171,9 +183,10 @@ The repository is organized by concern, not by lifecycle stage:
 - `cilium/` — Cilium manifest templates (L2 announcement policy, LB IP pool, Gateway API manifests)
 - `coredns/` — CoreDNS cluster DNS manifests (Corefile ConfigMap, RBAC, Deployment, kube-dns Service)
 - `rbac/` — Cluster RBAC manifests (kubelet bootstrap, `system:nodes`, admin, apiserver-proxy)
-- `research/` — CPU throttling/EEVDF scheduler experiments against the live cluster (see [Research](#research))
-- `scripts/` — Standalone helper scripts
+- `research/` — Series aggregator for scheduler research; currently `cpu-sched/` — CPU throttling/EEVDF scheduler experiments against the live cluster (see [Research](#research))
+- `scripts/` — Standalone helper scripts and the Python node tooling (`nodes.py`, `nodes_lib.py`, `gen-network.py`, `network-reconcile.py`)
 - `build/` — Build artifacts (base image, extensions, temporary files)
+- `tests/` — Root Python contract tests for the node tooling (pytest)
 
 ## Version Pins
 
@@ -184,7 +197,8 @@ Component versions are pinned in the sources below — keep them in sync when bu
 | OpenTofu | 1.8.0 | `mise.toml` |
 | Packer | 1.11.2 | `mise.toml` |
 | kubectl | 1.32.0 | `mise.toml` |
-| Base OS | Fedora 44 | `packer/variables.pkr.hcl` |
+| uv | 0.12.3 | `mise.toml` |
+| Base OS | Fedora 44 | `Makefile` (FEDORA_CLOUD_URL) / `packer/vars.pkrvars.hcl` |
 | Kernel | 7.1 | `extensions/download-sysexts.sh` |
 | kubelet | v1.32.13 | `extensions/download-sysexts.sh` |
 | cri-o | v1.35.5 | `extensions/download-sysexts.sh` |
@@ -213,9 +227,9 @@ Component versions are pinned in the sources below — keep them in sync when bu
 
 ## Research
 
-`research/` is a sub-project for scheduler research against the live cluster: container process lifecycle tracing, CPU throttling characterization (cgroup v2 `cpu.stat` under varying CPU limits), and CPU request/limit guidance, including EEVDF scheduler experiments. Workloads are Go services in `research/workloads/` (cpu-burner, api-server, db-simulator); analysis is Python in `research/analysis/` (deps in `pyproject.toml`); Perfetto tracing uses the baked `perfetto` sysext.
+`research/` is a sub-project for scheduler research against the live cluster: container process lifecycle tracing, CPU throttling characterization (cgroup v2 `cpu.stat` under varying CPU limits), and CPU request/limit guidance, including EEVDF scheduler experiments. Workloads are Go services in `research/cpu-sched/workloads/` (cpu-burner, api-server, db-simulator), each with its own Makefile; analysis is Python in `research/cpu-sched/analysis/` (deps in `pyproject.toml`); Perfetto tracing uses the baked `perfetto` sysext.
 
-Experiments are driven with `make experiment-*` from `research/` and write gitignored data under `research/experiments/data/` and `research/analysis/output/`. They require a live, healthy cluster (3 Ready nodes) and a working kubeconfig. See [research/README.md](research/README.md) for the full guide.
+Experiments are driven with namespaced `make cpu-sched-experiment-*` targets from `research/` (or `make -C research <target>` from the repo root) and write gitignored data under `research/cpu-sched/experiments/data/` and `research/cpu-sched/analysis/output/`. They require a live, healthy cluster (3 Ready nodes) and a working kubeconfig. See [research/README.md](research/README.md) for the series layout and [research/cpu-sched/README.md](research/cpu-sched/README.md) for the full experiment guide.
 
 ## Gateway API
 
