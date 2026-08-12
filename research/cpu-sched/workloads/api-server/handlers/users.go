@@ -65,7 +65,7 @@ func generateUsers(count int) []User {
 
 	users := make([]User, 0, count)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	for i := 0; i < count; i++ {
+	for i := range count {
 		first := firstNames[rng.Intn(len(firstNames))]
 		last := lastNames[rng.Intn(len(lastNames))]
 		role := roles[rng.Intn(len(roles))]

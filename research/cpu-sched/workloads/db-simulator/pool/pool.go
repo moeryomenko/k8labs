@@ -30,7 +30,7 @@ func New(n int, queueDepth int) *Pool {
 		jobs:    make(chan Job, queueDepth),
 	}
 	p.wg.Add(n)
-	for i := 0; i < n; i++ {
+	for range n {
 		go p.worker()
 	}
 	return p

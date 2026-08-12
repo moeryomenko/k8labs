@@ -41,7 +41,7 @@ func RunInsert(rows int) WriteResult {
 		Data  [32]byte
 	}
 	batch := make([]newRow, rows)
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		seq := int(writeSequence.Add(1))
 		batch[i] = newRow{
 			ID:    seq,
@@ -49,7 +49,7 @@ func RunInsert(rows int) WriteResult {
 			Label: fmt.Sprintf("row_%d", seq),
 		}
 		// Fill payload.
-		for j := 0; j < 32; j++ {
+		for j := range 32 {
 			batch[i].Data[j] = byte((seq*31 + j*17) & 0xff)
 		}
 	}
@@ -125,14 +125,14 @@ func RunUpdate(rows int, cols int) WriteResult {
 	// Phase 2: Modify values.  For each "col" we do extra CPU work.
 	for i := range selected {
 		// Simulate column updates by doing CPU work proportional to cols.
-		for c := 0; c < cols; c++ {
+		for range cols {
 			selected[i].Value = rand.Float64() * 1000
 			// Hash the label to simulate encode overhead.
 			h := sha256.Sum256([]byte(selected[i].Label))
 			selected[i].Label = fmt.Sprintf("updated_%x", h[:4])
 		}
 		// Update payload bytes.
-		for j := 0; j < 32; j++ {
+		for j := range 32 {
 			selected[i].Data[j] = byte((selected[i].ID*31 + j*17 + cols) & 0xff)
 		}
 	}

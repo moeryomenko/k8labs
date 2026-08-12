@@ -57,14 +57,14 @@ func InitTable(n int) {
 	defer globalTable.mu.Unlock()
 	globalTable.rows = make([]tableRow, n)
 	globalTable.nextID = n
-	for i := 0; i < n; i++ {
+	for i := range n {
 		globalTable.rows[i] = tableRow{
 			ID:    i,
 			Value: rand.Float64() * 1000,
 			Label: randomLabel(),
 		}
 		// Fill payload with deterministic data to keep CPU busy.
-		for j := 0; j < 32; j++ {
+		for j := range 32 {
 			globalTable.rows[i].Data[j] = byte((i*31 + j*17) & 0xff)
 		}
 	}
@@ -194,22 +194,19 @@ func SelectComplex(n int) SelectResult {
 
 	// Phase 2: Nested-loop join simulation.
 	// Join each row with every other row in a smaller subset (log n).
-	joinLimit := int(math.Log2(float64(n))) + 1
-	if joinLimit > n {
-		joinLimit = n
-	}
+	joinLimit := min(int(math.Log2(float64(n)))+1, n)
 
 	var joinSum float64
 	// Use big.Float for the aggregation to add CPU load.
 	agg := new(big.Float).SetPrec(256)
 
-	for i := 0; i < joinLimit; i++ {
+	for i := range joinLimit {
 		rowI := rows[i]
 		for j := i + 1; j < joinLimit; j++ {
 			rowJ := rows[j]
 			// Simulate join condition: sum of values + payload hash.
 			prod := rowI.Value * rowJ.Value
-			for k := 0; k < 4; k++ {
+			for k := range 4 {
 				prod *= float64(rowI.Data[k] ^ rowJ.Data[k])
 			}
 			joinSum += prod

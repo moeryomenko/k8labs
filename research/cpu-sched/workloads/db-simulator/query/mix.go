@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -107,10 +108,7 @@ func (m *MixRunner) runQuery(qtype string) {
 	}
 
 	// Random subset of the table for query targets.
-	n := 10 + rand.Intn(100)
-	if n > m.tableSize {
-		n = m.tableSize
-	}
+	n := min(10+rand.Intn(100), m.tableSize)
 
 	switch qtype {
 	case "select":
@@ -143,10 +141,8 @@ func (m *MixRunner) Run() MixStats {
 	// Launch worker goroutines.
 	var wg sync.WaitGroup
 	numWorkers := 4
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numWorkers {
+		wg.Go(func() {
 			for {
 				// Check if stopped or time is up.
 				select {
@@ -160,7 +156,7 @@ func (m *MixRunner) Run() MixStats {
 				qtype := m.pickQueryType()
 				m.runQuery(qtype)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -173,9 +169,7 @@ func (m *MixRunner) Run() MixStats {
 
 	m.mu.Lock()
 	qbt := make(map[string]int64, len(m.queriesByType))
-	for k, v := range m.queriesByType {
-		qbt[k] = v
-	}
+	maps.Copy(qbt, m.queriesByType)
 	m.mu.Unlock()
 
 	return MixStats{

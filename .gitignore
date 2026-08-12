@@ -63,6 +63,7 @@ research/cpu-sched/analysis/output/
 **/db-simulator/db-simulator
 **/api-server/bin/
 **/db-simulator/bin/
+**/cpu-burner/cpu-burner
 
 # Experiment data directories — generated, not committed
 research/cpu-sched/experiments/data/

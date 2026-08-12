@@ -271,7 +271,7 @@ func (s *server) handleMix(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	byType := s.met.QueriesByType()
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"total_queries":    s.met.TotalQueries(),
 		"avg_latency_ms":   s.met.AvgLatencyMs(),
 		"cpu_time_seconds": s.met.CPUTimeSeconds(),

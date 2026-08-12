@@ -42,13 +42,7 @@ func RunCheckpoint() CheckpointResult {
 	globalTable.mu.RUnlock()
 
 	// Number of pages scales with table size.
-	numPages := 50 + (tableSize / 100)
-	if numPages > 500 {
-		numPages = 500
-	}
-	if numPages < 10 {
-		numPages = 10
-	}
+	numPages := max(min(50+(tableSize/100), 500), 10)
 
 	// -----------------------------------------------------------------------
 	// Phase 1: Ramp-up (~1s) — build the write list (sort pages by ID).

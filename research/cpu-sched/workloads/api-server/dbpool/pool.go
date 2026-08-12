@@ -53,7 +53,7 @@ func New(size int, minLatency, maxLatency time.Duration) *Pool {
 		mode:       ModeLocal,
 	}
 	// Fill the semaphore to represent idle connections.
-	for i := 0; i < size; i++ {
+	for range size {
 		p.sem <- struct{}{}
 	}
 	p.idle.Store(int64(size))
