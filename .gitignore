@@ -56,7 +56,7 @@ terraform/cloud-init/out/
 
 perfetto-plots
 perfetto-analysis
-research/analysis/output/
+research/cpu-sched/analysis/output/
 
 # Go compiled binaries — built from source
 **/api-server/api-server
@@ -65,9 +65,9 @@ research/analysis/output/
 **/db-simulator/bin/
 
 # Experiment data directories — generated, not committed
-research/experiments/data/
-research/analysis/output/tunable-sweep-results/
-research/analysis/output/cpu-manager-comparison/
-research/analysis/output/eevdf-metrics-stress/
-research/analysis/output/throttling-stress/
+research/cpu-sched/experiments/data/
+research/cpu-sched/analysis/output/tunable-sweep-results/
+research/cpu-sched/analysis/output/cpu-manager-comparison/
+research/cpu-sched/analysis/output/eevdf-metrics-stress/
+research/cpu-sched/analysis/output/throttling-stress/
 /tmp/tunable-sweep/

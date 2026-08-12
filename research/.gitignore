@@ -1,9 +1,10 @@
 # Research experiment data — large, auto-generated, not part of source
-experiments/data/
+cpu-sched/experiments/data/
+cpu-sched/analysis/output/
 *.csv
 *.json
-!data/tunable-sets.json
-!data/tunable-baseline.json
+!cpu-sched/data/tunable-sets.json
+!cpu-sched/data/tunable-baseline.json
 *.png
 *.pyc
 __pycache__/
