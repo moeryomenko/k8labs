@@ -22,14 +22,14 @@
 #   templates no longer hardcode a literal nodeName; composes with --eevdf
 #
 # Run from project root:
-#   bats research/experiments/tests/test-node-pinning.bats
+#   bats research/cpu-sched/experiments/tests/test-node-pinning.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "nodeName: w1" research/experiments/tests/test-node-pinning.bats
+#   bats --filter "nodeName: w1" research/cpu-sched/experiments/tests/test-node-pinning.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
     export COMMON_SH="$EXPERIMENTS_DIR/common.sh"
     export WEIGHT_SHARE_CONFIG="$EXPERIMENTS_DIR/configs/weight-share.yaml"
@@ -249,11 +249,11 @@ count_node_markers() {
     # because it carries no literal node name.
     local t
     for t in \
-        "$PROJECT_ROOT/research/workloads/api-server/deploy.yaml" \
-        "$PROJECT_ROOT/research/workloads/cpu-burner/deploy.yaml" \
-        "$PROJECT_ROOT/research/workloads/db-simulator/deploy.yaml" \
-        "$PROJECT_ROOT/research/workloads/stress-ng/deploy.yaml" \
-        "$PROJECT_ROOT/research/workloads/stress-ng/deploy-guaranteed.yaml"; do
+        "$PROJECT_ROOT/research/cpu-sched/workloads/api-server/deploy.yaml" \
+        "$PROJECT_ROOT/research/cpu-sched/workloads/cpu-burner/deploy.yaml" \
+        "$PROJECT_ROOT/research/cpu-sched/workloads/db-simulator/deploy.yaml" \
+        "$PROJECT_ROOT/research/cpu-sched/workloads/stress-ng/deploy.yaml" \
+        "$PROJECT_ROOT/research/cpu-sched/workloads/stress-ng/deploy-guaranteed.yaml"; do
         [ -f "$t" ] || { echo "FATAL: template not found: $t" >&2; return 1; }
         ! grep -qE 'nodeName:[[:space:]]*[A-Za-z0-9._-]' "$t"
     done

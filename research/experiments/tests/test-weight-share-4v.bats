@@ -29,14 +29,14 @@
 #   other multi-pod families compose with node: w2
 #
 # Run from project root:
-#   bats research/experiments/tests/test-weight-share-4v.bats
+#   bats research/cpu-sched/experiments/tests/test-weight-share-4v.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "3600m" research/experiments/tests/test-weight-share-4v.bats
+#   bats --filter "3600m" research/cpu-sched/experiments/tests/test-weight-share-4v.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
     export CONFIGS_DIR="$EXPERIMENTS_DIR/configs"
 

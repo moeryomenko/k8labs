@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# test-cgroup-hierarchy.bats — Tests for research/bin/cgroup-hierarchy-snapshot.sh
+# test-cgroup-hierarchy.bats — Tests for research/cpu-sched/bin/cgroup-hierarchy-snapshot.sh
 #
 # These tests encode the target behavior of a new script that dumps
 # the node cgroup v2 hierarchy: kubepods.slice cpu.weight, per-QoS-slice
@@ -31,14 +31,14 @@
 #   additive change stays read-only.
 #
 # Run from project root:
-#   bats research/experiments/tests/test-cgroup-hierarchy.bats
+#   bats research/cpu-sched/experiments/tests/test-cgroup-hierarchy.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "--help prints usage" research/experiments/tests/test-cgroup-hierarchy.bats
+#   bats --filter "--help prints usage" research/cpu-sched/experiments/tests/test-cgroup-hierarchy.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export SCRIPT="$PROJECT_ROOT/research/bin/cgroup-hierarchy-snapshot.sh"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export SCRIPT="$PROJECT_ROOT/research/cpu-sched/bin/cgroup-hierarchy-snapshot.sh"
     export NODE="192.0.2.10"                       # TEST-NET-1, unroutable by design
 
     # Per-test artifacts
@@ -184,7 +184,7 @@ assert_captured_ok() {
 # and exit 0.
 # =============================================================================
 
-@test "script exists at research/bin/cgroup-hierarchy-snapshot.sh and is executable" {
+@test "script exists at research/cpu-sched/bin/cgroup-hierarchy-snapshot.sh and is executable" {
     [ -f "$SCRIPT" ]
     [ -x "$SCRIPT" ]
 }

@@ -2,7 +2,7 @@
 # multipod.bats — Tests for N-pod (multi-pod) co-located runner generalization
 #
 # These tests encode the target behavior of generalizing the
-# co-located experiment path in research/experiments/run-experiment.sh from
+# co-located experiment path in research/cpu-sched/experiments/run-experiment.sh from
 # exactly 2 pods to N pods. They are written test-first: the N-pod tests
 # FAIL (red phase) against the current runner, while the
 # backward-compatibility tests are regression guards that already pass
@@ -19,14 +19,14 @@
 #   backward compat: 2-pod and single-pod configs unchanged
 #
 # Run from project root:
-#   bats research/experiments/tests/test-multipod.bats
+#   bats research/cpu-sched/experiments/tests/test-multipod.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "3-pod config" research/experiments/tests/test-multipod.bats
+#   bats --filter "3-pod config" research/cpu-sched/experiments/tests/test-multipod.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
     export COMMON_SH="$EXPERIMENTS_DIR/common.sh"
     export CO_LOCATED_CONFIG="$EXPERIMENTS_DIR/configs/co-located.yaml"

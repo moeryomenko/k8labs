@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # test-tunable-data.bats — Tests for tunable-sweep.sh / tunable-defaults.sh
-# against the documented JSON data files (research/data/tunable-sets.json,
-# research/data/tunable-baseline.json).
+# against the documented JSON data files (research/cpu-sched/data/tunable-sets.json,
+# research/cpu-sched/data/tunable-baseline.json).
 #
 # These tests assert the tunable scripts work with the new JSON data files:
 #   tunable-sweep.sh list --file <sets.json> exits 0, prints set names
@@ -29,22 +29,22 @@
 #     network or cluster; the ssh stub records invocations so tests can prove
 #     dry-run apply performs no ssh.
 #   - The last tests assert the REAL files exist at
-#     research/data/tunable-sets.json and research/data/tunable-baseline.json
+#     research/cpu-sched/data/tunable-sets.json and research/cpu-sched/data/tunable-baseline.json
 #     and satisfy the schema. They FAIL in the red phase (data files not yet
 #     created) and PASS once the implementer creates them.
 #
 # Run from project root:
-#   bats research/experiments/tests/test-tunable-data.bats
+#   bats research/cpu-sched/experiments/tests/test-tunable-data.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "apply default" research/experiments/tests/test-tunable-data.bats
+#   bats --filter "apply default" research/cpu-sched/experiments/tests/test-tunable-data.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
     export RESEARCH_DIR="$PROJECT_ROOT/research"
-    export TUNABLE_SWEEP_SH="$RESEARCH_DIR/scripts/tunable-sweep.sh"
-    export TUNABLE_DEFAULTS_SH="$RESEARCH_DIR/scripts/tunable-defaults.sh"
-    export REAL_DATA_DIR="$RESEARCH_DIR/data"
+    export TUNABLE_SWEEP_SH="$RESEARCH_DIR/cpu-sched/scripts/tunable-sweep.sh"
+    export TUNABLE_DEFAULTS_SH="$RESEARCH_DIR/cpu-sched/scripts/tunable-defaults.sh"
+    export REAL_DATA_DIR="$RESEARCH_DIR/cpu-sched/data"
     export REAL_SETS_FILE="$REAL_DATA_DIR/tunable-sets.json"
     export REAL_BASELINE_FILE="$REAL_DATA_DIR/tunable-baseline.json"
 
@@ -348,7 +348,7 @@ STUB
 # Real data files — red phase until the implementer creates them
 # =============================================================================
 
-@test "real tunable-sets.json exists at research/data/" {
+@test "real tunable-sets.json exists at research/cpu-sched/data/" {
     if [[ ! -f "$REAL_SETS_FILE" ]]; then
         echo "MISSING: $REAL_SETS_FILE (implementer must create it)" >&2
         return 1
@@ -356,7 +356,7 @@ STUB
     [ -s "$REAL_SETS_FILE" ]
 }
 
-@test "real tunable-baseline.json exists at research/data/" {
+@test "real tunable-baseline.json exists at research/cpu-sched/data/" {
     if [[ ! -f "$REAL_BASELINE_FILE" ]]; then
         echo "MISSING: $REAL_BASELINE_FILE (implementer must create it)" >&2
         return 1

@@ -61,7 +61,7 @@ def _count_trace_processor_procs() -> int | None:
 
 
 def _smallest_trace() -> Path | None:
-    """Smallest .perfetto-trace under research/experiments/data, if any."""
+    """Smallest .perfetto-trace under research/cpu-sched/experiments/data, if any."""
     data_root = ANALYSIS_DIR.parent / "experiments" / "data"
     if not data_root.is_dir():
         return None
@@ -108,7 +108,7 @@ def test_no_tp_subprocess_survives_after_analysis(tmp_path) -> None:
         pytest.skip("perfetto package not installed (no subprocess to leak)")
     trace = _smallest_trace()
     if trace is None:
-        pytest.skip("no .perfetto-trace fixture under research/experiments/data")
+        pytest.skip("no .perfetto-trace fixture under research/cpu-sched/experiments/data")
 
     out_dir = tmp_path / "out"
     result = subprocess.run(

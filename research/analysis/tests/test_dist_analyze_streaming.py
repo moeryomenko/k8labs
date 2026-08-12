@@ -10,7 +10,7 @@ This module pins the NEW streaming API surface (RED against the current
 implementation, which has no `--chunk-s` flag and no chunk-window / merge
 helpers):
 
-    research/analysis/dist-analyze.py  (module: dist_analyze)
+    research/cpu-sched/analysis/dist-analyze.py  (module: dist_analyze)
 
     New CLI flag:
       --chunk-s <seconds>   chunk width for time-chunked processing
@@ -54,7 +54,7 @@ receive only that chunk's rows.  The conftest fake returns the full canned
 dataset for every sched_slice query, which would wrongly duplicate rows when
 the implementation re-queries per chunk.
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_analyze_streaming.py -q
 """
 

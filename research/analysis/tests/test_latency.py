@@ -3,7 +3,7 @@
 Test-first design, red until the script is implemented.
 The module/function/CLI names used here are the contract the implementation must build:
 
-    research/analysis/latency-analyze.py  (module: latency_analyze)
+    research/cpu-sched/analysis/latency-analyze.py  (module: latency_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
       discover_latency_csvs(data_dir: Path, summary_df: pd.DataFrame)
           -> dict[str, list[Path]]
@@ -13,7 +13,7 @@ The module/function/CLI names used here are the contract the implementation must
       correlation_summary(cell_table: pd.DataFrame) -> pd.DataFrame
       main(argv: list[str] | None = None) -> int
 
-Percentiles come from research/analysis/latency_stats.py
+Percentiles come from research/cpu-sched/analysis/latency_stats.py
 (percentiles_from_csv, linear interpolation, empty -> 0.0) — the analyzer
 reuses that module; it must NOT reimplement percentile math.
 
@@ -29,7 +29,7 @@ Covered behavior:
   empty input -> header-only output, no crash
   matplotlib lazy import, headless/non-fatal
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_latency.py -q
 """
 
@@ -219,7 +219,7 @@ class TestComputeCellLatencies:
         )
 
     def test_matches_latency_stats_module(self, tmp_path: pathlib.Path):
-        """Percentiles agree with research/analysis/latency_stats.percentiles_from_csv."""
+        """Percentiles agree with research/cpu-sched/analysis/latency_stats.percentiles_from_csv."""
         import latency_stats
 
         module = load_latency_module()

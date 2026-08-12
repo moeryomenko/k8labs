@@ -1,7 +1,7 @@
 """Tests for dist-gif.py — per-replicate bounded loading + O(n) histogram.
 
 Test-first contract for the bounded-loading rewrite.
-The current `research/analysis/dist-gif.py` has two memory
+The current `research/cpu-sched/analysis/dist-gif.py` has two memory
 hotspots this contract pins:
 
     1. `generate_family_gifs` loads ALL per-replicate slice DataFrames into a
@@ -35,7 +35,7 @@ exec-timeline.gif == replicate-1 bytes, determinism reruns identical, Pillow
 guard, window-only bars.  The existing 46 tests in tests/test_dist_gif.py stay
 green and are NOT modified.
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_gif_memory.py -q
 """
 

@@ -1,7 +1,7 @@
 """Tests for dist-gif.py — animated visualization of the CPU execution-time distribution.
 
 Test revision (re-delegated; replaces an earlier version of this file). The
-current `research/analysis/dist-gif.py` implements the OLD contract
+current `research/cpu-sched/analysis/dist-gif.py` implements the OLD contract
 and MUST fail these tests (RED) until the revision is implemented.
 
 Revision drivers (user-approved settings change after the original design measured
@@ -23,7 +23,7 @@ merged per-cell slices):
     7. annotation format (family | cell | elapsed) unchanged; elapsed derived
        from slice timestamps.
 
-Module: `research/analysis/dist-gif.py`  (import name: `dist_gif`)
+Module: `research/cpu-sched/analysis/dist-gif.py`  (import name: `dist_gif`)
 
 Constants:
   FPS_TIMELINE_DEFAULT   10        exec-timeline.gif playback fps (kept)
@@ -79,7 +79,7 @@ Covered behavior:
   determinism: byte-identical SHA-256 across two runs
   Pillow-missing: clear message naming Pillow
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_gif.py -q
 """
 

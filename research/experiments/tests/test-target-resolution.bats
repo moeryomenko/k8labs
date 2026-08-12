@@ -22,11 +22,11 @@
 # "<pod-name>:<type>" pairs in workloads: mapping order.
 #
 # Run from project root:
-#   bats research/experiments/tests/test-target-resolution.bats
+#   bats research/cpu-sched/experiments/tests/test-target-resolution.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export COMMON_SH="$EXPERIMENTS_DIR/common.sh"
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
 

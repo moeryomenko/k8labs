@@ -34,7 +34,7 @@ no real traces).  The memory budget tests are marked ``memory`` so the
 default suite (``pytest -m "not memory"`` via pyproject addopts) stays fast
 and green; run them explicitly with ``python3 -m pytest -m memory``.
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_memory_bounds.py -q                 (harness)
     python3 -m pytest -m memory tests/test_memory_bounds.py -v       (budgets)
 """

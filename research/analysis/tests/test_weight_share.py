@@ -3,7 +3,7 @@
 Test-first design, red until the script is implemented.
 The module/function/CLI names used here are the contract the implementation must build:
 
-    research/analysis/weight-share-analyze.py  (module: weight_share_analyze)
+    research/cpu-sched/analysis/weight-share-analyze.py  (module: weight_share_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
       compute_weight_shares(summary_df: pd.DataFrame) -> pd.DataFrame
       check_cgroup_completeness(data_dir: Path, summary_df: pd.DataFrame) -> set[str]
@@ -19,7 +19,7 @@ Covered behavior:
   empty input -> header-only output, no crash
   --data-dir/--output-dir contract and exit codes
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_weight_share.py -q
 """
 

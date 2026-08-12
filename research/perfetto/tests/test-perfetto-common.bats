@@ -4,13 +4,13 @@
 # These tests verify sourcing, guard variables, function definitions,
 # and path resolution WITHOUT requiring a running cluster.
 #
-# Run from project root: bats research/perfetto/tests/test-perfetto-common.bats
+# Run from project root: bats research/cpu-sched/perfetto/tests/test-perfetto-common.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export PERFETTO_BIN="$PROJECT_ROOT/research/perfetto/bin"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export PERFETTO_BIN="$PROJECT_ROOT/research/cpu-sched/perfetto/bin"
     export PERFETTO_COMMON_SH="$PERFETTO_BIN/perfetto-common.sh"
-    export CGROUP_COMMON_SH="$PROJECT_ROOT/research/bin/cgroup-common.sh"
+    export CGROUP_COMMON_SH="$PROJECT_ROOT/research/cpu-sched/bin/cgroup-common.sh"
 }
 
 teardown() {

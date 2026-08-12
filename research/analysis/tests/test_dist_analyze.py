@@ -3,7 +3,7 @@
 Test-first design, red until the engineer implements the script.
 The module/function/CLI names used here are the contract the implementation must build:
 
-    research/analysis/dist-analyze.py  (module: dist_analyze)
+    research/cpu-sched/analysis/dist-analyze.py  (module: dist_analyze)
 
     Constants:
       SLICES_COLUMNS       ts_start_us,ts_end_us,duration_us,cpu,tid,
@@ -54,7 +54,7 @@ Covered behavior:
   coverage quality gate: good vs degraded
   output layout under output/distribution/<family>/<cell>/
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_analyze.py -q
 """
 

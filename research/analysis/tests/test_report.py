@@ -4,7 +4,7 @@ Test-first design, extended by debt work on the data-driven burst verdict and
 QoS ordering for direct guaranteed pod slices.
 The module/function/CLI names used here are the contract the engineer must build:
 
-    research/analysis/generate-report.py  (module: generate_report)
+    research/cpu-sched/analysis/generate-report.py  (module: generate_report)
       REPORT_FILENAME = "interaction-report.md"
       BURST_CSV = "burst-summary.csv"      (pinned input)
       load_table(input_dir: Path, filename: str) -> pd.DataFrame | None
@@ -67,7 +67,7 @@ Debt-work behavior (the reason this file changes):
   existing determinism/CLI/no-data tests unaffected
   burst input filename + schema pinned
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_report.py -q
 """
 

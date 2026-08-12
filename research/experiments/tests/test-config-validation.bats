@@ -35,10 +35,10 @@
 #   exit 0.
 #
 # Run from project root:
-#   bats research/experiments/tests/test-config-validation.bats
+#   bats research/cpu-sched/experiments/tests/test-config-validation.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "matrix cells" research/experiments/tests/test-config-validation.bats
+#   bats --filter "matrix cells" research/cpu-sched/experiments/tests/test-config-validation.bats
 #
 # Distribution-config additions: the six NEW distribution configs are pinned —
 # dist-api-server, dist-db-simulator, dist-cpu-burner, dist-stress-ng (Family A,
@@ -48,8 +48,8 @@
 # green.
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
     export CONFIGS_DIR="$EXPERIMENTS_DIR/configs"
 
@@ -79,7 +79,7 @@ setup() {
     # hardcoded) + workload type stress-ng-guaranteed. The template is created
     # by FIX-3 (RED until it lands); the temp config proves the type mapping
     # via --dry-run without touching the real config.
-    export GUARANTEED_TEMPLATE="$PROJECT_ROOT/research/workloads/stress-ng/deploy-guaranteed.yaml"
+    export GUARANTEED_TEMPLATE="$PROJECT_ROOT/research/cpu-sched/workloads/stress-ng/deploy-guaranteed.yaml"
     export GUARANTEED_TYPE_CONFIG="$BATS_TEST_TMPDIR/cv-guaranteed-type.yaml"
     cat > "$GUARANTEED_TYPE_CONFIG" <<'EOF'
 experiment:

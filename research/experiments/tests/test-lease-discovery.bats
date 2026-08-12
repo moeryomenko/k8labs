@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# test-lease-discovery.bats — Tests for research/bin/lease-common.sh
+# test-lease-discovery.bats — Tests for research/cpu-sched/bin/lease-common.sh
 # (worker IP discovery from the authoritative systemd-networkd DHCP JSON lease)
 #
 # These tests encode the lease-discovery feature of the technical-debt plan.
@@ -30,14 +30,14 @@
 #   the six research files source lease-common.sh and carry the two-MAC default
 #
 # Run from project root:
-#   bats research/experiments/tests/test-lease-discovery.bats
+#   bats research/cpu-sched/experiments/tests/test-lease-discovery.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "read_leases_systemd maps" research/experiments/tests/test-lease-discovery.bats
+#   bats --filter "read_leases_systemd maps" research/cpu-sched/experiments/tests/test-lease-discovery.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export LEASE_COMMON_SH="$PROJECT_ROOT/research/bin/lease-common.sh"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export LEASE_COMMON_SH="$PROJECT_ROOT/research/cpu-sched/bin/lease-common.sh"
 
     # Hermetic environment: never inherit real lease paths or MAC defaults.
     unset WORKER_MACS SYSTEMD_LEASES DNSMASQ_LEASES LEASE_FILE
@@ -106,12 +106,12 @@ EOF
     # The six files that must source lease-common.sh and carry the two-MAC
     # WORKER_MACS default.
     FILES_6=(
-        "$PROJECT_ROOT/research/bin/cgroup-common.sh"
-        "$PROJECT_ROOT/research/experiments/common.sh"
-        "$PROJECT_ROOT/research/scripts/tunable-sweep.sh"
-        "$PROJECT_ROOT/research/scripts/tunable-defaults.sh"
-        "$PROJECT_ROOT/research/scripts/switch-cpu-manager.sh"
-        "$PROJECT_ROOT/research/scripts/verify-cpu-manager.sh"
+        "$PROJECT_ROOT/research/cpu-sched/bin/cgroup-common.sh"
+        "$PROJECT_ROOT/research/cpu-sched/experiments/common.sh"
+        "$PROJECT_ROOT/research/cpu-sched/scripts/tunable-sweep.sh"
+        "$PROJECT_ROOT/research/cpu-sched/scripts/tunable-defaults.sh"
+        "$PROJECT_ROOT/research/cpu-sched/scripts/switch-cpu-manager.sh"
+        "$PROJECT_ROOT/research/cpu-sched/scripts/verify-cpu-manager.sh"
     )
 }
 

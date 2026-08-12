@@ -4,11 +4,11 @@
 # Tests argument parsing, help text, missing argument errors, and
 # dry-run output WITHOUT requiring a running cluster or VM.
 #
-# Run from project root: bats research/perfetto/tests/test-perfetto-start.bats
+# Run from project root: bats research/cpu-sched/perfetto/tests/test-perfetto-start.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export PERFETTO_BIN="$PROJECT_ROOT/research/perfetto/bin"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export PERFETTO_BIN="$PROJECT_ROOT/research/cpu-sched/perfetto/bin"
     export PERFETTO_START_SH="$PERFETTO_BIN/perfetto-start.sh"
 }
 

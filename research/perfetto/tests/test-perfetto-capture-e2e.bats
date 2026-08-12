@@ -9,19 +9,19 @@
 # =============================================================================
 # How this suite runs (after tracebox has been deployed to the node):
 #
-#   NODE_IP=<node-ip> bats research/perfetto/tests/test-perfetto-capture-e2e.bats
+#   NODE_IP=<node-ip> bats research/cpu-sched/perfetto/tests/test-perfetto-capture-e2e.bats
 #
 # Example:
-#   NODE_IP=192.168.124.11 bats research/perfetto/tests/test-perfetto-capture-e2e.bats
+#   NODE_IP=192.168.124.11 bats research/cpu-sched/perfetto/tests/test-perfetto-capture-e2e.bats
 #
 # Without NODE_IP the live capture tests skip cleanly. The fixture-based
 # assertion tests and the skip-path tests run without a node, so the
 # regression detection logic is always exercised.
 #
 # The smoke experiment config used by the runner is
-# research/experiments/configs/perfetto-smoke.yaml; validate it with:
-#   research/experiments/run-experiment.sh \
-#     research/experiments/configs/perfetto-smoke.yaml --dry-run \
+# research/cpu-sched/experiments/configs/perfetto-smoke.yaml; validate it with:
+#   research/cpu-sched/experiments/run-experiment.sh \
+#     research/cpu-sched/experiments/configs/perfetto-smoke.yaml --dry-run \
 #     --perfetto --perfetto-config eevdf-deep
 # (the --perfetto flag is what makes the runner print the Perfetto plan block).
 # =============================================================================
@@ -35,8 +35,8 @@
 #   timeout(1) so it cannot hang
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export PERFETTO_BIN="$PROJECT_ROOT/research/perfetto/bin"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export PERFETTO_BIN="$PROJECT_ROOT/research/cpu-sched/perfetto/bin"
     export PERFETTO_CAPTURE_SH="$PERFETTO_BIN/perfetto-capture.sh"
     export E2E_CONFIG_NAME="eevdf-deep"
     export E2E_DURATION=30

@@ -9,18 +9,18 @@
 # the --perfetto / --perfetto-config flags are implemented.
 #
 # Run from project root:
-#   bats research/experiments/tests/test-perfetto-integration.bats
+#   bats research/cpu-sched/experiments/tests/test-perfetto-integration.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "--perfetto flag is accepted" research/experiments/tests/test-perfetto-integration.bats
+#   bats --filter "--perfetto flag is accepted" research/cpu-sched/experiments/tests/test-perfetto-integration.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
     export COMMON_SH="$EXPERIMENTS_DIR/common.sh"
     export TEST_CONFIG="$EXPERIMENTS_DIR/configs/throttling-baseline.yaml"
-    export PERFETTO_COMMON_SH="$PROJECT_ROOT/research/perfetto/bin/perfetto-common.sh"
+    export PERFETTO_COMMON_SH="$PROJECT_ROOT/research/cpu-sched/perfetto/bin/perfetto-common.sh"
 
     # Ensure test config exists
     [ -f "$TEST_CONFIG" ] || { echo "FATAL: Test config not found at $TEST_CONFIG" >&2; exit 1; }

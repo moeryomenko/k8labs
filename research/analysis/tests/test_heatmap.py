@@ -3,7 +3,7 @@
 Test-first design, red until the script is implemented.
 The module/function/CLI names used here are the contract the implementation must build:
 
-    research/analysis/interaction-heatmap.py  (module: interaction_heatmap)
+    research/cpu-sched/analysis/interaction-heatmap.py  (module: interaction_heatmap)
       parse_cell_label(label: str) -> tuple[int, int] | None
       build_heatmap(summary_df: pd.DataFrame, value: str = "throttling_ratio")
           -> pd.DataFrame
@@ -20,7 +20,7 @@ Covered behavior:
   empty input -> header-only output, no crash
   --data-dir/--output-dir contract and exit codes
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_heatmap.py -q
 """
 

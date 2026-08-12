@@ -33,11 +33,11 @@
 # with request recording so path/method/body can be verified.
 #
 # Run from project root:
-#   bats research/experiments/tests/test-loadgen-endpoints.bats
+#   bats research/cpu-sched/experiments/tests/test-loadgen-endpoints.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export LOAD_GENERATOR_SH="$EXPERIMENTS_DIR/load-generator.sh"
     export RECORDER_PID=""
 

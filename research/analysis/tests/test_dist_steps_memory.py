@@ -9,7 +9,7 @@ rendering steps change their bin/bar strategy).
 
 What is pinned here (fixed bins + vectorized bars):
 
-    research/analysis/dist-steps.py  (module: dist_steps)
+    research/cpu-sched/analysis/dist-steps.py  (module: dist_steps)
 
     NEW constants:
       STEP3_BINS         int == 80  — the fixed log-histogram bin count for
@@ -27,7 +27,7 @@ the optimized implementation stays under them.
 Existing behavior stays green (requirement d): test_dist_steps.py 40 tests
 are NOT modified and must keep passing.
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_steps_memory.py -q
 """
 

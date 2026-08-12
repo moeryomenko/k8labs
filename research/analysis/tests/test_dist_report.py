@@ -4,7 +4,7 @@ Test-first design, red until the engineer implements the script.
 The module/function/CLI names used here are the contract the implementation must
 build:
 
-    research/analysis/dist-report.py  (module: dist_report)
+    research/cpu-sched/analysis/dist-report.py  (module: dist_report)
 
     Constants:
       REPORT_FILENAME          "DEEP-DIVE-EEVDF-EXEC.md"
@@ -110,7 +110,7 @@ Covered behavior:
   degraded cells listed in the report appendix
   output naming + layout conventions honored by the generator
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_report.py -q
 """
 

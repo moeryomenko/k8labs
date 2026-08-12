@@ -1,7 +1,7 @@
 """Tests for latency percentile computation.
 
 These tests are written test-first against a module that does not exist yet:
-``research/analysis/latency_stats.py``. The module must implement the following
+``research/cpu-sched/analysis/latency_stats.py``. The module must implement the following
 public API, which is the contract these tests encode:
 
     compute_percentiles(values, percentiles=(50, 95, 99)) -> dict[float, float]
@@ -28,7 +28,7 @@ definition and cross-checked against numpy:
     [5,5,5]   -> 5.0 / 5.0 / 5.0
     [10,1,30,20,5] -> p50=10.0  p95=28.0  p99=29.6
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_latency_percentiles.py -q
 """
 
@@ -41,7 +41,7 @@ import pytest
 
 # The module does not exist yet — collection fails with ModuleNotFoundError,
 # which is the red phase of the test-first design. Creating
-# research/analysis/latency_stats.py makes these tests pass.
+# research/cpu-sched/analysis/latency_stats.py makes these tests pass.
 from latency_stats import compute_percentiles, p50_p95_p99  # noqa: F401
 
 

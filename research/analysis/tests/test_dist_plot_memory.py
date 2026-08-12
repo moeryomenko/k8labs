@@ -10,7 +10,7 @@ tests and MUST stay intact).
 
 What is pinned here (no-dict-explosion + bounded artists):
 
-    research/analysis/dist-plot.py  (module: dist_plot)
+    research/cpu-sched/analysis/dist-plot.py  (module: dist_plot)
 
     NEW constants:
       GANTT_BAR_BUDGET   int > 0, <= 500  — the max number of bar artists the
@@ -39,7 +39,7 @@ deterministic) so the CURRENT implementation (one ax.barh per slice) draws
 ~50K patches — far above the bound — while the optimized implementation
 (vectorized bars + fixed budget) stays under it.
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_plot_memory.py -q
 """
 

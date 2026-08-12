@@ -3,7 +3,7 @@
 Test-first design, red until the script is implemented.
 The module/function/CLI names used here are the contract the implementation must build:
 
-    research/analysis/tunables-analyze.py  (module: tunables_analyze)
+    research/cpu-sched/analysis/tunables-analyze.py  (module: tunables_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
       discover_replicates(data_dir: Path, summary_df: pd.DataFrame)
           -> dict[str, list[Path]]
@@ -35,7 +35,7 @@ Covered behavior:
   empty input -> header-only output, no crash
   matplotlib lazy import, headless/non-fatal
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_tunables.py -q
 """
 

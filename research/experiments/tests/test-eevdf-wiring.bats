@@ -26,19 +26,19 @@
 #   unknown/misspelled --eevdf forms are rejected
 #
 # Run from project root:
-#   bats research/experiments/tests/test-eevdf-wiring.bats
+#   bats research/cpu-sched/experiments/tests/test-eevdf-wiring.bats
 #
 # Run a specific test (filter by any substring of the test description):
-#   bats --filter "EEVDF collection steps" research/experiments/tests/test-eevdf-wiring.bats
+#   bats --filter "EEVDF collection steps" research/cpu-sched/experiments/tests/test-eevdf-wiring.bats
 
 setup() {
-    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd -P)"
-    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/experiments"
+    export PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../../.." && pwd -P)"
+    export EXPERIMENTS_DIR="$PROJECT_ROOT/research/cpu-sched/experiments"
     export RUN_EXPERIMENT_SH="$EXPERIMENTS_DIR/run-experiment.sh"
     export COMMON_SH="$EXPERIMENTS_DIR/common.sh"
     export BASELINE_CONFIG="$EXPERIMENTS_DIR/configs/throttling-baseline.yaml"
     export CO_LOCATED_CONFIG="$EXPERIMENTS_DIR/configs/co-located.yaml"
-    export EEVDF_BIN_DIR="$PROJECT_ROOT/research/bin"
+    export EEVDF_BIN_DIR="$PROJECT_ROOT/research/cpu-sched/bin"
     export EEVDF_OBSERVE_SH="$EEVDF_BIN_DIR/eevdf-observe.sh"
 
     # Sanity checks on runner and pre-existing configs
@@ -280,7 +280,7 @@ setup() {
 #   the new enumeration tests FAIL (5); the pre-existing
 #   membership/regression tests are green guards the fix must keep green.
 #
-# Run: bats --filter "cgroup membership" research/experiments/tests/test-eevdf-wiring.bats
+# Run: bats --filter "cgroup membership" research/cpu-sched/experiments/tests/test-eevdf-wiring.bats
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -289,7 +289,7 @@ setup() {
 # each @test in a fresh subprocess, so PATH/exports never leak).
 # ---------------------------------------------------------------------------
 setup_fakes() {
-    export EEVDF_COMMON_SH="$PROJECT_ROOT/research/bin/eevdf-common.sh"
+    export EEVDF_COMMON_SH="$PROJECT_ROOT/research/cpu-sched/bin/eevdf-common.sh"
     export NODE_IP="192.0.2.10"                 # TEST-NET-1, unroutable by design
     export FAKE_BIN="$BATS_TEST_TMPDIR/fakebin"
     export FAKE_NODE_ROOT="$BATS_TEST_TMPDIR/vnode"

@@ -4,7 +4,7 @@ Test-first design, red until the engineer implements the script.
 The module/function/CLI names used here are the contract the implementation must
 build:
 
-    research/analysis/dist-plot.py  (module: dist_plot)
+    research/cpu-sched/analysis/dist-plot.py  (module: dist_plot)
 
     Constants:
       CELL_HISTOGRAM   "slice-histogram.png"
@@ -75,7 +75,7 @@ Covered behavior:
   identical SHA-256 across two runs
   output layout output/distribution/<family>/<cell>/ + <family>/
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_plot.py -q
 """
 

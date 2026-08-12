@@ -4,7 +4,7 @@ Test-first design, red until the engineer implements the script.
 The module/function/CLI names used here are the contract the implementation must
 build:
 
-    research/analysis/dist-steps.py  (module: dist_steps)
+    research/cpu-sched/analysis/dist-steps.py  (module: dist_steps)
 
     Constants:
       STEP_FILES       tuple of exactly the six pinned step-*.png names, in
@@ -60,7 +60,7 @@ Covered behavior:
           hardcoded values (changed-data fixture proves it)
   identical SHA-256 across two runs
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_dist_steps.py -q
 """
 

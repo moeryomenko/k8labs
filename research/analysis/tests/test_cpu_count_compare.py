@@ -3,7 +3,7 @@
 Test-first design, red until the script is implemented.
 The module/function/CLI names used here are the contract the engineer must build:
 
-    research/analysis/cpu-count-compare.py  (module: cpu_count_compare)
+    research/cpu-sched/analysis/cpu-count-compare.py  (module: cpu_count_compare)
       OUTPUT_COMPARISON_CSV = "cpu-count-compare.csv"
       OUTPUT_DETAIL_CSV     = "cpu-count-detail.csv"
       OUTPUT_SCALED_CSV     = "cpu-count-4v-scaled.csv"
@@ -53,7 +53,7 @@ Covered behavior:
   CLI --output-dir contract: exit 0 on fixtures, non-zero
         + clear message on missing input
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_cpu_count_compare.py -q
 """
 

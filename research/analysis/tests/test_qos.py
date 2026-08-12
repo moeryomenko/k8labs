@@ -3,7 +3,7 @@
 Test-first design, red until the script is implemented.
 The module/function/CLI names used here are the contract the implementation must build:
 
-    research/analysis/qos-analyze.py  (module: qos_analyze)
+    research/cpu-sched/analysis/qos-analyze.py  (module: qos_analyze)
       load_summary(data_dir: Path) -> pd.DataFrame
       discover_hierarchy_files(data_dir: Path, summary_df: pd.DataFrame)
           -> dict[str, Path]
@@ -29,7 +29,7 @@ Covered behavior:
       verify_hierarchy_weights use the self-representing entry's own weight
       (TestGuaranteedDirectSlice)
 
-Run from research/analysis:
+Run from research/cpu-sched/analysis:
     python3 -m pytest tests/test_qos.py -q
 """
 

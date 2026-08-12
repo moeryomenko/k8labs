@@ -578,7 +578,7 @@ def write_eevdf_slices_csv(path: pathlib.Path, durations: list[float]) -> pathli
 def family_c_hierarchy(node: str = "cp1") -> dict:
     """Golden cgroup-hierarchy JSON for one 3-QoS-class cell.
 
-    Slice weights mirror research/experiments/tests/test-cgroup-hierarchy.bats
+    Slice weights mirror research/cpu-sched/experiments/tests/test-cgroup-hierarchy.bats
     (kubepods_slice_weight 100, burstable 46, besteffort 2). Pod weights
     59/100/1 match the Family C summary.csv cpu_weight column.
     """
@@ -982,7 +982,7 @@ TUN_SIGNIFICANCE_ROWS = [
 # (kernel-validated: 0 for the no-burst baseline, 25000 for the burst cell).
 # cpu_max_quota is the CFS quota in microseconds (25000 = 250m). The `cell`
 # labels are the experiment matrix labels copied from the real
-# research/experiments/data/cpu-burst/summary.csv — the burst cell is labelled
+# research/cpu-sched/experiments/data/cpu-burst/summary.csv — the burst cell is labelled
 # burst=100000 (the value the matrix requested, rejected EINVAL by the kernel)
 # while the applied value is 25000; the generator MUST read the applied value
 # from cpu_max_burst and never parse the cell label.
@@ -1119,7 +1119,7 @@ def partial_analysis_output_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 # string that NAMES the cell directory (no pod prefix). A naive first-dash
 # split of the label is therefore WRONG (pod-a-a_request=... -> pod "pod"),
 # which is the verified bug these fixtures reproduce. Cell strings
-# below are copied verbatim from research/experiments/data/*/summary.csv.
+# below are copied verbatim from research/cpu-sched/experiments/data/*/summary.csv.
 # ---------------------------------------------------------------------------
 
 REAL_TS = "20260803T093031Z"
