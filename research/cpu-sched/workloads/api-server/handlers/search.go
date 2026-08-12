@@ -57,13 +57,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.db.Exec("SELECT documents")
 
 	// Scale dataset with complexity.
-	docCount := int(100 * h.complexity)
-	if docCount < 20 {
-		docCount = 20
-	}
-	if docCount > 500 {
-		docCount = 500
-	}
+	docCount := min(max(int(100*h.complexity), 20), 500)
 
 	corpus := generateDocuments(docCount, docType)
 
@@ -101,20 +95,14 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Paginate.
-	start := (page - 1) * perPage
-	if start >= len(results) {
-		start = len(results)
-	}
-	end := start + perPage
-	if end > len(results) {
-		end = len(results)
-	}
+	start := min((page-1)*perPage, len(results))
+	end := min(start+perPage, len(results))
 	paginated := results[start:end]
 	if paginated == nil {
 		paginated = []Document{}
 	}
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"data":  paginated,
 		"page":  page,
 		"total": len(results),
@@ -247,7 +235,7 @@ func levenshtein(a, b string) int {
 }
 
 // generateDocuments creates a simulated document corpus.
-func generateDocuments(count int, docType string) []Document {
+func generateDocuments(count int, _ string) []Document {
 	titles := []string{
 		"Kubernetes Pod Lifecycle Management",
 		"Understanding Linux CPU Scheduling",
@@ -275,7 +263,7 @@ func generateDocuments(count int, docType string) []Document {
 	docs := make([]Document, count)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano() - 2000))
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		title := titles[rng.Intn(len(titles))]
 		// Add some random variation to simulate different documents.
 		if rng.Intn(3) == 0 {

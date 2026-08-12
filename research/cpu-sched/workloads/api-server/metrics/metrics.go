@@ -132,8 +132,8 @@ func (c *Collector) FormatPrometheus() string {
 	b.WriteString("# HELP api_requests_total Total number of API requests by endpoint and status class\n")
 	b.WriteString("# TYPE api_requests_total counter\n")
 	for ep, em := range c.endpoints {
-		b.WriteString(fmt.Sprintf("api_requests_total{endpoint=%q,status=\"2xx\"} %d\n", ep, em.Success.Load()))
-		b.WriteString(fmt.Sprintf("api_requests_total{endpoint=%q,status=\"error\"} %d\n", ep, em.Errors.Load()))
+		fmt.Fprintf(&b, "api_requests_total{endpoint=%q,status=\"2xx\"} %d\n", ep, em.Success.Load())
+		fmt.Fprintf(&b, "api_requests_total{endpoint=%q,status=\"error\"} %d\n", ep, em.Errors.Load())
 	}
 
 	// Per-endpoint duration histogram.
@@ -141,8 +141,8 @@ func (c *Collector) FormatPrometheus() string {
 	b.WriteString("# TYPE api_request_duration_milliseconds histogram\n")
 	for ep, em := range c.endpoints {
 		for i := range em.Buckets {
-			b.WriteString(fmt.Sprintf("api_request_duration_milliseconds_bucket{endpoint=%q,le=%q} %d\n",
-				ep, em.Buckets[i].Le, em.Buckets[i].Count.Load()))
+			fmt.Fprintf(&b, "api_request_duration_milliseconds_bucket{endpoint=%q,le=%q} %d\n",
+				ep, em.Buckets[i].Le, em.Buckets[i].Count.Load())
 		}
 	}
 
@@ -150,20 +150,20 @@ func (c *Collector) FormatPrometheus() string {
 	ns := c.cpuTimeNs.Load()
 	b.WriteString("# HELP process_cpu_seconds_total Cumulative process CPU time in seconds\n")
 	b.WriteString("# TYPE process_cpu_seconds_total counter\n")
-	b.WriteString(fmt.Sprintf("process_cpu_seconds_total %.9f\n", float64(ns)/1e9))
+	fmt.Fprintf(&b, "process_cpu_seconds_total %.9f\n", float64(ns)/1e9)
 
 	// DB pool metrics.
 	b.WriteString("# HELP db_connections_active Active database connections\n")
 	b.WriteString("# TYPE db_connections_active gauge\n")
-	b.WriteString(fmt.Sprintf("db_connections_active %d\n", c.DbActive.Load()))
+	fmt.Fprintf(&b, "db_connections_active %d\n", c.DbActive.Load())
 
 	b.WriteString("# HELP db_connections_idle Idle database connections\n")
 	b.WriteString("# TYPE db_connections_idle gauge\n")
-	b.WriteString(fmt.Sprintf("db_connections_idle %d\n", c.DbIdle.Load()))
+	fmt.Fprintf(&b, "db_connections_idle %d\n", c.DbIdle.Load())
 
 	b.WriteString("# HELP db_query_duration_milliseconds Database query duration (placeholder, simulated)\n")
 	b.WriteString("# TYPE db_query_duration_milliseconds gauge\n")
-	b.WriteString(fmt.Sprintf("db_query_duration_milliseconds %d\n", int64(0)))
+	fmt.Fprintf(&b, "db_query_duration_milliseconds %d\n", int64(0))
 
 	return b.String()
 }

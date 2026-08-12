@@ -43,13 +43,7 @@ func (h *ReportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.db.Exec("SELECT report_metadata")
 
 	// Scale computation with complexity factor.
-	scale := int(50 * h.complexity)
-	if scale < 10 {
-		scale = 10
-	}
-	if scale > 200 {
-		scale = 200
-	}
+	scale := min(max(int(50*h.complexity), 10), 200)
 
 	// Generate synthetic data points.
 	rng := rand.New(rand.NewSource(time.Now().UnixNano() - 3000))
@@ -64,7 +58,7 @@ func (h *ReportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Additional heavy computation: simulate covariance matrix.
 	covMatrix := computeCovarianceSimulation(data, period)
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"period":            period,
 		"dimension":         dimension,
 		"data_points":       len(data),
@@ -92,7 +86,7 @@ type Stats struct {
 }
 
 // computeStats calculates statistical aggregates over data using big.Float.
-func computeStats(data []float64, period, dimension string) Stats {
+func computeStats(data []float64, _, _ string) Stats {
 	prec := uint(128) // 128-bit precision for CPU intensity
 	n := new(big.Float).SetPrec(prec).SetInt64(int64(len(data)))
 
@@ -218,16 +212,16 @@ func percentile(data []float64, p float64, prec uint) *big.Float {
 
 // computeCovarianceSimulation simulates covariance matrix computation
 // using big.Float arithmetic for deliberate CPU intensity.
-func computeCovarianceSimulation(data []float64, period string) [][]string {
+func computeCovarianceSimulation(data []float64, _ string) [][]string {
 	// Simulate 5 dimensions of data.
 	numDims := 5
 	mat := make([][]string, numDims)
 	prec := uint(128)
 	n := new(big.Float).SetPrec(prec).SetInt64(int64(len(data)))
 
-	for i := 0; i < numDims; i++ {
+	for i := range numDims {
 		mat[i] = make([]string, numDims)
-		for j := 0; j < numDims; j++ {
+		for j := range numDims {
 			sum := new(big.Float).SetPrec(prec)
 			for k := 1; k < len(data); k++ {
 				xi := new(big.Float).SetPrec(prec).SetFloat64(data[k] * float64(i+1))

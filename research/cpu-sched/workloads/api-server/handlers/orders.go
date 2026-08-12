@@ -80,13 +80,7 @@ func (h *OrderHandler) listOrders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Scale dataset size with complexity factor.
-	totalOrders := int(200 * h.complexity)
-	if totalOrders < 50 {
-		totalOrders = 50
-	}
-	if totalOrders > 1000 {
-		totalOrders = 1000
-	}
+	totalOrders := min(max(int(200*h.complexity), 50), 1000)
 
 	orders := generateOrders(totalOrders)
 
@@ -107,21 +101,15 @@ func (h *OrderHandler) listOrders(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Paginate.
-	start := (page - 1) * perPage
-	if start >= len(orders) {
-		start = len(orders)
-	}
-	end := start + perPage
-	if end > len(orders) {
-		end = len(orders)
-	}
+	start := min((page-1)*perPage, len(orders))
+	end := min(start+perPage, len(orders))
 	paginated := orders[start:end]
 	if paginated == nil {
 		paginated = []Order{}
 	}
 
 	// Build response with metadata.
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"data":     paginated,
 		"page":     page,
 		"per_page": perPage,
@@ -141,7 +129,7 @@ func generateOrders(count int) []Order {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano() - 1000))
 	baseTime := time.Date(2024, time.June, 1, 0, 0, 0, 0, time.UTC)
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		status := statuses[rng.Intn(len(statuses))]
 		created := baseTime.Add(time.Duration(i) * time.Hour)
 		var shipped *time.Time
