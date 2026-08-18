@@ -310,6 +310,12 @@ tfvars: ## Generate terraform.tfvars from defaults for deployment
 		echo '    Edit $(TFVARS) to adjust VM count and MAC addresses'; \
 	fi
 
+.PHONY: tofu-init
+tofu-init: ## Initialize OpenTofu modules (phase A root + phase B runtime), non-interactively
+	@echo 'Initializing OpenTofu modules...'
+	tofu -chdir=terraform init -input=false
+	tofu -chdir=terraform/runtime init -input=false
+
 .PHONY: vm-disks
 vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backing chain)
 	@echo 'Creating VM root disks from base image...'
@@ -350,7 +356,7 @@ vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backi
 	echo '  VM disks ready'
 
 .PHONY: deploy
-deploy: network-up tfvars vm-disks ## Apply Terraform/OpenTofu infrastructure
+deploy: network-up tfvars vm-disks tofu-init ## Apply Terraform/OpenTofu infrastructure
 	@echo 'Applying Terraform infrastructure...'
 	tofu -chdir=terraform apply -auto-approve -var-file="../$(TFVARS)"
 
@@ -493,7 +499,7 @@ runtime-tfvars: ## Generate build/runtime.tfvars from tofu output + DHCP leases
 	scripts/runtime-tfvars.sh
 
 .PHONY: configure
-configure: wait-ips wait-ssh ## Configure phase B: generate PKI + role confexts and activate services
+configure: wait-ips wait-ssh tofu-init ## Configure phase B: generate PKI + role confexts and activate services
 	@set -euo pipefail; \
 	echo 'Generating runtime tfvars (phase B inputs)...'; \
 	scripts/runtime-tfvars.sh; \
@@ -517,7 +523,7 @@ prereq: ## Validate required build tools (tofu, cloud-hypervisor, openssl, nft, 
 	exit $$fail
 
 .PHONY: cluster
-cluster: network-up base tfvars vm-disks sysexts confexts ## Full pipeline: network -> base -> deploy (phase A) -> configure (phase B) -> cluster ops
+cluster: network-up base tfvars vm-disks sysexts confexts tofu-init ## Full pipeline: network -> base -> deploy (phase A) -> configure (phase B) -> cluster ops
 	@set -euo pipefail; \
 	echo 'Building cluster...'; \
 	echo '  Step 1: Deploy VMs (tofu apply, phase A)...'; \

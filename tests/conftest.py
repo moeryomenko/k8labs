@@ -22,6 +22,17 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers so `-m` selection works without warnings."""
+    config.addinivalue_line(
+        "markers",
+        "network: needs registry.opentofu.org reachability "
+        "(deselect with -m 'not network')",
+    )
+
+
 CLI = REPO_ROOT / "scripts" / "nodes.py"
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
 
