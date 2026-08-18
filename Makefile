@@ -337,7 +337,13 @@ vm-disks: ## Create per-VM root disk images from the base image (qcow2, no backi
 	printf '%s\n' "$$PAIRS" | while IFS=$$'\t' read -r node size; do \
 		[ -n "$$node" ] || continue; \
 		disk="$${VDIR}/$${node}-root.qcow2"; \
-		if [ ! -f "$$disk" ]; then \
+		if [ ! -f "$$disk" ] || [ "$$BASE" -nt "$$disk" ]; then \
+			if [ -f "$$disk" ]; then \
+				if pgrep -f '[c]loud-hypervisor' >/dev/null 2>&1; then \
+					echo "ERROR: base image is newer than root disk $$disk; VMs are running - run \`make destroy\` then re-run" >&2; \
+					exit 1; \
+				fi; \
+			fi; \
 			echo "  Creating $$disk ($${size} MiB)..."; \
 			qemu-img convert -O qcow2 "$$BASE" "$$disk"; \
 			qemu-img resize "$$disk" "$${size}M" >/dev/null; \
