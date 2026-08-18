@@ -116,6 +116,7 @@ Per-node TAP configs are generated from tfvars into `build/network/` by `make no
 | `make configure` | Phase B: generate PKI + role confexts and activate services (`terraform/runtime`) |
 | `make destroy` | Tear down all VMs |
 | `make destroy-full` | Destroy VMs, runtime state, certs, and kubeconfig |
+| `make redeploy` | Destroy VMs and rebuild the cluster from the current base image |
 | `make scale` | Converge the cluster to match tfvars (node-tools -> network-up -> vm-disks -> deploy -> configure -> rbac -> cilium -> coredns -> smoke-test) |
 
 **Cluster operations:**
@@ -133,6 +134,10 @@ Per-node TAP configs are generated from tfvars into `build/network/` by `make no
 | `make test` | Run the Python test suite (pytest) |
 
 Pre-built dependencies are cached: re-running `make cluster` skips stages whose artifacts already exist. Use `make base-rebuild` to force re-baking the base image.
+
+**Rebuilding after a base change:**
+
+Root disks are created from the base image at `make vm-disks` time; a rebuilt base image does not propagate to existing disks or already-running VMs. `tofu apply` is idempotent, so re-running `make cluster` alone is not enough — the old disks and VMs would remain. Run `make redeploy` after `make base-rebuild` (or whenever the base image changes): it destroys the VMs and rebuilds disks + cluster from the current base. `make vm-disks` recreates a root disk when the base image is newer than it, and fails with a hint to run `make destroy` if it must recreate while VMs are running.
 
 Run `make validate` to check the Packer template, both OpenTofu root modules, and node definitions in tfvars (syncing Python tooling first) without building anything.
 

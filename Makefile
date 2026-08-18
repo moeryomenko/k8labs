@@ -431,6 +431,10 @@ destroy-full: destroy ## Destroy all artifacts (VMs + runtime state + kubeconfig
 	@rm -f kubeconfig
 	@echo '==> Cleanup complete.'
 
+.PHONY: redeploy
+redeploy: destroy ## Rebuild the cluster from the current base image after a base change (destroy VMs, then recreate disks + VMs from the current base)
+	$(MAKE) cluster
+
 .PHONY: wait-ips
 wait-ips: ## Wait for ALL VMs to get DHCP leases (reads systemd-networkd lease file by MAC)
 	@echo '  Waiting for all VM IP addresses (DHCP leases)...'
