@@ -1,0 +1,152 @@
+# k8labs declarative CAPI assets — the workload Cluster and every object its
+# ClusterClass references, rendered once from
+# cluster-api-hypervisor/templates/cluster-template.yaml with the concrete
+# lab values documented by that template's twin,
+# cluster-api-hypervisor/templates/cluster-example.yaml:
+#
+#   CLUSTER_NAME                = k8labs
+#   NAMESPACE                   = default
+#   KUBERNETES_VERSION          = v1.32.13
+#     (the kubelet and kubernetes-cp pins in extensions/manifest.yaml)
+#   CONTROL_PLANE_MACHINE_COUNT = 1
+#   WORKER_MACHINE_COUNT        = 3
+#
+# Machine sizes carry the build/deploy.tfvars defaults into the
+# HypervisorMachineTemplate specs the ClusterClass references: control-plane
+# cpu 2 / ram 2048MiB / disk 20480MiB; workers cpu 2 / ram 4096MiB /
+# disk 40960MiB (the common worker shape; w2's extra vCPU is a per-node
+# upscale the shared MachineDeployment template cannot express).
+#
+# Apply order is document order: ClusterClass first, then the referenced
+# templates, then the topology Cluster.
+---
+# ClusterClass — verbatim from
+# cluster-api-hypervisor/templates/clusterclass.yaml.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: ClusterClass
+metadata:
+  name: hypervisor-cluster-template
+  namespace: default
+spec:
+  infrastructure:
+    ref:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: HypervisorCluster
+      name: hypervisor-cluster-template
+  controlPlane:
+    ref:
+      apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+      kind: HypervisorControlPlane
+      name: hypervisor-control-plane
+    machineInfrastructure:
+      ref:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: HypervisorMachineTemplate
+        name: hypervisor-control-plane-machine-template
+  workers:
+    machineDeployments:
+      - class: default-worker
+        template:
+          bootstrap:
+            ref:
+              apiVersion: bootstrap.cluster.x-k8s.io/v1alpha1
+              kind: HypervisorConfig
+              name: hypervisor-worker-bootstrap
+          infrastructure:
+            ref:
+              apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+              kind: HypervisorMachineTemplate
+              name: hypervisor-worker-machine-template
+---
+# HypervisorCluster template referenced by the ClusterClass infrastructure
+# ref. Network values are the lab host network: bridge k8sbr0 on
+# 192.168.124.0/24 with gateway/DNS 192.168.124.1, NAT in the inet k8slab
+# nftables table.
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: HypervisorCluster
+metadata:
+  name: hypervisor-cluster-template
+  namespace: default
+spec:
+  network:
+    cidr: 192.168.124.0/24
+    gateway: 192.168.124.1
+    dnsIP: 192.168.124.1
+    bridgeName: k8sbr0
+    natTable: k8slab
+---
+# HypervisorControlPlane template referenced by the ClusterClass controlPlane
+# ref. Replicas and version are intentionally unset here: the Cluster topology
+# controls both on the cloned object (topology.controlPlane.replicas and
+# topology.version).
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+kind: HypervisorControlPlane
+metadata:
+  name: hypervisor-control-plane
+  namespace: default
+spec:
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: HypervisorMachineTemplate
+      name: hypervisor-control-plane-machine-template
+---
+# Control-plane machine shape from build/deploy.tfvars control_plane defaults.
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: HypervisorMachineTemplate
+metadata:
+  name: hypervisor-control-plane-machine-template
+  namespace: default
+spec:
+  template:
+    spec:
+      cpu: 2
+      ram: 2048
+      disk: 20480
+---
+# Worker bootstrap config template referenced by the default-worker class.
+# The HypervisorControlPlane controller renders per-node bootstrap data at
+# runtime; role pins this template to worker nodes.
+apiVersion: bootstrap.cluster.x-k8s.io/v1alpha1
+kind: HypervisorConfig
+metadata:
+  name: hypervisor-worker-bootstrap
+  namespace: default
+spec:
+  clusterName: k8labs
+  role: worker
+---
+# Worker machine shape from build/deploy.tfvars worker defaults (ram/disk are
+# identical across w1/w2; cpu takes w1's 2 as the shared baseline).
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: HypervisorMachineTemplate
+metadata:
+  name: hypervisor-worker-machine-template
+  namespace: default
+spec:
+  template:
+    spec:
+      cpu: 2
+      ram: 4096
+      disk: 40960
+---
+# The workload Cluster. The cluster-name label lets the capi/addons/
+# ClusterResourceSets target this cluster via their clusterSelector.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: k8labs
+  namespace: default
+  labels:
+    cluster.x-k8s.io/cluster-name: k8labs
+spec:
+  topology:
+    class: hypervisor-cluster-template
+    version: v1.32.13
+    controlPlane:
+      replicas: 1
+    workers:
+      machineDeployments:
+        - name: md-0
+          class: default-worker
+          replicas: 3

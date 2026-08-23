@@ -1,6 +1,5 @@
 [tools]
 # Tool versions are pinned for reproducibility. Update together when upgrading the cluster.
-opentofu = "1.8.0"
 packer = "1.11.2"
 kubectl = "1.32.0"
 uv = "0.12.3"

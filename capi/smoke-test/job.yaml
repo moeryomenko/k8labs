@@ -1,0 +1,40 @@
+# In-cluster smoke probe for the k8labs Cilium LB Gateway.
+#
+# Runs inside the workload cluster (namespace default) and curls the Service
+# that Cilium's gateway-controller provisions for the Gateway cilium-gw
+# (cilium/gateway.yaml) at its cluster-local DNS name. The Gateway fronts the
+# echo-service backend via cilium/http-route.yaml, so an HTTP 2xx from this
+# probe proves the L2 LB pool announcement, the Gateway data path, and the
+# HTTPRoute backend all work end to end.
+#
+# Namespace-scoped on purpose: the job is applied to the workload cluster
+# after `make smoke-test` brings the nodes up, and must never touch
+# cluster-scoped state.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lb-smoke-test
+  namespace: default
+  labels:
+    app.kubernetes.io/name: lb-smoke-test
+    app.kubernetes.io/part-of: k8labs
+spec:
+  # Fail fast: a smoke gate must not retry a broken datapath into a pass.
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lb-smoke-test
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: curl
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "probing Cilium LB gateway http://cilium-gw.default.svc.cluster.local/"
+              curl --fail --silent --show-error --max-time 10 \
+                http://cilium-gw.default.svc.cluster.local/

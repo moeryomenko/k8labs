@@ -1,5 +1,0 @@
-# k8sbr0.netdev — systemd-networkd netdev definition for the cluster bridge
-# This bridge replaces libvirt's virbr0 for Cloud-Hypervisor VMs
-[NetDev]
-Name=k8sbr0
-Kind=bridge

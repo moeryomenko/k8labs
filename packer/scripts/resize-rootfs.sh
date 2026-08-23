@@ -6,8 +6,8 @@
 # lives on LVM, grows the PV/VG/LV so the filesystem fills the whole disk.
 # This is the image-baked replacement for the Ansible resize task
 # (ansible/playbooks/deploy-extensions.yml:25-43); it runs once per instance
-# from the cloud-init runcmd added by the spec
-# (terraform/cloud-init/cloud_init.cfg) and is packaged by Packer at
+# as a first-boot root resize invoked by the node cloud-init user-data (the
+# provider renders CIDATA now) and is packaged by Packer at
 # /usr/local/sbin/resize-rootfs.sh.
 #
 # Layout assumption: the Fedora Cloud Base image partitions the virtio root

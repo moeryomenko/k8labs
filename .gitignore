@@ -24,44 +24,13 @@ sysext/etcd/usr/bin/*
 sysext/kubernetes-cp/usr/bin/*
 sysext/perfetto/usr/bin/*
 
-# Generated TLS certificates, kubeconfigs, and cluster admin config
-/certs/*
-!/certs/.gitkeep
+# Generated kubeconfig for legacy cluster-ops targets
 kubeconfig
-
-# Local .terraform directories and state
-.terraform/
-*.tfstate
-*.tfstate.*
-.terraform.tfstate.lock.info
 
 # Temporal files — logs, stamps, generated output
 *.log
 crash.log
 crash.*.log
-
-# .tfvars files contain sensitive data — never commit
-*.tfvars
-*.tfvars.json
-
-# Parser test fixtures are intentionally committed (canonical parser inputs)
-!tests/fixtures/*.tfvars
-
-# Research bats fixtures are intentionally committed (derivation test inputs)
-!research/cpu-sched/experiments/tests/fixtures/*.tfvars
-
-# Override files are local-only
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-
-# CLI configuration files (local to each developer)
-.terraformrc
-terraform.rc
-
-# Generated cloud-init disk images — created at build time
-terraform/cloud-init/out/
 
 perfetto-plots
 perfetto-analysis

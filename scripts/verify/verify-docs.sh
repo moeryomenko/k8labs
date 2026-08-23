@@ -10,9 +10,8 @@
 #   3. no Ansible bootstrap instructions: `make bootstrap`, `ansible-playbook`,
 #      or Ansible described as the node-config mechanism (stale)
 #   4. no `make certs` / `make deploy-extensions` references (stale)
-#   5. `make configure` (phase-B target) is mentioned (present)
-#   6. sysext/confext architecture is described (present)
-#   7. AGENTS.md "Version pins" section exists and lists a Cilium version pin
+#   5. sysext/confext architecture is described (present)
+#   6. AGENTS.md "Version pins" section exists and lists a Cilium version pin
 #      and conmon as a baked prerequisite (present)
 #
 # The stale-claim checks (1-4) tolerate lines that are migration
@@ -162,26 +161,17 @@ check_4() {
 }
 
 check_5() {
-    if grep -qiF 'make configure' "${README}" "${AGENTS}"; then
-        _detail=$(grep -inF 'make configure' "${README}" "${AGENTS}")
-        result PASS "check 5 — docs mention make configure (phase-B target)" "${_detail}"
+    if grep -qiE 'systemd-sysext|systemd-confext|system extension' "${README}" "${AGENTS}"; then
+        _detail=$(grep -inE 'systemd-sysext|systemd-confext|system extension' "${README}" "${AGENTS}")
+        result PASS "check 5 — sysext/confext architecture described (systemd-sysext / systemd-confext / system extension)" "${_detail}"
     else
-        result FAIL "check 5 — make configure not mentioned in README.md/AGENTS.md"
+        result FAIL "check 5 — sysext/confext architecture not described"
     fi
 }
 
 check_6() {
-    if grep -qiE 'systemd-sysext|systemd-confext|system extension' "${README}" "${AGENTS}"; then
-        _detail=$(grep -inE 'systemd-sysext|systemd-confext|system extension' "${README}" "${AGENTS}")
-        result PASS "check 6 — sysext/confext architecture described (systemd-sysext / systemd-confext / system extension)" "${_detail}"
-    else
-        result FAIL "check 6 — sysext/confext architecture not described"
-    fi
-}
-
-check_7() {
     if ! grep -qiE '^## .*[Vv]ersion [Pp]ins' "${AGENTS}"; then
-        result FAIL "check 7 — AGENTS.md has no 'Version pins' section (needed for Cilium pin and conmon baked prerequisite)"
+        result FAIL "check 6 — AGENTS.md has no 'Version pins' section (needed for Cilium pin and conmon baked prerequisite)"
         return
     fi
     _pins=$(awk '
@@ -208,9 +198,9 @@ check_7() {
   missing: conmon listed as a baked prerequisite in the Version pins section"
     fi
     if [ "${_b}" = "ok" ] && [ "${_c}" = "ok" ]; then
-        result PASS "check 7 — AGENTS.md Version pins section lists Cilium pin and conmon baked prerequisite" "${_pins}"
+        result PASS "check 6 — AGENTS.md Version pins section lists Cilium pin and conmon baked prerequisite" "${_pins}"
     else
-        result FAIL "check 7 — AGENTS.md Version pins section incomplete:" "${_missing_pins}"
+        result FAIL "check 6 — AGENTS.md Version pins section incomplete:" "${_missing_pins}"
     fi
 }
 
@@ -224,7 +214,7 @@ for _f in "${README}" "${AGENTS}"; do
 done
 if [ -n "${_missing}" ]; then
     printf 'FAIL: documentation file(s) missing:%s\n' "${_missing}"
-    for _n in 1 2 3 4 5 6 7; do
+    for _n in 1 2 3 4 5 6; do
         printf 'FAIL: check %s — cannot verify (documentation file missing)\n' "${_n}"
     done
     exit 1
@@ -236,11 +226,10 @@ check_3
 check_4
 check_5
 check_6
-check_7
 
 if [ "${fail_count}" -eq 0 ]; then
-    printf 'RESULT: all 7 checks passed\n'
+    printf 'RESULT: all 6 checks passed\n'
     exit 0
 fi
-printf 'RESULT: %s of 7 checks failed\n' "${fail_count}"
+printf 'RESULT: %s of 6 checks failed\n' "${fail_count}"
 exit 1
