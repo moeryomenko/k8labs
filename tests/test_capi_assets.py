@@ -102,9 +102,9 @@ version-pin-consistency
 offline-validation
     CHOSEN METHOD: pure client-side YAML/schema assertions, NOT
     ``kubectl apply --dry-run=client``. Reason (verified against kubectl
-    1.32 behavior): the assets use CRD kinds (cluster.x-k8s.io/v1beta1,
+    1.32 behavior): the assets use CRD kinds (cluster.x-k8s.io/v1beta2,
     infrastructure|controlplane|bootstrap.cluster.x-k8s.io/v1alpha1,
-    addons.cluster.x-k8s.io/v1beta1) that are absent from kubectl's local
+    addons.cluster.x-k8s.io/v1beta2) that are absent from kubectl's local
     scheme, so even with ``--validate=false`` client-side apply needs REST
     mapping via discovery against a live API server and fails offline.
     The structural checks below (apiVersion/kind/metadata.name presence,
@@ -442,7 +442,8 @@ def test_cluster_carries_concrete_committed_values() -> None:
     assert meta.get("namespace") == EXPECTED_NAMESPACE
     spec = as_mapping(cluster.get("spec") or {}, "Cluster.spec")
     topology = as_mapping(spec.get("topology") or {}, "Cluster.spec.topology")
-    assert topology.get("class") == EXPECTED_CLUSTERCLASS
+    class_ref = as_mapping(topology.get("classRef") or {}, "topology.classRef")
+    assert class_ref.get("name") == EXPECTED_CLUSTERCLASS
     control_plane = as_mapping(
         topology.get("controlPlane") or {}, "topology.controlPlane"
     )

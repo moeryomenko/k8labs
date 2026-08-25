@@ -3,7 +3,7 @@
 # The selector matches the cluster-name label carried by the Cluster in
 # capi/cluster.yaml.
 
-apiVersion: addons.cluster.x-k8s.io/v1beta1
+apiVersion: addons.cluster.x-k8s.io/v1beta2
 kind: ClusterResourceSet
 metadata:
   name: coredns-crs
@@ -13,6 +13,5 @@ spec:
     matchLabels:
       cluster.x-k8s.io/cluster-name: k8labs
   resources:
-    - apiVersion: v1
-      kind: Secret
+    - kind: Secret
       name: coredns-manifests

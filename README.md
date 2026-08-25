@@ -27,7 +27,7 @@ The lab has three planes plus an image pipeline. The image pipeline produces art
  │                                                            │
  │  Providers: cluster-api-hypervisor (one binary)            │
  │    infrastructure + bootstrap + control-plane providers;   │
- │    components installed via clusterctl from file:// repos; │
+ │    components installed by capishim's setup container;     │
  │    manager runs as a user quadlet                          │
  │                                                            │
  │  Dataplane: k8netd (user quadlet)                          │
@@ -40,9 +40,9 @@ The lab has three planes plus an image pipeline. The image pipeline produces art
 
 1. **Management plane** — [capishim](https://github.com/moeryomenko/capishim) replaces a stock Cluster API management cluster with a podman quadlet pod: etcd, kube-apiserver, and the four CAPI core managers run as per-component containers under `systemctl --user`, with a Go setup container performing initialization (CA/certs, CRDs, RBAC, admin kubeconfig). The admin kubeconfig lives at `~/.kube/capishim.kubeconfig`; all management-plane operations go through it.
 
-2. **Providers** — [cluster-api-hypervisor](https://github.com/moeryomenko/cluster-api-hypervisor) is a single manager binary that registers three providers (infrastructure, bootstrap, control-plane). Its CRDs, RBAC, and webhook configurations are delivered to the management plane by `clusterctl init` from local `file://` provider repositories; the manager itself ships **no Deployment** — it runs as a user quadlet next to the management plane. It boots workload VMs through cloud-hypervisor and drives all cluster networking through k8netd.
+2. **Providers** — [cluster-api-hypervisor](https://github.com/moeryomenko/cluster-api-hypervisor) is a single manager binary that registers three providers (infrastructure, bootstrap, control-plane). Its CRDs, RBAC, and webhook configurations are installed into the management plane by capishim's setup container at pod boot, from manifests vendored into the capishim repository; the manager itself ships **no Deployment** — it runs as a user quadlet next to the management plane (installed with `make install-quadlet`). clusterctl is optional in this lab — only an offline template renderer (`generate cluster`). It boots workload VMs through cloud-hypervisor and drives all cluster networking through k8netd.
 
-3. **Dataplane** — [k8netd](https://github.com/moeryomenko/k8netd) is a rootless userspace vhost-user L2 switch with integrated IPAM, DHCP, DNS forwarding, and a per-VM passt WAN subprocess. It replaces the former Linux bridge + TAP + dnsmasq + nftables stack, presents a real L2 segment to the VMs (which Cilium L2 announcements require), and forwards host ports 6443/22 to the control-plane VM. The provider is its only client (JSON-RPC over a Unix control socket).
+3. **Dataplane** — [k8netd](https://github.com/moeryomenko/k8netd) is a rootless userspace vhost-user L2 switch with integrated IPAM, DHCP, DNS forwarding, and a per-VM passt WAN subprocess. It replaces the former Linux bridge + TAP + dnsmasq + nftables stack, presents a real L2 segment to the VMs (which Cilium L2 announcements require), and publishes per-VM host ports (workload apiserver, SSH) through an idempotent `PublishPort` RPC backed by a persisted allocator — distinct allocations per cluster are what allow several clusters to run concurrently on one host (`make multi-cluster-test` proves two). The provider is its only client (JSON-RPC over a Unix control socket).
 
 4. **Declarative cluster** — `capi/cluster.yaml` contains the checked-in Cluster and everything its ClusterClass references, rendered once with concrete values: cluster name `k8labs`, 1 control-plane machine + 3 workers (`md-0`), Kubernetes v1.32.13 (matching the kubelet/kubernetes-cp sysext pins), machine sizes carried from the former tfvars defaults (control plane cpu 2 / ram 2048MiB / disk 20480MiB; workers cpu 2 / ram 4096MiB / disk 40960MiB), and the lab network values (192.168.124.0/24, gateway/DNS 192.168.124.1). `make cluster-up` server-side applies it.
 
@@ -57,9 +57,9 @@ The lab has three planes plus an image pipeline. The image pipeline produces art
 | Hypervisor | KVM (Cloud-Hypervisor) |
 | Base OS | Fedora 44 (kernel 7.1) |
 | Image baking | Packer (cloudhypervisor builder on Fedora Cloud) |
-| Cluster lifecycle | Cluster API v1beta1 (ClusterClass topology) |
+| Cluster lifecycle | Cluster API v1beta2 (ClusterClass topology) |
 | Management plane | capishim — rootless podman quadlet pod (etcd + kube-apiserver + CAPI core managers), systemd --user |
-| Provider install | clusterctl against local `file://` provider repositories |
+| Provider install | vendored manifests applied by capishim's setup container at pod boot; manager quadlet via `make install-quadlet` |
 | Infra/bootstrap/control-plane provider | cluster-api-hypervisor (one binary, three providers, manager as user quadlet) |
 | Dataplane | k8netd — rootless userspace vhost-user L2 switch (IPAM, DHCP, DNS, per-VM passt WAN) |
 | Container runtime | CRI-O with crun |
@@ -88,12 +88,12 @@ make images && make install-quadlet && systemctl --user daemon-reload && systemc
 
 This builds the five capishim images, renders nine quadlet units into `~/.config/containers/systemd/`, enables lingering, and symlinks `~/.kube/capishim.kubeconfig` to the admin kubeconfig the setup container writes at boot.
 
-**cluster-api-hypervisor** (see `cluster-api-hypervisor/docs/install-contract.md` and `docs/clusterctl.md`) — from the provider checkout:
+**cluster-api-hypervisor** (see `cluster-api-hypervisor/docs/install-contract.md`; `docs/clusterctl.md` covers only the standalone clusterctl alternative) — from the provider checkout:
 
-1. One-time host preparation: add your user to the `kvm` group (the single privileged step of the whole lab), enable lingering, create the state directories, and install the two user quadlets (`k8netd.container`, `cluster-api-hypervisor.container`) into `~/.config/containers/systemd/`.
-2. Build the local-only provider image and release tree: `make image && make components`.
-3. Render the committed `clusterctl.yaml` (substituting the placeholder base paths) to `~/.cluster-api/clusterctl.yaml`.
-4. With the management plane running (`make mgmt-up` in k8labs): provision the static webhook certificates, then `clusterctl init --infrastructure hypervisor --bootstrap hypervisor --control-plane hypervisor --skip-cert-manager`, then patch the management CA into both webhook configurations' `caBundle`.
+1. One-time host preparation: add your user to the `kvm` group (the single privileged step of the whole lab) and create the state directories (full runbook in [docs/setup.md](docs/setup.md)).
+2. Build the local-only provider image and install the shipped quadlet: `make image && make install-quadlet && systemctl --user daemon-reload`. The quadlet (`deploy/cluster-api-hypervisor.container`) defaults to the k8labs layout; adjust the two path variables in its header if yours differs. Install k8netd's quadlet the same way from its own checkout.
+3. Start everything with `make mgmt-up` in k8labs — capishim's setup container installs all three hypervisor providers at pod boot and mints the provider's webhook certificates and kubeconfig, so there is nothing manual to run against the management plane. `mgmt-up` gates on the provider's `/readyz`.
+4. Optional, template rendering only: `make components` and render the committed `clusterctl.yaml` (substituting the placeholder base paths) to `~/.cluster-api/clusterctl.yaml` for `clusterctl generate cluster`.
 
 **k8labs side** — bake what the provider consumes:
 
@@ -111,8 +111,8 @@ Host access to the workload cluster is **API-path only**:
 
 | Path | Reachable from host | Mechanism |
 |---|---|---|
-| Workload apiserver `https://127.0.0.1:6443` | Yes | The control-plane VM's passt instance forwards host port 6443 (k8netd contract REQ-008); this is how `build/kubeconfig` works from the host |
-| SSH to the control-plane VM | Yes | passt forwards host port 22 |
+| Workload apiserver `https://127.0.0.1:<published port>` | Yes | k8netd's `PublishPort` RPC allocates the control-plane VM's published host port and the kubeconfig Secret records it; this is how `build/kubeconfig` works from the host |
+| SSH to the control-plane VM | Yes | `PublishPort` allocates a host port for the VM's SSH forward (see the machine's `status.publishedPorts`) |
 | LoadBalancer IPs (Cilium pool `10.0.10.0/24`) | **No** | There is no host route into the cluster's L2 segment; LB services must be probed in-cluster |
 
 There is deliberately no bridge/TAP device or host route for LB traffic anymore. To test a LoadBalancer service, run the probe inside the cluster — the pattern `capi/smoke-test/job.yaml` uses: an in-cluster Job curling the Service's cluster-local DNS name (`http://cilium-gw.default.svc.cluster.local/`). The same approach works ad hoc:
@@ -130,11 +130,11 @@ Requirements: a Linux host with KVM-capable hardware and your user in the `kvm` 
 make node-tools    # sync Python tooling (creates .venv; make prereq requires it)
 make plugin        # build + install the Packer CH plugin (once)
 make base          # bake the base image (re-run after extension changes)
-make prereq        # validate tooling, quadlet units, capishim kubeconfig
+make prereq        # validate tooling, quadlet units, capishim kubeconfig, KVM readiness, baked artifacts
 make cluster       # mgmt-up -> cluster-up -> addons-up -> wait Ready -> kubeconfig -> smoke-test
 ```
 
-`make cluster` executes the full declarative pipeline: starts the capishim management plane units and waits for its API (`mgmt-up`), server-side applies `capi/cluster.yaml` (`cluster-up`), server-side applies `capi/addons/` so the ClusterResourceSets exist on the management plane (`addons-up`), waits for the Cluster to become Ready (up to 30 m — the provider boots the VMs, k8netd wires them, the control plane forms, and the addons controller reconciles the ClusterResourceSets onto the workload cluster, applying RBAC/Cilium/CoreDNS), fetches the workload kubeconfig to `build/kubeconfig`, and gates the result with the in-cluster smoke-test Job.
+`make cluster` executes the full declarative pipeline: starts the capishim management plane units and waits for its API plus the provider's `/readyz` endpoint (`mgmt-up`), server-side applies `capi/cluster.yaml` (`cluster-up`), server-side applies `capi/addons/` so the ClusterResourceSets exist on the management plane (`addons-up`), waits for the Cluster to become Ready (up to 30 m — the provider boots the VMs, k8netd wires them, the control plane forms, and the addons controller reconciles the ClusterResourceSets onto the workload cluster, applying RBAC/Cilium/CoreDNS), fetches the workload kubeconfig to `build/kubeconfig`, and gates the result with the in-cluster smoke-test Job.
 
 Use the cluster:
 
@@ -148,8 +148,8 @@ Individual stages:
 
 | Target | Description |
 |--------|-------------|
-| `make prereq` | Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, python3 venv, clusterctl, kubectl), the three quadlet units under `~/.config/containers/systemd/`, and `~/.kube/capishim.kubeconfig` |
-| `make mgmt-up` | Start the capishim-pod/k8netd/provider user units and wait until the management API responds (idempotent) |
+| `make prereq` | Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, python3 venv, clusterctl, kubectl, podman), the three quadlet units under `~/.config/containers/systemd/`, `~/.kube/capishim.kubeconfig`, KVM readiness (`/dev/kvm` + `kvm` group), and the baked build artifacts |
+| `make mgmt-up` | Start the capishim-pod/k8netd/provider user units and wait until the management API and the provider `/readyz` respond (idempotent) |
 | `make mgmt-down` | Stop the management-plane units (never deletes management state) |
 | `make cluster-up` | Server-side apply `capi/cluster.yaml` against the management plane (idempotent) |
 | `make addons-up` | Server-side apply `capi/addons/` (ClusterResourceSets + resource Secrets) against the management plane (idempotent) |

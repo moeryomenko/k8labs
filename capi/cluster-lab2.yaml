@@ -1,0 +1,38 @@
+# k8labs-2 — second workload Cluster for REQ-013 multi-cluster verification.
+#
+# Planning decision P4: the second cluster is a checked-in, topology-only
+# manifest. This file is derived from capi/cluster.yaml: it mirrors that
+# file's topology Cluster document verbatim except for the name (k8labs-2)
+# and its cluster-name label — same ClusterClass reference
+# (hypervisor-cluster-template), namespace default, Kubernetes version
+# v1.32.13, controlPlane replicas 1, and one worker MachineDeployment
+# md-0 of class default-worker with replicas 3.
+#
+# It intentionally carries ONLY the topology Cluster document. The
+# ClusterClass and every template it references are already applied by
+# `make cluster-up` from capi/cluster.yaml; both clusters share that single
+# ClusterClass instance, and CAPI's topology controller clones the referenced
+# templates per cluster. Re-declaring them here would duplicate objects the
+# first manifest already owns.
+---
+# The workload Cluster. The cluster-name label lets the capi/addons/
+# ClusterResourceSets target this cluster via their clusterSelector.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: k8labs-2
+  namespace: default
+  labels:
+    cluster.x-k8s.io/cluster-name: k8labs-2
+spec:
+  topology:
+    classRef:
+      name: hypervisor-cluster-template
+    version: v1.32.13
+    controlPlane:
+      replicas: 1
+    workers:
+      machineDeployments:
+        - name: md-0
+          class: default-worker
+          replicas: 3

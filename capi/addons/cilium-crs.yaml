@@ -7,7 +7,7 @@
 # limit, so its payloads are split across cilium-install-manifests-{1..4};
 # every referenced Secret also embeds the top-level cilium/*.yaml manifests.
 
-apiVersion: addons.cluster.x-k8s.io/v1beta1
+apiVersion: addons.cluster.x-k8s.io/v1beta2
 kind: ClusterResourceSet
 metadata:
   name: cilium-crs
@@ -17,18 +17,13 @@ spec:
     matchLabels:
       cluster.x-k8s.io/cluster-name: k8labs
   resources:
-    - apiVersion: v1
-      kind: Secret
+    - kind: Secret
       name: cilium-manifests
-    - apiVersion: v1
-      kind: Secret
+    - kind: Secret
       name: cilium-install-manifests-1
-    - apiVersion: v1
-      kind: Secret
+    - kind: Secret
       name: cilium-install-manifests-2
-    - apiVersion: v1
-      kind: Secret
+    - kind: Secret
       name: cilium-install-manifests-3
-    - apiVersion: v1
-      kind: Secret
+    - kind: Secret
       name: cilium-install-manifests-4
