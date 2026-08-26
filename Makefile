@@ -299,20 +299,82 @@ prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, pyth
 	fi; \
 	exit $$fail
 
+# Setup ordering: after the management API answers, mgmt-up first waits for
+# the capishim-setup oneshot to converge (Result=success via `systemctl --user
+# show -p Result --value capishim-setup.service`; a probe that cannot read the
+# unit counts as converged; 'unknown'/empty Result while activating keeps
+# polling) BEFORE the readyz gate below, so cluster applies never race
+# not-yet-installed webhooks.
+#
+# REQ-012 (D7): after the management API answers, mgmt-up additionally gates
+# on the provider health endpoint http://127.0.0.1:9440/readyz so cluster-up
+# never races fail-closed admission. Only an HTTP 200 answer passes the gate.
+# Every other outcome — a non-200 status or a transport-level failure such as
+# connection refused (the provider unit is dead) — counts as not-ready and is
+# retried until the bounded timeout expires (~60s, 2s interval), then fails
+# naming the provider unit and the health address. Probe mechanism: curl,
+# falling back to wget, then python3 (prereq guarantees python3).
 .PHONY: mgmt-up
-mgmt-up: ## Start the capishim management plane units and wait until its API responds (idempotent)
+mgmt-up: ## Start the capishim management plane units and wait until its API and the provider /readyz respond (idempotent)
 	@set -euo pipefail; \
 	echo '==> Starting capishim management plane ($(MGMT_UNITS))...'; \
 	systemctl --user start $(MGMT_UNITS); \
+	plane_ready=0; \
 	for i in $$(seq 1 30); do \
 		if kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" get namespaces >/dev/null 2>&1; then \
-			echo '    Management plane ready'; \
-			exit 0; \
+			plane_ready=1; \
+			break; \
 		fi; \
 		echo "    waiting for management plane ($$i/30)..."; \
 		sleep 2; \
 	done; \
-	echo 'ERROR: capishim management plane did not respond within timeout' >&2; \
+	if [ "$$plane_ready" != "1" ]; then \
+		echo 'ERROR: capishim management plane did not respond within timeout' >&2; \
+		exit 1; \
+	fi; \
+	echo '    Management plane ready'; \
+	echo '==> Waiting for capishim-setup oneshot convergence (capishim-setup.service)...'; \
+	setup_ok=0; \
+	for i in $$(seq 1 30); do \
+		if ! setup_result=$$(systemctl --user show -p Result --value capishim-setup.service 2>/dev/null); then \
+			setup_ok=1; \
+			break; \
+		fi; \
+		if [ "$$setup_result" = "success" ]; then \
+			setup_ok=1; \
+			break; \
+		fi; \
+		echo "    waiting for capishim-setup ($$i/30)..."; \
+		sleep 2; \
+	done; \
+	if [ "$$setup_ok" != "1" ]; then \
+		echo 'ERROR: capishim-setup.service did not converge within the bounded wait; applying clusters now would race not-yet-installed webhooks' >&2; \
+		echo '       Inspect the setup oneshot: journalctl --user -u capishim-setup -n 50' >&2; \
+		exit 1; \
+	fi; \
+	echo '    capishim-setup converged'; \
+	echo '==> Waiting for provider readiness (cluster-api-hypervisor.service)...'; \
+	readyz_url='http://127.0.0.1:9440/readyz'; \
+	if command -v curl >/dev/null 2>&1; then \
+		readyz_probe() { [ "$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$$readyz_url")" = "200" ]; }; \
+	elif command -v wget >/dev/null 2>&1; then \
+		readyz_probe() { wget -q -T 5 -O /dev/null "$$readyz_url"; }; \
+	elif command -v python3 >/dev/null 2>&1; then \
+		readyz_probe() { python3 -c 'import urllib.request as u, sys; r = u.urlopen(sys.argv[1], timeout=5); sys.exit(0 if r.status == 200 else 1)' "$$readyz_url" 2>/dev/null; }; \
+	else \
+		echo 'ERROR: no fetch tool (curl/wget/python3) on PATH to probe the provider health address http://127.0.0.1:9440/readyz' >&2; \
+		exit 1; \
+	fi; \
+	for i in $$(seq 1 30); do \
+		if readyz_probe; then \
+			echo '    Provider ready'; \
+			exit 0; \
+		fi; \
+		echo "    waiting for provider readyz ($$i/30)..."; \
+		sleep 2; \
+	done; \
+	echo 'ERROR: cluster-api-hypervisor.service never became ready: http://127.0.0.1:9440/readyz did not answer ok within the bounded wait' >&2; \
+	echo '       Inspect the provider unit: journalctl --user -u cluster-api-hypervisor.service -n 50' >&2; \
 	exit 1
 
 .PHONY: mgmt-down
