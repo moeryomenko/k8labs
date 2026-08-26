@@ -252,7 +252,7 @@ WORKLOAD_KUBECONFIG := build/kubeconfig
 MGMT_UNITS := capishim-pod.service k8netd.service cluster-api-hypervisor.service
 
 .PHONY: prereq
-prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, python3 venv, clusterctl, kubectl), quadlet units, and the capishim kubeconfig
+prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, python3 venv, clusterctl, kubectl, podman), quadlet units, the capishim kubeconfig, KVM readiness (/dev/kvm + kvm group), and baked build artifacts
 	@set -euo pipefail; \
 	fail=0; \
 	for cmd in cloud-hypervisor openssl systemctl jq python3 clusterctl kubectl; do \
@@ -275,6 +275,26 @@ prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, pyth
 	fi; \
 	if [ ! -d ".venv" ]; then \
 		echo "ERROR: Python virtual environment '.venv' not found - run make node-tools first" >&2; \
+		fail=1; \
+	fi; \
+	if [ ! -e /dev/kvm ]; then \
+		echo 'ERROR: /dev/kvm not found - KVM acceleration is required to run lab VMs' >&2; \
+		fail=1; \
+	fi; \
+	if ! id -nG 2>/dev/null | grep -qw kvm; then \
+		echo "ERROR: current user is not in the kvm group - add your user to the kvm group: sudo usermod -aG kvm $$USER" >&2; \
+		fail=1; \
+	fi; \
+	if ! command -v podman &>/dev/null; then \
+		echo "ERROR: required tool 'podman' not found on PATH - install podman (rootless container runtime for the management plane)" >&2; \
+		fail=1; \
+	fi; \
+	if [ ! -f "$(BASE_IMAGE_DEST)" ]; then \
+		echo "ERROR: base image '$(BASE_IMAGE_DEST)' not found - run 'make base' to bake it first" >&2; \
+		fail=1; \
+	fi; \
+	if [ ! -f "$(FIRMWARE_DEST)" ]; then \
+		echo "ERROR: firmware '$(FIRMWARE_DEST)' not found - run 'make base' to fetch it first" >&2; \
 		fail=1; \
 	fi; \
 	exit $$fail
