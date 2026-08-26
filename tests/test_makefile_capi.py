@@ -59,10 +59,12 @@ them vacuously).
 from __future__ import annotations
 
 import base64
+import http.server
 import os
 import re
 import shutil
 import subprocess
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -198,6 +200,13 @@ case "${KFAKE_SYSTEMCTL_MODE:-ok}" in
         exit 1
         ;;
     esac
+    ;;
+esac
+# capishim-setup oneshot Result probe (mgmt-up setup gate): report the
+# converged oneshot these tests assume (environment seeding only).
+case "$*" in
+  *Result*capishim-setup.service*)
+    printf 'success\\n'
     ;;
 esac
 exit 0
@@ -544,13 +553,24 @@ def _is_reclamation_wait(line: str) -> bool:
 # --- VC-prereq: extended checks with actionable messages --------------------
 
 
-def test_prereq_passes_with_capi_tooling_present(fake_env: FakeEnv) -> None:
+@pytest.mark.skipif(not Path("/dev/kvm").exists(), reason="host lacks /dev/kvm")
+def test_prereq_passes_with_capi_tooling_present(tmp_path: Path) -> None:
     """VC-prereq: full tooling + quadlets + capishim kubeconfig -> exit 0.
 
     The fake PATH intentionally omits tofu/nft: after the migration they
     must no longer be required.
+
+    TASK-017 (manifest-authorized environment extension): the environment
+    also carries the P1 items (podman on PATH, kvm-group identity, baked
+    base image + firmware placeholders) because prereq now gates on them.
     """
-    result = fake_env.run_make("prereq")
+    env = _env_ready_except(tmp_path)
+
+    with (
+        _placeholder(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _placeholder(REPO_ROOT / FIRMWARE_RELPATH),
+    ):
+        result = env.run_make("prereq")
 
     assert result.returncode == 0, (
         "prereq must pass when every CAPI-era requirement is satisfied "
@@ -705,14 +725,22 @@ def test_prereq_surviving_check_jq(tmp_path: Path) -> None:
 # --- VC-mgmt-up: start units, wait for plane readiness, idempotent ----------
 
 
-def test_mgmt_up_starts_all_three_units(fake_env: FakeEnv) -> None:
-    """VC-mgmt-up: systemctl --user start covers capishim-pod/k8netd/provider."""
-    result = fake_env.run_make("mgmt-up")
+def test_mgmt_up_starts_all_three_units(tmp_path: Path) -> None:
+    """VC-mgmt-up: systemctl --user start covers capishim-pod/k8netd/provider.
+
+    TASK-017 rev 1 (environment seeding only): mgmt-up gates on the provider
+    readyz endpoint, so the fake environment serves a healthy
+    127.0.0.1:9440/readyz via the TASK-016 _readyz_server helper for the run.
+    """
+    env = _mgmt_env_with_fetch_tools(tmp_path)
+
+    with _readyz_server(mode="ok"):
+        result = env.run_make("mgmt-up")
 
     assert result.returncode == 0, f"mgmt-up failed:\n{_combined(result)}"
     starts = [
         line
-        for line in fake_env.calls_of("systemctl")
+        for line in env.calls_of("systemctl")
         if "--user" in line and "start" in line
     ]
     assert starts, "mgmt-up must start units via `systemctl --user start`"
@@ -723,33 +751,47 @@ def test_mgmt_up_starts_all_three_units(fake_env: FakeEnv) -> None:
         )
 
 
-def test_mgmt_up_is_idempotent_on_rerun(fake_env: FakeEnv) -> None:
-    """VC-mgmt-up: a second mgmt-up over running units still exits 0."""
-    first = fake_env.run_make("mgmt-up")
-    assert first.returncode == 0, f"first mgmt-up failed:\n{_combined(first)}"
+def test_mgmt_up_is_idempotent_on_rerun(tmp_path: Path) -> None:
+    """VC-mgmt-up: a second mgmt-up over running units still exits 0.
 
-    second = fake_env.run_make("mgmt-up")
+    TASK-017 rev 1 (environment seeding only): healthy readyz endpoint served
+    across both runs (the unified gate passes only on HTTP 200).
+    """
+    env = _mgmt_env_with_fetch_tools(tmp_path)
 
-    assert second.returncode == 0, (
-        f"mgmt-up must be idempotent on re-run; stderr:\n{_combined(second)}"
-    )
+    with _readyz_server(mode="ok"):
+        first = env.run_make("mgmt-up")
+        assert first.returncode == 0, f"first mgmt-up failed:\n{_combined(first)}"
+
+        second = env.run_make("mgmt-up")
+
+        assert second.returncode == 0, (
+            f"mgmt-up must be idempotent on re-run; stderr:\n{_combined(second)}"
+        )
 
 
-def test_mgmt_up_waits_for_management_plane_readiness(fake_env: FakeEnv) -> None:
-    """VC-mgmt-up: transient `get namespaces` failures are retried to success."""
-    result = fake_env.run_make("mgmt-up", kubectl_mode="ready-after-2")
+def test_mgmt_up_waits_for_management_plane_readiness(tmp_path: Path) -> None:
+    """VC-mgmt-up: transient `get namespaces` failures are retried to success.
+
+    TASK-017 rev 1 (environment seeding only): healthy readyz endpoint served
+    for the post-plane provider gate.
+    """
+    env = _mgmt_env_with_fetch_tools(tmp_path)
+
+    with _readyz_server(mode="ok"):
+        result = env.run_make("mgmt-up", kubectl_mode="ready-after-2")
 
     assert result.returncode == 0, (
         "mgmt-up must retry until the management plane responds; stderr:\n"
         + _combined(result)
     )
-    probes = [line for line in fake_env.calls_of("kubectl") if " namespaces" in line]
+    probes = [line for line in env.calls_of("kubectl") if " namespaces" in line]
     assert len(probes) >= 3, (
         "expected at least three readiness probes (two failures + one "
         f"success); observed:\n{probes}"
     )
     for probe in probes:
-        kc = fake_env.kubeconfig_arg(probe)
+        kc = env.kubeconfig_arg(probe)
         assert kc is not None and kc.endswith(CAPISHIM_KUBECONFIG_SUFFIX), (
             f"readiness probes must use the capishim kubeconfig: {probe}"
         )
@@ -1039,12 +1081,24 @@ def test_cluster_down_fails_when_delete_fails(fake_env: FakeEnv) -> None:
 # --- VC-composite: make cluster ordering -------------------------------------
 
 
-def test_cluster_composite_runs_stages_in_order(fake_env: FakeEnv) -> None:
-    """VC-composite: prereq -> mgmt-up -> cluster-up -> ready-wait -> kc -> smoke."""
-    result = fake_env.run_make("cluster", timeout=SMOKE_TIMEOUT)
+def test_cluster_composite_runs_stages_in_order(tmp_path: Path) -> None:
+    """VC-composite: prereq -> mgmt-up -> cluster-up -> ready-wait -> kc -> smoke.
+
+    TASK-017 (environment extension, same pattern as the manifest-authorized
+    test_prereq_passes_with_capi_tooling_present): the composite runs prereq,
+    which now gates on the P1 items, so the environment carries podman,
+    kvm-group identity, and baked build artifact placeholders.
+
+    TASK-017 rev 1 (environment seeding only): healthy readyz endpoint served
+    for the mgmt-up stage of the composite.
+    """
+    env = _env_ready_except(tmp_path)
+
+    with _readyz_server(mode="ok"):
+        result = env.run_make("cluster", timeout=SMOKE_TIMEOUT)
 
     assert result.returncode == 0, f"make cluster failed:\n{_combined(result)}"
-    lines = fake_env.calls()
+    lines = env.calls()
 
     start_idx = _first_index(
         lines, lambda l: l.startswith("systemctl") and "start" in l
@@ -1115,14 +1169,526 @@ def test_cluster_composite_gates_on_prereq_failure(tmp_path: Path) -> None:
     )
 
 
-def test_cluster_composite_propagates_smoke_stage_failure(fake_env: FakeEnv) -> None:
-    """VC-composite: a failing smoke-test Job fails the whole composite."""
-    result = fake_env.run_make(
-        "cluster", kubectl_mode="job-wait-fails", timeout=SMOKE_TIMEOUT
-    )
+def test_cluster_composite_propagates_smoke_stage_failure(tmp_path: Path) -> None:
+    """VC-composite: a failing smoke-test Job fails the whole composite.
+
+    TASK-017 (environment extension, same pattern as the manifest-authorized
+    test_prereq_passes_with_capi_tooling_present): the composite runs prereq,
+    which now gates on the P1 items, so the environment carries podman,
+    kvm-group identity, and baked build artifact placeholders.
+
+    TASK-017 rev 1 (environment seeding only): healthy readyz endpoint served
+    for the mgmt-up stage of the composite.
+    """
+    env = _env_ready_except(tmp_path)
+
+    with _readyz_server(mode="ok"):
+        result = env.run_make(
+            "cluster", kubectl_mode="job-wait-fails", timeout=SMOKE_TIMEOUT
+        )
 
     assert result.returncode != 0, "composite must fail when the smoke-test Job fails"
-    assert any("smoke-test/job.yaml" in line for line in fake_env.calls()), (
+    assert any("smoke-test/job.yaml" in line for line in env.calls()), (
         "composite reached failure without ever applying the smoke-test Job; "
-        f"log:\n{fake_env.calls()}"
+        f"log:\n{env.calls()}"
     )
+
+
+# --- TASK-016 / REQ-012 + VC-08 gate: mgmt-up provider readyz gate (red) -----
+#
+# REQ-012: after the management API responds, mgmt-up must ADDITIONALLY poll
+# http://127.0.0.1:9440/readyz on the provider until it answers ok or a
+# bounded timeout expires; the failure message must name the provider unit
+# and the health address. Idempotency is preserved.
+#
+# Test design notes:
+# - The gate is exercised against a REAL HTTP server owned by the test and
+#   bound to the contractual address 127.0.0.1:9440, so any fetch mechanism
+#   the implementation chooses (curl, wget, python3) works unchanged. The
+#   fake PATH gains curl/wget symlinks to the host binaries; nothing else
+#   about the harness changes.
+# - Red-phase expectation: today's mgmt-up exits 0 after `get namespaces`
+#   without ever contacting the readyz endpoint, so every gate test below
+#   fails on the observed probe count or on the unexpected exit code.
+
+READYZ_HOST = "127.0.0.1"
+READYZ_PORT = 9440
+READYZ_HEALTH_ADDRESS = f"{READYZ_HOST}:{READYZ_PORT}/readyz"
+PROVIDER_UNIT_FRAGMENT = "cluster-api-hypervisor"
+
+# Fetch tools the readyz poll may legitimately use. curl is required on the
+# host (the Makefile already depends on it); wget is added only when present.
+_FETCH_TOOLS_REQUIRED = ("curl",)
+
+
+class _ReadyzState:
+    """Thread-shared record of readyz probes and the configured behavior."""
+
+    def __init__(self, mode: str, fail_first: int) -> None:
+        self.mode = mode
+        self.fail_first = fail_first
+        self.requests: list[str] = []
+        self.lock = threading.Lock()
+
+    def record(self, path: str) -> int:
+        with self.lock:
+            self.requests.append(path)
+            return len(self.requests)
+
+    @property
+    def probe_count(self) -> int:
+        with self.lock:
+            return len(self.requests)
+
+
+class _ReadyzHTTPServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer carrying the test-owned readyz state."""
+
+    daemon_threads = True
+    readyz_state: _ReadyzState
+
+
+class _ReadyzHandler(http.server.BaseHTTPRequestHandler):
+    """Answers GET /readyz per the injected mode; 404 for anything else."""
+
+    def do_GET(self) -> None:  # noqa: N802 (http.server API)
+        server = self.server
+        assert isinstance(server, _ReadyzHTTPServer)
+        state = server.readyz_state
+        count = state.record(self.path)
+        if self.path != "/readyz":
+            self._respond(404, b"not found\n")
+            return
+        ready = True
+        if state.mode == "never":
+            ready = False
+        elif state.mode == "fail-first" and count <= state.fail_first:
+            ready = False
+        if ready:
+            self._respond(200, b"ok\n")
+        else:
+            self._respond(503, b"not ready\n")
+
+    def _respond(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        pass
+
+
+@contextmanager
+def _readyz_server(*, mode: str, fail_first: int = 0) -> Iterator[_ReadyzState]:
+    """Own a real readyz endpoint at the contractual 127.0.0.1:9440 address."""
+    state = _ReadyzState(mode=mode, fail_first=fail_first)
+    try:
+        httpd = _ReadyzHTTPServer((READYZ_HOST, READYZ_PORT), _ReadyzHandler)
+    except OSError as exc:
+        raise AssertionError(
+            f"test could not bind {READYZ_HOST}:{READYZ_PORT} for the readyz "
+            f"endpoint ({exc}); the port must be free to exercise the gate"
+        ) from exc
+    httpd.readyz_state = state
+    thread = threading.Thread(
+        target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
+    thread.start()
+    try:
+        yield state
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def _mgmt_env_with_fetch_tools(tmp_path: Path) -> FakeEnv:
+    """Fake env for mgmt-up readyz tests: adds real curl/wget to the PATH."""
+    missing = [tool for tool in _FETCH_TOOLS_REQUIRED if shutil.which(tool) is None]
+    assert not missing, (
+        f"host must provide {_FETCH_TOOLS_REQUIRED} for the readyz gate tests; "
+        f"missing: {missing}"
+    )
+    fetch_tools = tuple(_FETCH_TOOLS_REQUIRED)
+    if shutil.which("wget") is not None:
+        fetch_tools += ("wget",)
+    env = _build_fake_env(tmp_path, tools=DEFAULT_TOOLS + fetch_tools)
+    env.install_quadlets()
+    env.install_capishim_kubeconfig()
+    return env
+
+
+def test_mgmt_up_polls_provider_readyz_after_plane_ready(tmp_path: Path) -> None:
+    """REQ-012: successful mgmt-up actually polls 127.0.0.1:9440/readyz."""
+    env = _mgmt_env_with_fetch_tools(tmp_path)
+
+    with _readyz_server(mode="ok") as readyz:
+        result = env.run_make("mgmt-up")
+
+        assert result.returncode == 0, f"mgmt-up failed:\n{_combined(result)}"
+        assert readyz.probe_count >= 1, (
+            "mgmt-up must poll the provider readyz endpoint before reporting "
+            f"success; the test server at {READYZ_HEALTH_ADDRESS} received "
+            f"{readyz.probe_count} request(s)"
+        )
+        assert set(readyz.requests) == {"/readyz"}, (
+            f"readyz probes must target /readyz; observed paths: {readyz.requests}"
+        )
+
+
+def test_mgmt_up_retries_until_provider_readyz_ok(tmp_path: Path) -> None:
+    """REQ-012: transient readyz failures are retried until ok."""
+    env = _mgmt_env_with_fetch_tools(tmp_path)
+
+    with _readyz_server(mode="fail-first", fail_first=2) as readyz:
+        result = env.run_make("mgmt-up")
+
+        assert result.returncode == 0, (
+            f"mgmt-up must retry until readyz answers ok; stderr:\n{_combined(result)}"
+        )
+        assert readyz.probe_count >= 3, (
+            "expected at least three readyz probes (two failures + one ok); "
+            f"observed {readyz.probe_count}"
+        )
+
+
+def test_mgmt_up_fails_bounded_when_provider_readyz_never_ok(tmp_path: Path) -> None:
+    """REQ-012: never-ready provider -> bounded failure naming unit + address."""
+    env = _mgmt_env_with_fetch_tools(tmp_path)
+
+    with _readyz_server(mode="never") as readyz:
+        try:
+            result = env.run_make("mgmt-up", timeout=MAKE_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            pytest.fail(
+                "mgmt-up did not terminate within the bounded wait when the "
+                f"provider readyz never answered ok (unbounded timeout?): {exc}"
+            )
+
+        combined = _combined(result)
+        assert result.returncode != 0, (
+            "mgmt-up must fail when the provider readyz endpoint never "
+            f"answers ok; output was:\n{combined}"
+        )
+        assert PROVIDER_UNIT_FRAGMENT in combined, (
+            "failure message must name the provider unit "
+            f"({PROVIDER_UNIT_FRAGMENT}):\n{combined}"
+        )
+        assert READYZ_HEALTH_ADDRESS in combined, (
+            f"failure message must name the health address "
+            f"({READYZ_HEALTH_ADDRESS}):\n{combined}"
+        )
+        assert readyz.probe_count >= 2, (
+            "mgmt-up must poll readyz repeatedly (bounded loop), not probe "
+            f"once; observed {readyz.probe_count} probe(s)"
+        )
+
+
+def test_mgmt_up_idempotent_rerun_over_healthy_plane_including_readyz(
+    tmp_path: Path,
+) -> None:
+    """REQ-012: idempotency preserved - second run exits 0 over healthy plane."""
+    env = _mgmt_env_with_fetch_tools(tmp_path)
+
+    with _readyz_server(mode="ok") as readyz:
+        first = env.run_make("mgmt-up")
+        assert first.returncode == 0, f"first mgmt-up failed:\n{_combined(first)}"
+
+        second = env.run_make("mgmt-up")
+
+        assert second.returncode == 0, (
+            f"mgmt-up must stay idempotent with the readyz gate in place; "
+            f"stderr:\n{_combined(second)}"
+        )
+        assert readyz.probe_count >= 2, (
+            "both runs must pass through the readyz gate (>=1 probe each); "
+            f"observed {readyz.probe_count} total probe(s)"
+        )
+
+
+# --- TASK-016 / P1 env-readiness: prereq gates (red) --------------------------
+#
+# Planning decision P1: prereq must FAIL with actionable instructions when
+# the host environment cannot run the lab: /dev/kvm absent, user not in the
+# kvm group, podman absent, or the baked base image / firmware missing from
+# build/k8labs-base.qcow2 and build/CLOUDHV.fd. Each message names the item
+# and its fix ('make base', usermod kvm note, ...).
+#
+# Simulation mechanics (host-safe, no root):
+# - /dev/kvm absence: private user+mount namespace via unshare, tmpfs
+#   mounted over /dev with /dev/null and /dev/urandom re-anchored by bind
+#   mounts. Works regardless of how the implementation probes the device
+#   ([ -e ], [ -c ], stat, ls, ...) because the node is genuinely gone.
+# - kvm group membership: fake `id` and `groups` in the fake bin dir (PATH
+#   precedes coreutils). Membership can only be probed via id/groups, so
+#   this covers the implementation space deterministically.
+# - podman absence: simply omitted from the fake PATH.
+# - build artifacts: repo-relative paths under the gitignored build/ dir;
+#   the existing _preserve helper hides/restores them hermetically.
+
+BASE_IMAGE_RELPATH = Path("build") / "k8labs-base.qcow2"
+FIRMWARE_RELPATH = Path("build") / "CLOUDHV.fd"
+KVM_DEVICE = Path("/dev/kvm")
+_KVM_PRESENT = KVM_DEVICE.exists()
+
+_IDENTITY_GROUPS_READY = ("kvm", "wheel", "users")
+_IDENTITY_GROUPS_NO_KVM = ("wheel", "users")
+
+
+def _fake_identity_script(groups: tuple[str, ...]) -> str:
+    joined = " ".join(groups)
+    return f"""#!/bin/sh
+# Fake id/groups: deterministic group membership for prereq checks.
+for arg in "$@"; do
+  case "$arg" in
+    *G*) printf '%s\\n' "{joined}"; exit 0 ;;
+    *u*) printf '%s\\n' "labuser"; exit 0 ;;
+  esac
+done
+printf 'uid=1000(labuser) gid=1000(labuser) groups=1000(labuser),{joined}\\n'
+"""
+
+
+def _install_identity(env: FakeEnv, groups: tuple[str, ...]) -> None:
+    script = _fake_identity_script(groups)
+    _write_executable(env.bin / "id", script)
+    _write_executable(
+        env.bin / "groups", f"#!/bin/sh\nprintf '%s\\n' \"{' '.join(groups)}\"\n"
+    )
+
+
+def _env_ready_except(
+    tmp_path: Path,
+    *,
+    identity_groups: tuple[str, ...] = _IDENTITY_GROUPS_READY,
+    include_podman: bool = True,
+) -> FakeEnv:
+    """Full P1 environment minus the dimensions a test deliberately breaks."""
+    tools = DEFAULT_TOOLS + (("podman",) if include_podman else ())
+    env = _build_fake_env(tmp_path, tools=tools)
+    _install_identity(env, identity_groups)
+    env.install_quadlets()
+    env.install_capishim_kubeconfig()
+    return env
+
+
+@contextmanager
+def _placeholder(path: Path) -> Iterator[None]:
+    """Ensure ``path`` exists during the block; restore prior state after."""
+    with _preserve(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"k8labs test placeholder\n")
+        try:
+            yield
+        finally:
+            path.unlink(missing_ok=True)
+
+
+# Bind-mount recipe executed inside the private namespace: tmpfs over /dev
+# removes /dev/kvm along with every other node. Device nodes cannot be
+# re-anchored afterwards (binds made inside a user namespace are locked
+# NODEV, so opens fail with EPERM), so /dev/null and /dev/urandom come back
+# as plain writable regular files: enough for shell redirects, and python3
+# seeds entropy via the getrandom(2) syscall rather than /dev/urandom.
+# MOUNT_BIN is substituted with the host's absolute mount path because the
+# fake environment PATH deliberately does not carry system sbin tools.
+_HIDDEN_KVM_SCRIPT = """\
+set -euo pipefail
+"{mount_bin}" -t tmpfs tmpfs /dev
+: > /dev/null
+: > /dev/urandom
+chmod 666 /dev/null /dev/urandom
+exec "$@"
+"""
+
+
+def _run_make_without_kvm(
+    env: FakeEnv,
+    *targets: str,
+    kubectl_mode: str = "ok",
+    timeout: int = MAKE_TIMEOUT,
+) -> subprocess.CompletedProcess[str]:
+    """Run make inside a mount namespace where /dev/kvm does not exist."""
+    unshare = shutil.which("unshare")
+    assert unshare is not None, "unshare is required to simulate /dev/kvm absence"
+    mount_bin = shutil.which("mount")
+    assert mount_bin is not None, "mount is required to simulate /dev/kvm absence"
+    probe = subprocess.run(
+        [unshare, "--user", "--map-root-user", "--mount", "true"],
+        capture_output=True,
+    )
+    assert probe.returncode == 0, (
+        "private user+mount namespaces must be available to hide /dev/kvm; "
+        f"unshare failed: {probe.stderr.decode(errors='replace')}"
+    )
+
+    make_bin = MAKE_BIN
+    assert make_bin is not None
+    return subprocess.run(
+        [
+            unshare,
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "bash",
+            "-c",
+            _HIDDEN_KVM_SCRIPT.format(mount_bin=mount_bin),
+            "--",
+            make_bin,
+            *targets,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env.env(kubectl_mode=kubectl_mode),
+        timeout=timeout,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+@pytest.mark.skipif(not _KVM_PRESENT, reason="host lacks /dev/kvm")
+def test_prereq_passes_with_environment_ready(tmp_path: Path) -> None:
+    """P1 positive control: fully ready environment -> prereq exits 0.
+
+    Documented exception: this positive-control test legitimately PASSES
+    against the current Makefile (prereq does not yet perform the P1
+    checks, so a complete environment trivially passes). It guards that the
+    new gates do not reject a correctly prepared host.
+    """
+    env = _env_ready_except(tmp_path)
+
+    with (
+        _placeholder(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _placeholder(REPO_ROOT / FIRMWARE_RELPATH),
+    ):
+        result = env.run_make("prereq")
+
+    combined = _combined(result)
+    assert result.returncode == 0, (
+        "prereq must pass when every P1 environment item is present "
+        f"(/dev/kvm, kvm group, podman, baked base image, firmware); "
+        f"stderr:\n{combined}"
+    )
+
+
+@pytest.mark.skipif(not _KVM_PRESENT, reason="host lacks /dev/kvm")
+def test_prereq_fails_when_user_not_in_kvm_group(tmp_path: Path) -> None:
+    """P1: user outside the kvm group -> failure with the usermod fix note."""
+    env = _env_ready_except(tmp_path, identity_groups=_IDENTITY_GROUPS_NO_KVM)
+
+    with (
+        _placeholder(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _placeholder(REPO_ROOT / FIRMWARE_RELPATH),
+    ):
+        result = env.run_make("prereq")
+
+    combined = _combined(result)
+    assert result.returncode != 0, (
+        "prereq must fail when the user is not in the kvm group"
+    )
+    assert "kvm" in combined, (
+        f"failure output must name the kvm group requirement:\n{combined}"
+    )
+    assert "usermod" in combined.lower(), (
+        f"failure output must include the usermod -aG kvm fix note:\n{combined}"
+    )
+
+
+@pytest.mark.skipif(not _KVM_PRESENT, reason="host lacks /dev/kvm")
+def test_prereq_fails_when_podman_absent(tmp_path: Path) -> None:
+    """P1: podman missing from PATH -> failure naming podman and the fix."""
+    env = _env_ready_except(tmp_path, include_podman=False)
+
+    with (
+        _placeholder(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _placeholder(REPO_ROOT / FIRMWARE_RELPATH),
+    ):
+        result = env.run_make("prereq")
+
+    combined = _combined(result)
+    assert result.returncode != 0, "prereq must fail without podman"
+    assert "podman" in combined, (
+        f"failure output must name the missing 'podman':\n{combined}"
+    )
+    assert "install" in combined.lower(), (
+        f"failure output must include an install hint for podman:\n{combined}"
+    )
+
+
+@pytest.mark.skipif(not _KVM_PRESENT, reason="host lacks /dev/kvm")
+@pytest.mark.parametrize(
+    ("relpath", "fragment"),
+    (
+        (BASE_IMAGE_RELPATH, "k8labs-base.qcow2"),
+        (FIRMWARE_RELPATH, "CLOUDHV.fd"),
+    ),
+    ids=["base-image", "firmware"],
+)
+def test_prereq_fails_when_required_build_artifact_missing(
+    tmp_path: Path, relpath: Path, fragment: str
+) -> None:
+    """P1: missing baked base image / firmware -> failure naming it + 'make base'."""
+    env = _env_ready_except(tmp_path)
+
+    other = FIRMWARE_RELPATH if relpath == BASE_IMAGE_RELPATH else BASE_IMAGE_RELPATH
+    with _preserve(REPO_ROOT / relpath):  # ensure absent during the run
+        with _placeholder(REPO_ROOT / other):  # keep its sibling present
+            result = env.run_make("prereq")
+
+    combined = _combined(result)
+    assert result.returncode != 0, f"prereq must fail when {relpath} is missing"
+    assert fragment in combined, (
+        f"failure output must name the missing artifact ({fragment}):\n{combined}"
+    )
+    assert "make base" in combined, (
+        f"failure output must point at the 'make base' fix for {relpath}:\n" + combined
+    )
+
+
+def test_prereq_fails_when_kvm_device_missing(tmp_path: Path) -> None:
+    """P1: /dev/kvm absent -> nonzero failure naming /dev/kvm.
+
+    Runs without the skipif guard: hiding the device inside a private
+    namespace is valid whether or not the host has one.
+    """
+    env = _env_ready_except(tmp_path)
+
+    with (
+        _placeholder(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _placeholder(REPO_ROOT / FIRMWARE_RELPATH),
+    ):
+        result = _run_make_without_kvm(env, "prereq")
+
+    combined = _combined(result)
+    assert result.returncode != 0, (
+        "prereq must fail when /dev/kvm is not available:\n" + combined
+    )
+    assert "/dev/kvm" in combined, (
+        f"failure output must name the missing /dev/kvm device:\n{combined}"
+    )
+    assert "unshare" not in combined and "mount:" not in combined, (
+        f"namespace setup must not leak errors into the result:\n{combined}"
+    )
+
+
+def test_prereq_reports_all_missing_environment_items(tmp_path: Path) -> None:
+    """P1: several items missing at once -> every item named in the output."""
+    env = _env_ready_except(tmp_path, include_podman=False)
+
+    with (
+        _preserve(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _preserve(REPO_ROOT / FIRMWARE_RELPATH),
+    ):
+        result = _run_make_without_kvm(env, "prereq")
+
+    combined = _combined(result)
+    assert result.returncode != 0, (
+        "prereq must fail when multiple environment items are missing"
+    )
+    for expected in ("/dev/kvm", "podman", "k8labs-base.qcow2", "CLOUDHV.fd"):
+        assert expected in combined, (
+            f"aggregate failure output must name '{expected}'; output was:\n" + combined
+        )
