@@ -443,13 +443,114 @@ update-kubeconfig: kubeconfig ## Alias for kubeconfig — explicitly signals ref
 # at the in-repo kubeconfig path.
 KUBECONFIG := kubeconfig
 
+# Kubeconfig the smoke-test drives. Defaults to the single-cluster flow's
+# build/kubeconfig; multi-cluster-test overrides it per fetched cluster
+# kubeconfig without changing the default behavior.
+SMOKE_KUBECONFIG ?= $(WORKLOAD_KUBECONFIG)
+
 .PHONY: smoke-test
-smoke-test: kubeconfig ## Apply capi/smoke-test/job.yaml against the workload cluster (build/kubeconfig) and wait for Job success
+smoke-test: kubeconfig ## Apply capi/smoke-test/job.yaml against the workload cluster (default build/kubeconfig; override with SMOKE_KUBECONFIG=...) and wait for Job success
 	@set -euo pipefail; \
 	echo '==> Running smoke-test Job against the workload cluster...'; \
-	kubectl --kubeconfig "$(WORKLOAD_KUBECONFIG)" apply -f capi/smoke-test/job.yaml; \
-	kubectl --kubeconfig "$(WORKLOAD_KUBECONFIG)" -n default wait --for=condition=complete job/lb-smoke-test --timeout=300s; \
+	kubectl --kubeconfig "$(SMOKE_KUBECONFIG)" apply -f capi/smoke-test/job.yaml; \
+	kubectl --kubeconfig "$(SMOKE_KUBECONFIG)" -n default wait --for=condition=complete job/lb-smoke-test --timeout=300s; \
 	echo '    Smoke test passed'
+
+# --- Multi-Cluster Verification ---
+
+MULTI_CLUSTER2_NAME := k8labs-2
+MULTI_CLUSTER2_MANIFEST := capi/cluster-lab2.yaml
+MULTI_KUBECONFIG_1 := build/kubeconfig.k8labs
+MULTI_KUBECONFIG_2 := build/kubeconfig.k8labs-2
+
+# REQ-013 (D10): prove TWO concurrent workload clusters on one host in a
+# single automated run. The second cluster (k8labs-2) is the checked-in
+# topology-only manifest capi/cluster-lab2.yaml (P4); its ClusterClass and
+# templates come from capi/cluster.yaml, applied by mgmt-up + the applies
+# below.
+#
+# Resource floor: the 8 concurrent workload VMs need ~16 CPU cores and
+# ~28 GiB RAM free on the host (per cluster: 1 control plane at 2 vCPU/2 GiB
+# plus 3 workers at 2 vCPU/4 GiB), on top of the capishim/k8netd management
+# plane; budget ~20-40 minutes end to end.
+#
+# Every per-cluster kubectl lifecycle call (readiness wait, delete,
+# reclamation wait) pins --cache-dir to build/.kube-cache-<cluster>:
+# concurrent kubectl runs get isolated discovery caches, and each logged
+# invocation self-identifies the cluster it drives.
+
+.PHONY: multi-cluster-test
+multi-cluster-test: prereq ## Provision k8labs AND k8labs-2 concurrently, smoke-test both, tear both down (REQ-013; heavy: ~16 CPU / ~28 GiB RAM floor)
+	@set -euo pipefail; \
+	echo '==> Bringing up the capishim management plane...'; \
+	$(MAKE) mgmt-up; \
+	echo '==> Applying both Cluster manifests (server-side)...'; \
+	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f capi/cluster.yaml; \
+	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f "$(MULTI_CLUSTER2_MANIFEST)"; \
+	echo '    Both Cluster manifests applied'; \
+	echo '==> Waiting for Cluster $(CLUSTER_NAME) to become Ready...'; \
+	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" wait --for=condition=Ready "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=30m; then \
+		echo "ERROR [readiness] Cluster $(CLUSTER_NAME) did not become Ready within 30m" >&2; \
+		exit 1; \
+	fi; \
+	echo '==> Waiting for Cluster $(MULTI_CLUSTER2_NAME) to become Ready...'; \
+	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" wait --for=condition=Ready "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)" --timeout=30m; then \
+		echo "ERROR [readiness] Cluster $(MULTI_CLUSTER2_NAME) did not become Ready within 30m" >&2; \
+		exit 1; \
+	fi; \
+	echo '    Both Clusters Ready'; \
+	mkdir -p build; \
+	fetch_wc_kubeconfig() { \
+		cluster="$$1"; \
+		out="$$2"; \
+		secret_json="$$(mktemp)"; \
+		echo "==> Fetching Secret $${cluster}-kubeconfig from the management plane..."; \
+		kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" get secret "$${cluster}-kubeconfig" -n default -o json > "$$secret_json"; \
+		scripts/fetch-kubeconfig "$$secret_json" > "$$out"; \
+		chmod 600 "$$out"; \
+		rm -f "$$secret_json"; \
+	}; \
+	fetch_wc_kubeconfig "$(CLUSTER_NAME)" "$(MULTI_KUBECONFIG_1)"; \
+	fetch_wc_kubeconfig "$(MULTI_CLUSTER2_NAME)" "$(MULTI_KUBECONFIG_2)"; \
+	url1="$$(awk '/^[[:space:]]*server:/ {print $$2; exit}' "$(MULTI_KUBECONFIG_1)")"; \
+	url2="$$(awk '/^[[:space:]]*server:/ {print $$2; exit}' "$(MULTI_KUBECONFIG_2)")"; \
+	if [ -z "$$url1" ] || [ -z "$$url2" ]; then \
+		echo 'ERROR [kubeconfig-endpoint] no server URL found in one of the fetched kubeconfigs' >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$url1" = "$$url2" ]; then \
+		echo "ERROR [kubeconfig-endpoint] port collision: $(CLUSTER_NAME) ($$url1) and $(MULTI_CLUSTER2_NAME) ($$url2) resolve to the SAME server URL; distinct published ports are required" >&2; \
+		exit 1; \
+	fi; \
+	echo "    Distinct API endpoints: $(CLUSTER_NAME) $$url1, $(MULTI_CLUSTER2_NAME) $$url2"; \
+	echo '==> Running the smoke-test Job against $(CLUSTER_NAME)...'; \
+	$(MAKE) smoke-test SMOKE_KUBECONFIG="$(MULTI_KUBECONFIG_1)"; \
+	echo '==> Running the smoke-test Job against $(MULTI_CLUSTER2_NAME)...'; \
+	$(MAKE) smoke-test SMOKE_KUBECONFIG="$(MULTI_KUBECONFIG_2)"; \
+	echo '==> Deleting both Clusters (best-effort)...'; \
+	del_failures=''; \
+	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)"; then \
+		echo "ERROR [teardown] deleting Cluster $(CLUSTER_NAME) failed" >&2; \
+		del_failures=" $$del_failures $(CLUSTER_NAME)"; \
+	fi; \
+	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" delete "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)"; then \
+		echo "ERROR [teardown] deleting Cluster $(MULTI_CLUSTER2_NAME) failed" >&2; \
+		del_failures=" $$del_failures $(MULTI_CLUSTER2_NAME)"; \
+	fi; \
+	echo '==> Waiting for infrastructure reclamation (both Clusters)...'; \
+	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" wait --for=delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=10m; then \
+		echo "ERROR [reclamation] Cluster $(CLUSTER_NAME) was not reclaimed within 10m" >&2; \
+		del_failures=" $$del_failures $(CLUSTER_NAME)"; \
+	fi; \
+	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" wait --for=delete "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)" --timeout=10m; then \
+		echo "ERROR [reclamation] Cluster $(MULTI_CLUSTER2_NAME) was not reclaimed within 10m" >&2; \
+		del_failures=" $$del_failures $(MULTI_CLUSTER2_NAME)"; \
+	fi; \
+	if [ -n "$$del_failures" ]; then \
+		echo "ERROR [teardown] multi-cluster-test failed for cluster(s):$${del_failures}" >&2; \
+		exit 1; \
+	fi; \
+	echo 'Multi-cluster test passed.'
 # --- Metrics Server ---
 
 .PHONY: metrics-server
