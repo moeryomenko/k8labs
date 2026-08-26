@@ -98,10 +98,11 @@ spec:
   template:
     spec:
       machineTemplate:
-        infrastructureRef:
-          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-          kind: HypervisorMachineTemplate
-          name: hypervisor-control-plane-machine-template
+        spec:
+          infrastructureRef:
+            apiGroup: infrastructure.cluster.x-k8s.io
+            kind: HypervisorMachineTemplate
+            name: hypervisor-control-plane-machine-template
 ---
 # Control-plane machine shape from build/deploy.tfvars control_plane defaults.
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
