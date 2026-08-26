@@ -2,7 +2,7 @@
 
 This page is the detailed version of the README's [One-time setup](../README.md#one-time-setup) chapter. It walks through everything that must happen once per host before `make cluster` works.
 
-**Order matters**: capishim first (it owns the management apiserver), then the cluster-api-hypervisor provider bits, then the k8labs-side image bake. The provider's `clusterctl init` talks to the management apiserver, so the plane must be running when you initialize the providers.
+**Order matters**: capishim first (it owns the management apiserver and installs every provider at pod boot), then the provider-side bits (images + quadlets), then the k8labs-side image bake. Nothing below talks to the management apiserver manually — systemd unit ordering starts the provider after the capishim pod, and `make mgmt-up` additionally gates on the provider's `/readyz` before any cluster is created.
 
 Everything below runs as your unprivileged user except where marked. The single privileged step of the entire lab is adding your user to the `kvm` group.
 
@@ -22,7 +22,7 @@ Verify the tooling any time with:
 make prereq
 ```
 
-It fails loudly naming what is missing: tools not on PATH, quadlet units not installed, the capishim kubeconfig absent, or `.venv` missing (run `make node-tools` first).
+It fails loudly naming what is missing: tools not on PATH (including `podman`), `/dev/kvm` absent, your user not in the `kvm` group, quadlet units not installed, the capishim kubeconfig absent, `.venv` missing (run `make node-tools` first), or the baked artifacts absent (`build/k8labs-base.qcow2`, `build/CLOUDHV.fd` — run `make base` first).
 
 ## 1. capishim management plane
 
@@ -40,6 +40,7 @@ What this produces:
 - Lingering enabled for your uid (best-effort).
 - Vendored CAPI templates under `${CAPISHIM_STATE_DIR}/templates/`.
 - `~/.kube/capishim.kubeconfig` symlinked to `${CAPISHIM_STATE_DIR}/kubeconfigs/admin.kubeconfig`, written by the setup container at boot.
+- All three hypervisor providers (CRDs, RBAC, webhook configurations) installed into the management API by the setup container from manifests vendored in the capishim repo, plus the provider's identity material: `${CAPISHIM_STATE_DIR}/kubeconfigs/hypervisor.kubeconfig` and `${CAPISHIM_STATE_DIR}/webhook-certs/hypervisor/tls.crt`+`tls.key`, signed by the pod CA.
 
 Optional environment overrides (all optional; see capishim's install doc): `CAPISHIM_VERSION` (default `v0.1.0`), `CAPISHIM_STATE_DIR` (default `~/.local/share/capishim`), `CAPISHIM_BIND_ADDRESS` (default `127.0.0.1:6443`), `CAPI_SOURCE_REF` (default `v1.14.0`).
 
@@ -54,83 +55,48 @@ An empty node table / namespace list is the expected healthy response — the ma
 
 ## 2. cluster-api-hypervisor provider
 
-Sources of truth: `cluster-api-hypervisor/docs/install-contract.md` (image, environment, quadlets, webhook certs) and `cluster-api-hypervisor/docs/clusterctl.md` (components packaging, clusterctl init, CA-bundle patch). Run these steps **in the provider checkout**, not in k8labs.
+Sources of truth: `cluster-api-hypervisor/docs/install-contract.md` (image, environment, quadlet, identity inputs) and `cluster-api-hypervisor/docs/clusterctl.md` (the standalone clusterctl alternative — not the k8labs flow). Run these steps **in the provider checkout**, not in k8labs.
+
+There is nothing manual left in the provider install: the quadlet ships with the repo, and capishim's setup container installs all three hypervisor providers (CRDs, RBAC, webhook configurations) automatically when the pod boots. Providers are never initialized through clusterctl here, and no certificate patching exists.
 
 ### 2.1 State directories
 
 ```sh
-loginctl enable-linger
 mkdir -p ~/.local/state/k8slab/build/vm-disks \
-         ~/.local/state/k8slab/webhook-certs \
-         ~/.local/state/k8slab/kubeconfigs \
          /tmp/ch-capi \
          /run/user/$(id -u)/k8snet
 mkdir -p ~/.config/containers/systemd
 ```
 
-### 2.2 User quadlets
+Lingering is enabled by capishim's install (section 1). Adjust `/run/user/1000/...` paths if your uid is not 1000 — the same paths appear in the quadlet mounts and `HYPERVISOR_K8NETD_SOCKET`.
 
-Write the two unit files into `~/.config/containers/systemd/` exactly as specified by install-contract §5.0.1/§5.0.2 (the reference units live at `test/e2e/mgmt/units/` in the provider repo):
-
-- `k8netd.container` — the rootless network daemon (`localhost/k8netd:dev`, state volume, `K8NETD_*` env incl. `K8NETD_PASST_FORWARDS=6443,22`)
-- `cluster-api-hypervisor.container` — the provider manager (`localhost/cluster-api-hypervisor:dev`, host network, `/dev/kvm` device, `/build` + `/state` + socket mounts, `HYPERVISOR_*` env, `--kubeconfig` pointing at the management admin kubeconfig)
-
-Then reload:
-
-```sh
-systemctl --user daemon-reload
-```
-
-Adjust `/run/user/1000/...` paths if your uid is not 1000 (both the mounts and `HYPERVISOR_K8NETD_SOCKET`).
-
-### 2.3 Provider image and release tree
+### 2.2 Provider image and quadlet
 
 ```sh
 cd /home/eryoma/workspace/cluster-api-hypervisor
-make image        # podman build -t cluster-api-hypervisor:dev (local-only, never published)
-make components   # release tree under out/: {infrastructure,bootstrap,control-plane}-hypervisor/v0.1.0/
+make image            # podman build -> localhost/cluster-api-hypervisor:dev (local-only, never published)
+make install-quadlet  # copies deploy/cluster-api-hypervisor.container into ~/.config/containers/systemd/
+systemctl --user daemon-reload
 ```
 
-### 2.4 clusterctl configuration
+The committed quadlet (`deploy/cluster-api-hypervisor.container`) mounts the lab build dir at `/build`, the k8slab state root at `/state`, the k8netd runtime dir, the cloud-hypervisor socket dir, and — produced by capishim at pod boot — the webhook serving certs and `hypervisor.kubeconfig` from the capishim state subtree. Defaults match the k8labs layout (`~/.local/state/k8slab`, `~/.local/share/capishim`); adjust the two path variables documented in the unit header if your layout differs.
 
-The committed `clusterctl.yaml` carries placeholder base paths; substitute them with your real layout and install where clusterctl reads it:
+The k8netd side is installed the same way from its own checkout (see `k8netd/docs/install.md`): build its image with `make image`, copy `deploy/k8netd.container` into `~/.config/containers/systemd/`, and reload. Published host ports are no longer configured statically — k8netd allocates them per VM through its idempotent `PublishPort` RPC out of `K8NETD_PUBLISH_RANGE` (default 20000-21000).
+
+### 2.3 Optional: clusterctl configuration for template rendering
+
+clusterctl is not part of the install flow anymore — capishim owns provider installation. It remains useful as an offline template renderer (`clusterctl generate cluster`) against the provider release tree. Do this only if you intend to render workload-cluster manifests with clusterctl:
 
 ```sh
+cd /home/eryoma/workspace/cluster-api-hypervisor
+make components   # release tree under out/: {infrastructure,bootstrap,control-plane}-hypervisor/v0.1.0/
+
 sed -e 's|/var/lib/k8slab/out|/home/eryoma/workspace/cluster-api-hypervisor/out|g' \
     -e 's|/var/lib/k8slab/overrides|<your-overrides-dir>|g' \
     clusterctl.yaml > ~/.cluster-api/clusterctl.yaml
 ```
 
-The rendered `file://` URLs must stay absolute (clusterctl resolves `{basepath}/{provider-label}/{version}/{components.yaml}`).
-
-### 2.5 Webhook certificates
-
-The five admission webhooks are served over TLS from static material — no cert-manager. Before starting the provider, provision into `~/.local/state/k8slab/webhook-certs/`:
-
-1. A self-signed CA (`ca.key`, `ca.crt`) — the trust root for both the serving certs and the later caBundle patch.
-2. A serving certificate signed by that CA with SANs covering at least `127.0.0.1` and `localhost`, written as `tls.crt`/`tls.key`.
-
-### 2.6 Initialize the providers
-
-With the management plane running (from k8labs: `make mgmt-up`, or `systemctl --user start capishim-pod`):
-
-```sh
-clusterctl init --infrastructure hypervisor --bootstrap hypervisor --control-plane hypervisor --skip-cert-manager
-```
-
-`--skip-cert-manager` is required — the webhooks use static certificates, so cert-manager must not be installed.
-
-Then patch the management CA into every webhook entry of both configurations (the components ship them with an empty `caBundle` and `failurePolicy: Fail`; until patched, the first Hypervisor admission fails):
-
-```sh
-CA=$(base64 -w0 <path-to-mgmt-ca.pem>)
-kubectl --kubeconfig ~/.kube/capishim.kubeconfig patch mutating-webhook-configuration --type=json \
-  -p '[{"op":"replace","path":"/webhooks/0/clientConfig/caBundle","value":"'"$CA"'"}]'
-kubectl --kubeconfig ~/.kube/capishim.kubeconfig patch validating-webhook-configuration --type=json \
-  -p '[{"op":"replace","path":"/webhooks/0/clientConfig/caBundle","value":"'"$CA"'"}]'
-```
-
-Patching an identical bundle is a no-op, so the step is idempotent.
+The rendered `file://` URLs must stay absolute (clusterctl resolves `{basepath}/{provider-label}/{version}/{components.yaml}`). This configuration drives `generate cluster` only; provider installation into the management plane happens exclusively through capishim's setup container.
 
 ## 3. k8labs side
 
@@ -154,7 +120,7 @@ Re-copy after every `make base` / extension bump — a rebuilt base image does n
 
 ```sh
 make prereq       # all checks green
-make mgmt-up      # three units active, management API responds
+make mgmt-up      # three units active, management API + provider /readyz respond
 make cluster      # mgmt-up -> cluster-up -> addons-up -> wait Ready -> kubeconfig -> smoke test
 kubectl --kubeconfig build/kubeconfig get nodes   # 1 control plane + 3 workers, Ready
 ```
