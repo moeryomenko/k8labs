@@ -35,6 +35,6 @@ spec:
           args:
             - |
               set -eu
-              echo "probing Cilium LB gateway http://cilium-gw.default.svc.cluster.local/"
+              echo "probing Cilium LB gateway http://cilium-gateway-cilium-gw.default.svc.cluster.local/"
               curl --fail --silent --show-error --max-time 10 \
-                http://cilium-gw.default.svc.cluster.local/
+                http://cilium-gateway-cilium-gw.default.svc.cluster.local/
