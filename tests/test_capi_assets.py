@@ -313,9 +313,13 @@ def pinned_k8s_versions() -> dict[str, str]:
 def lb_service_candidates() -> set[str]:
     """Derive LB service DNS candidates from the cilium/ manifests.
 
-    Gateway objects yield the same-named Service Cilium's gateway
-    implementation provisions in the Gateway namespace; explicit
-    type=LoadBalancer Services yield their own names.
+    Gateway objects yield the Service Cilium's gateway-controller actually
+    provisions: Cilium names it ``cilium-gateway-<gateway-name>`` in the
+    Gateway's namespace (not the Gateway's own name). Explicit
+    type=LoadBalancer Services yield their own names. Both the derived
+    Cilium name and the bare Gateway name are offered as candidates so a
+    smoke Job targeting the real Service passes while a regression to the
+    plain name is still caught if the manifest ever diverges.
     """
     candidates: set[str] = set()
     cilium_dir = REPO_ROOT / "cilium"
@@ -336,14 +340,18 @@ def lb_service_candidates() -> set[str]:
                 and spec.get("type") == "LoadBalancer"
             )
             if (is_gateway or is_lb_service) and name:
-                candidates.update(
-                    {
-                        f"{name}.{namespace}.svc.cluster.local",
-                        f"{name}.{namespace}.svc",
-                        f"{name}.{namespace}",
-                        name,
-                    }
-                )
+                base_names = {name}
+                if is_gateway:
+                    base_names.add(f"cilium-gateway-{name}")
+                for base in base_names:
+                    candidates.update(
+                        {
+                            f"{base}.{namespace}.svc.cluster.local",
+                            f"{base}.{namespace}.svc",
+                            f"{base}.{namespace}",
+                            base,
+                        }
+                    )
     return candidates
 
 
