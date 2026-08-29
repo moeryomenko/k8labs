@@ -1,4 +1,9 @@
-# kube-dns Service — fixed clusterIP 10.96.0.10 (cluster_dns_ip), selects coredns pods
+# kube-dns Service — selects coredns pods. The clusterIP (10.96.0.10) is
+# pre-allocated by the provider's workload seed before node configs render
+# (matching the kubelet clusterDNS), so this manifest deliberately does NOT
+# pin a clusterIP: the CRS apply collides on the Service name with the
+# pre-allocated one (AlreadyExists, treated as success) instead of tripping
+# the apiserver IP allocator on an already-allocated explicit IP.
 apiVersion: v1
 kind: Service
 metadata:
@@ -9,7 +14,6 @@ metadata:
     kubernetes.io/cluster-service: "true"
     kubernetes.io/name: CoreDNS
 spec:
-  clusterIP: 10.96.0.10
   selector:
     k8s-app: kube-dns
   ports:
