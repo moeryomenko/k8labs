@@ -41,6 +41,12 @@ mkdir -p /var/lib/extensions /var/lib/confexts
 #     because cloud-config.service does not depend on multi-user.target.
 systemctl disable systemd-sysext systemd-confext
 
+# k8slab-merge: merge the baked sysext/confext images into /usr and /etc.
+# The merge must NOT start the k8s services itself: the bootstrap confexts
+# (z-etcd, z-kubernetes-cp, z-kubelet-<node>) are delivered by cloud-init's
+# runcmd, which runs in cloud-final.service — and cloud-final has
+# After=multi-user.target, while this unit is Before=multi-user.target, so
+# the bootstrap confexts are not merged yet when this unit runs.
 cat > /usr/lib/systemd/system/k8slab-merge.service <<'EOF'
 [Unit]
 Description=Merge baked sysext and confext images after cloud-init
@@ -59,8 +65,68 @@ ExecStart=/usr/bin/systemctl daemon-reload
 WantedBy=multi-user.target
 EOF
 
+# k8slab-stack: start the Kubernetes node services in dependency order AFTER
+# cloud-final.service has delivered the bootstrap confexts. It is pulled in
+# by a cloud-final.service.wants symlink (created below), so systemd starts
+# it once cloud-final completes — no ordering cycle, because there is no
+# Before= relationship between the two. Each service gates itself on its
+# confext config being present (ConditionPathExists), which keeps the role
+# split: a worker only receives the z-kubelet-<node> confext so etcd/apiserver/
+# controllers are condition-skips, while a control plane starts everything.
+# A condition-failed `systemctl start` returns success, so this is safe on
+# workers too. Ordering mirrors the pre-CAPI push-confext.sh contract.
+cat > /usr/lib/systemd/system/k8slab-stack.service <<'EOF'
+[Unit]
+Description=Start Kubernetes node services after cloud-init final stage
+After=cloud-final.service k8slab-merge.service
+Wants=cloud-final.service k8slab-merge.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Install the narrow apiserver Service-IP DNAT (10.96.0.1:443 -> the workload
+# apiserver) before any Kubernetes service starts. Cilium's config-init dials
+# the apiserver through the in-cluster KUBERNETES_SERVICE_HOST (10.96.0.1)
+# before its own datapath exists, so this rule must be present by the time
+# kubelet starts. The script is delivered by the provider's per-node confext
+# (k8s-service-nft.sh) and merged into /etc by k8slab-merge; tolerate absence
+# (the `-` prefix) so a node whose confext lacks the script still boots.
+ExecStart=-/usr/bin/sh /etc/k8s-service-nft.sh
+ExecStart=/usr/bin/systemctl start crio.service
+ExecStart=/usr/bin/systemctl start etcd.service
+ExecStart=/usr/bin/systemctl start kube-apiserver.service
+ExecStart=/usr/bin/systemctl start kube-controller-manager.service
+ExecStart=/usr/bin/systemctl start kube-scheduler.service
+ExecStart=/usr/bin/systemctl start kubelet.service
+EOF
+
 systemctl daemon-reload
 systemctl enable k8slab-merge
+# Pull k8slab-stack in through cloud-final's wants directory (the unit file is
+# baked into /usr, so the symlink resolves without needing the sysext merge).
+mkdir -p /etc/systemd/system/cloud-final.service.wants
+ln -s /usr/lib/systemd/system/k8slab-stack.service \
+    /etc/systemd/system/cloud-final.service.wants/k8slab-stack.service
+
+# Enable the Kubernetes node services so each VM brings up its runtime stack
+# automatically at boot. The unit files live inside the sysext images under
+# /var/lib/extensions/, which k8slab-merge merges into /usr at first boot
+# (Before=multi-user.target) — so at bake time `systemctl enable` cannot
+# resolve them. Instead, drop the multi-user.target.wants symlinks directly:
+# systemd resolves a symlink target lazily at boot, by which point the merge
+# has populated /usr/lib/systemd/system/. The kubelet/control-plane units
+# gate themselves on their config being present (ConditionPathExists on the
+# confext-provided files), so a worker (which only receives the
+# z-kubelet-<node> confext) starts crio/kubelet but not
+# etcd/apiserver/controllers, while a control plane (z-etcd +
+# z-kubernetes-cp + z-kubelet-<node>) starts everything. Ordering is safe
+# because k8slab-merge (Before=multi-user.target) merges the sysexts before
+# these WantedBy=multi-user.target units start.
+mkdir -p /etc/systemd/system/multi-user.target.wants
+for svc in crio etcd kube-apiserver kube-controller-manager kube-scheduler kubelet; do
+    ln -s "/usr/lib/systemd/system/${svc}.service" \
+        "/etc/systemd/system/multi-user.target.wants/${svc}.service"
+done
 
 # Load the baked SELinux policy modules into the policy store. The .pp files
 # were uploaded to /root/ by Packer file provisioners that run before this
