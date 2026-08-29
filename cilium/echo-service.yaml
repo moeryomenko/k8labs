@@ -1,0 +1,40 @@
+# echo-service backend for the cilium-gw HTTPRoute (http-route.yaml).
+# The smoke-test Job (capi/smoke-test/job.yaml) curls the Gateway which
+# routes here; without a live backend the LB returns no route and the
+# probe fails.
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-service
+  namespace: default
+spec:
+  selector:
+    app: echo
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-service
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: echo
+  template:
+    metadata:
+      labels:
+        app: echo
+    spec:
+      containers:
+        - name: echo
+          image: docker.io/hashicorp/http-echo:0.2.3
+          args:
+            - -listen=:80
+            - -text="k8labs echo-service"
+          ports:
+            - containerPort: 80
