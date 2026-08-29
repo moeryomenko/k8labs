@@ -1,7 +1,7 @@
 [Unit]
 Description=kube-apiserver: The Kubernetes API Server
 Documentation=https://kubernetes.io/docs/home/
-ConditionPathExists=/etc/kubernetes/pki/ca.pem
+ConditionPathExists=/etc/kubernetes/cp.env
 
 [Service]
 EnvironmentFile=/etc/kubernetes/cp.env

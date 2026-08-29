@@ -4,9 +4,11 @@ Documentation=https://kubernetes.io/docs/home/
 ConditionPathExists=/etc/kubernetes/kubelet.conf
 
 [Service]
+EnvironmentFile=-/etc/kubernetes/provider-id.env
 ExecStart=/usr/bin/kubelet \
   --config=/etc/kubernetes/kubelet/config.yaml \
-  --kubeconfig=/etc/kubernetes/kubelet.conf
+  --kubeconfig=/etc/kubernetes/kubelet.conf \
+  --provider-id=${PROVIDER_ID}
 Restart=always
 StartLimitInterval=0
 RestartSec=10
