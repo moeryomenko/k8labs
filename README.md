@@ -73,7 +73,7 @@ The lab toolchain uses two third-party plugins maintained under the `moeryomenko
 
 | Plugin | Role | Wiring in k8labs |
 |---|---|---|
-| [packer-plugin-cloud-hypervisor](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) | Cloud-Hypervisor Packer builder that produces the base image | Used by `make base`; built from source with `make plugin`, pinned at commit `952aa92` (Makefile `PACKER_PLUGIN_VERSION`), installed to `~/.packer.d/plugins/packer-plugin-cloud-hypervisor` |
+| [packer-plugin-cloud-hypervisor](https://github.com/moeryomenko/packer-plugin-cloud-hypervisor) | Cloud-Hypervisor Packer builder that produces the base image | Used by `make base`; built from source inside the bake container at `PACKER_PLUGIN_REF` (default `main`, Makefile) by `make bake-image`, installed into the image's `PACKER_PLUGIN_PATH` |
 | [packer-plugin-systemd-ext](https://github.com/moeryomenko/packer-plugin-systemd-ext) | Bakes or persists systemd extension images during a Packer build (`systemd-ext-sysext` overlays `/usr`, `systemd-ext-confext` overlays `/etc`) | Not wired into the current pipeline — k8labs builds the `.raw` images with `extensions/build.sh` (mksquashfs) and bakes them into the base image with plain Packer `file` provisioners |
 
 ## One-time setup
@@ -99,11 +99,20 @@ This builds the five capishim images, renders nine quadlet units into `~/.config
 
 ```sh
 make node-tools   # uv sync -> .venv (required by make prereq)
-make plugin       # build/install the Packer Cloud-Hypervisor plugin
-make base         # bake build/k8labs-base.qcow2 (+ build/CLOUDHV.fd via make base-deps)
+make plugin       # alias for `make bake-image`: builds the rootless bake container (packer + CH plugin baked in)
+make base         # bake build/k8labs-base.qcow2 in the rootless bake container (+ build/CLOUDHV.fd via make base-deps)
+make provider-state  # publish base image/firmware/SSH key into the provider's build mount, create state dirs
 ```
 
-Copy `build/k8labs-base.qcow2` and `build/CLOUDHV.fd` into the provider's build mount (`~/.local/state/k8slab/build/` by default) so the provider can boot machines from them.
+`make base` runs Packer + the Cloud-Hypervisor plugin **inside a rootless podman
+container** (`bake/Containerfile` + `bake/bake-net.sh`). The container owns a
+private network namespace where the lab user is namespace-root, so
+`bake-net.sh` can create the `packer-tap`, run dnsmasq, and NAT the guest to
+the Fedora repos **without any host bridge/TAP/dnsmasq/NAT or root**. The
+bake needs only `--device /dev/kvm --device /dev/net/tun --cap-add
+NET_ADMIN,NET_RAW --sysctl net.ipv4.ip_forward=1`. `make provider-state`
+publishes the artifacts into the provider's build mount
+(`~/.local/state/k8slab/build/`) and creates the provider's state dirs.
 
 ## Host reachability model
 
@@ -128,13 +137,14 @@ Requirements: a Linux host with KVM-capable hardware and your user in the `kvm` 
 
 ```sh
 make node-tools    # sync Python tooling (creates .venv; make prereq requires it)
-make plugin        # build + install the Packer CH plugin (once)
+make plugin        # alias for make bake-image (rootless bake container, plugin baked in)
 make base          # bake the base image (re-run after extension changes)
+make provider-state  # publish base image + firmware + SSH key into the provider's build mount
 make prereq        # validate tooling, quadlet units, capishim kubeconfig, KVM readiness, baked artifacts
-make cluster       # mgmt-up -> cluster-up -> addons-up -> wait Ready -> kubeconfig -> smoke-test
+make cluster       # mgmt-images -> provider-state -> mgmt-up -> cluster-up -> addons-up -> wait Ready -> kubeconfig -> smoke-test
 ```
 
-`make cluster` executes the full declarative pipeline: starts the capishim management plane units and waits for its API plus the provider's `/readyz` endpoint (`mgmt-up`), server-side applies `capi/cluster.yaml` (`cluster-up`), server-side applies `capi/addons/` so the ClusterResourceSets exist on the management plane (`addons-up`), waits for the Cluster to become Ready (up to 30 m — the provider boots the VMs, k8netd wires them, the control plane forms, and the addons controller reconciles the ClusterResourceSets onto the workload cluster, applying RBAC/Cilium/CoreDNS), fetches the workload kubeconfig to `build/kubeconfig`, and gates the result with the in-cluster smoke-test Job.
+`make cluster` executes the full declarative pipeline: pulls the management-plane images from ghcr.io and retags them to the quadlet names (`mgmt-images`), publishes the bake artifacts into the provider's build mount (`provider-state`), starts the capishim management plane units and waits for its API plus the provider's `/readyz` endpoint (`mgmt-up`), server-side applies `capi/cluster.yaml` (`cluster-up`), server-side applies `capi/addons/` so the ClusterResourceSets exist on the management plane (`addons-up`), waits for the Cluster to become Ready (up to 30 m — the provider boots the VMs, k8netd wires them, the control plane forms, and the addons controller reconciles the ClusterResourceSets onto the workload cluster, applying RBAC/Cilium/CoreDNS), fetches the workload kubeconfig to `build/kubeconfig`, and gates the result with the in-cluster smoke-test Job.
 
 Use the cluster:
 
@@ -157,19 +167,27 @@ Individual stages:
 | `make update-kubeconfig` | Alias for `kubeconfig` — explicitly signals refresh |
 | `make smoke-test` | Apply `capi/smoke-test/job.yaml` against the workload cluster (`build/kubeconfig`) and wait for Job success |
 | `make cluster-down` | Delete the workload Cluster via the management plane and wait for reclamation |
-| `make cluster` | Full pipeline: prereq → mgmt-up → cluster-up → addons-up → wait Cluster ready → kubeconfig → smoke-test |
+| `make cluster` | Full pipeline: mgmt-images → provider-state → mgmt-up → cluster-up → addons-up → wait Cluster ready → kubeconfig → smoke-test |
+
+**Management-plane images and provider state:**
+
+| Target | Description |
+|--------|-------------|
+| `make mgmt-images` | Pull the capishim/provider/k8netd images from `ghcr.io/moeryomenko` (pushed by each sibling repo's GitHub Actions workflow) and retag them to the `localhost/*` names the quadlets reference |
+| `make provider-state` | Create `~/.local/state/k8slab/build/vm-disks` and `/tmp/ch-capi`; copy the baked base image, firmware, and `build/packer-ssh-key.pub` (as `ssh-lab.pub`) into the provider's build mount |
 
 **Image baking:**
 
 | Target | Description |
 |--------|-------------|
-| `make base` | Build base image from Fedora Cloud + cloud-init (skips when newer than the newest extension image) |
+| `make base` | Build base image from Fedora Cloud + cloud-init in the rootless bake container (skips when newer than the newest extension image) |
 | `make base-rebuild` | Force rebuild base image |
+| `make bake-image` | Build the rootless bake container image (`localhost/k8labs-bake:dev`) — Fedora base, packer, cloud-hypervisor, dnsmasq/iptables/iproute2, and the CH plugin built from source at `PACKER_PLUGIN_REF` (default `main`) |
+| `make plugin` | Alias for `make bake-image` (the Packer CH plugin now lives inside the bake container) |
+| `make plugin-rebuild` | Alias for `make bake-image` — force refresh of the bake image (rebuilds the plugin from source) |
 | `make base-deps` | Download CLOUDHV.fd firmware + Fedora Cloud Base qcow2 (checksum-verified), convert to raw |
 | `make base-cloudinit` | Generate FAT16 CIDATA disk for Packer SSH key injection |
 | `make base-ssh-key` | Generate SSH keypair for Packer provisioning |
-| `make plugin` | Build and install the cloudhypervisor Packer plugin from source (pinned at commit `952aa92`, Makefile `PACKER_PLUGIN_VERSION`) |
-| `make plugin-rebuild` | Force rebuild and reinstall the Packer plugin |
 
 **Extensions:**
 
