@@ -1,0 +1,78 @@
+# k8labs rootless bake container.
+#
+# Builds the base image with Packer + the Cloud-Hypervisor plugin entirely
+# inside a rootless podman container. The container runs in its own network
+# namespace where the lab user is namespace-root, so bake-net.sh can create
+# the packer-tap device, run dnsmasq, and NAT the guest to the internet
+# WITHOUT any host privilege (no host bridge, no host TAP, no root).
+#
+# Multi-stage: the hashicorp/packer image provides a statically-linked
+# packer binary (HashiCorp's release server is geo-blocked from this region,
+# so the release zip cannot be fetched directly).
+#
+# Build: podman build -t localhost/k8labs-bake:dev bake/
+# Run (via `make base`): podman run --rm \
+#   --device /dev/kvm --device /dev/net/tun \
+#   --cap-add NET_ADMIN,NET_RAW \
+#   -v $PWD/build:/src/build \
+#   -v $PWD/packer:/src/packer \
+#   -v $PWD/extensions:/src/extensions \
+#   -w /src/packer \
+#   localhost/k8labs-bake:dev \
+#   packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .
+
+FROM docker.io/hashicorp/packer:1.15.4 AS packer-stage
+
+FROM registry.fedoraproject.org/fedora:44
+
+# Packer binary from the Alpine-based hashicorp/packer image; it is a
+# statically-linked ELF, so it runs unchanged on the glibc Fedora base.
+COPY --from=packer-stage /bin/packer /usr/local/bin/packer
+
+# Build tools for the plugin plus the runtime network stack bake-net.sh
+# needs inside the container netns.
+RUN dnf -y install \
+        golang \
+        git \
+        make \
+        dnsmasq \
+        iproute \
+        iptables-nft \
+        curl \
+        unzip \
+        && dnf clean all \
+        && rm -rf /var/cache/dnf
+
+# Cloud-Hypervisor static release (the guest VMM). Pinned to v53.0, the
+# release matching the host's git build (v53.0-85-g616bafbe8).
+ARG CH_VERSION=v53.0
+RUN curl -fsSL -o /usr/local/bin/cloud-hypervisor \
+        "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VERSION}/cloud-hypervisor-static" \
+        && chmod +x /usr/local/bin/cloud-hypervisor \
+        && cloud-hypervisor --version
+
+# Build the Packer Cloud-Hypervisor plugin from source at main and install it
+# in the plugin layout Packer 1.15.x discovers under $PACKER_PLUGIN_PATH:
+#   github.com/<owner>/<name>/packer-plugin-<name>_v<version>_x<apiversion>_<os>_<arch>
+# (matches the host's working ~/.packer.d/plugins tree). The plugin is Go;
+# Fedora's golang (1.26.x) meets the plugin's go.mod requirement.
+ARG PACKER_PLUGIN_REF=main
+ARG PLUGIN_VERSION=0.0.1
+RUN git clone --depth 1 --branch "${PACKER_PLUGIN_REF}" \
+        https://github.com/moeryomenko/packer-plugin-cloud-hypervisor /tmp/ppch \
+    && cd /tmp/ppch \
+    && go build -o packer-plugin-cloud-hypervisor . \
+    && mkdir -p /plugins/github.com/moeryomenko/cloud-hypervisor \
+    && cp packer-plugin-cloud-hypervisor \
+        "/plugins/github.com/moeryomenko/cloud-hypervisor/packer-plugin-cloud-hypervisor_v${PLUGIN_VERSION}_x5.0_linux_amd64" \
+    && cd /plugins/github.com/moeryomenko/cloud-hypervisor \
+    && sha256sum "packer-plugin-cloud-hypervisor_v${PLUGIN_VERSION}_x5.0_linux_amd64" > \
+        "packer-plugin-cloud-hypervisor_v${PLUGIN_VERSION}_x5.0_linux_amd64_SHA256SUM" \
+    && rm -rf /tmp/ppch
+
+ENV PACKER_PLUGIN_PATH=/plugins
+
+COPY bake-net.sh /usr/local/bin/bake-net.sh
+RUN chmod +x /usr/local/bin/bake-net.sh
+
+ENTRYPOINT ["/usr/local/bin/bake-net.sh"]
