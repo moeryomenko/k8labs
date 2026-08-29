@@ -27,34 +27,28 @@ FEDORA_CLOUD_DEST := build/fedora-cloud-base.qcow2
 BASE_IMAGE_DEST := build/k8labs-base.qcow2
 CLOUDINIT_DISK := build/cloudinit.img
 SSH_KEY := build/packer-ssh-key
-PACKER_PLUGIN_SRC := /home/eryoma/workspace/packer-plugin-cloud-hypervisor
-PACKER_PLUGIN := $(HOME)/.packer.d/plugins/packer-plugin-cloud-hypervisor
-# Pinned commit of the plugin source. Bump when the plugin changes; the
-# `plugin` target rebuilds automatically when the source is newer than the
-# installed binary (communicator validation fix, 952aa92).
-PACKER_PLUGIN_VERSION := 952aa92
+# Bake container: the base image is baked with Packer + the Cloud-Hypervisor
+# plugin running inside a rootless podman container (its own netns), so the
+# bake needs no host bridge/TAP/dnsmasq/NAT. The plugin is built into the
+# image from source at PACKER_PLUGIN_REF (default: main).
+BAKE_IMAGE := localhost/k8labs-bake:dev
+PACKER_PLUGIN_REF ?= main
 
+.PHONY: bake-image
+bake-image: ## Build the rootless bake container image (packer + CH plugin + bake-net.sh)
+	@echo '==> Building bake container image ($(BAKE_IMAGE))...'
+	podman build -t "$(BAKE_IMAGE)" \
+		--build-arg PACKER_PLUGIN_REF="$(PACKER_PLUGIN_REF)" \
+		bake/
+
+# `make plugin` is now an alias for `bake-image`: the Cloud-Hypervisor Packer
+# plugin is built inside the bake container (cloned from source at
+# PACKER_PLUGIN_REF during the image build) instead of being built on the host.
 .PHONY: plugin plugin-rebuild
-plugin: ## Build and install Cloud-Hypervisor Packer plugin (rebuilds when the source is newer)
-	@echo '==> Building Cloud-Hypervisor Packer plugin...'
-	@set -euo pipefail; \
-	if [ -f "$(PACKER_PLUGIN)" ] && [ ! "$(PACKER_PLUGIN_SRC)/go.mod" -nt "$(PACKER_PLUGIN)" ]; then \
-		echo '    Plugin up to date'; \
-	else \
-		mkdir -p "$(HOME)/.packer.d/plugins"; \
-		$(MAKE) -C "$(PACKER_PLUGIN_SRC)" build; \
-		cp "$(PACKER_PLUGIN_SRC)/packer-plugin-cloud-hypervisor" "$(PACKER_PLUGIN)"; \
-		echo '    Installed Packer plugin'; \
-	fi
+plugin: bake-image ## Build/refresh the bake container image (Packer CH plugin now lives inside it)
+	@echo '    Cloud-Hypervisor Packer plugin is baked into $(BAKE_IMAGE)'
 
-plugin-rebuild: ## Force rebuild and reinstall the Cloud-Hypervisor Packer plugin
-	@echo '==> Forcing Cloud-Hypervisor Packer plugin rebuild...'
-	@set -euo pipefail; \
-	rm -f "$(PACKER_PLUGIN)"; \
-	mkdir -p "$(HOME)/.packer.d/plugins"; \
-	$(MAKE) -C "$(PACKER_PLUGIN_SRC)" build; \
-	cp "$(PACKER_PLUGIN_SRC)/packer-plugin-cloud-hypervisor" "$(PACKER_PLUGIN)"; \
-	echo '    Rebuilt and installed Packer plugin'
+plugin-rebuild: bake-image ## Force refresh of the bake container image (rebuilds the plugin from source)
 
 .PHONY: base-deps
 base-deps: ## Download CLOUDHV.fd firmware and Fedora Cloud Base image
@@ -106,7 +100,7 @@ base-cloudinit: base-ssh-key ## Generate cloud-init CIDATA disk for Packer build
 		--output "$(CLOUDINIT_DISK)"
 
 .PHONY: base
-base: base-deps base-cloudinit sysexts confexts ## Build base image via Packer
+base: bake-image base-deps base-cloudinit sysexts confexts ## Build base image via Packer in the rootless bake container
 	@if [ -f "$(BASE_IMAGE_DEST)" ]; then \
 		NEWEST_RAW="$$(ls -t extensions/release/*.raw 2>/dev/null | head -n1)"; \
 		if [ -n "$$NEWEST_RAW" ] && [ "$$NEWEST_RAW" -nt "$(BASE_IMAGE_DEST)" ]; then \
@@ -117,10 +111,9 @@ base: base-deps base-cloudinit sysexts confexts ## Build base image via Packer
 			exit 0; \
 		fi; \
 	fi
-	@echo 'Building base image via Packer...'
+	@echo 'Building base image via Packer in the bake container...'
 	rm -rf build/base-image packer/output-base
-	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
-		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
+	$(MAKE) bake-run
 	@echo 'Copying base image to build/...'
 	@set -euo pipefail; \
 	ARTIFACT=$$(find packer/output-base -maxdepth 1 -type f ! -name '*.lock' | head -1); \
@@ -132,13 +125,31 @@ base: base-deps base-cloudinit sysexts confexts ## Build base image via Packer
 	qemu-img convert -O qcow2 "$$ARTIFACT" "$(BASE_IMAGE_DEST)"; \
 	echo "    Converted $$ARTIFACT -> $(BASE_IMAGE_DEST)"
 
+# bake-run runs the Packer build inside the rootless bake container. The
+# repo's build/, packer/, and extensions/ trees are bind-mounted so the
+# template's packer-relative paths (../build, ../extensions/release,
+# ../extensions/selinux, scripts/) resolve exactly as on the host. /dev/kvm
+# and /dev/net/tun are passed through, and NET_ADMIN/NET_RAW let bake-net.sh
+# create the tap + NAT inside the container's own netns — no host privilege.
+.PHONY: bake-run
+bake-run:
+	podman run --rm \
+		--device /dev/kvm --device /dev/net/tun \
+		--cap-add NET_ADMIN,NET_RAW \
+		--sysctl net.ipv4.ip_forward=1 \
+		-v "$(CURDIR)/build:/src/build" \
+		-v "$(CURDIR)/packer:/src/packer" \
+		-v "$(CURDIR)/extensions:/src/extensions" \
+		-w /src/packer \
+		"$(BAKE_IMAGE)" \
+		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .
+
 .PHONY: base-rebuild
-base-rebuild: base-deps base-cloudinit sysexts confexts ## Force rebuild of the base image
-	@echo 'Forcing base image rebuild via Packer...'
+base-rebuild: bake-image base-deps base-cloudinit sysexts confexts ## Force rebuild of the base image
+	@echo 'Forcing base image rebuild via Packer in the bake container...'
 	rm -f "$(BASE_IMAGE_DEST)"
 	rm -rf build/base-image packer/output-base
-	(cd packer && PACKER_PLUGIN_PATH=~/.packer.d/plugins \
-		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .)
+	$(MAKE) bake-run
 	@set -euo pipefail; \
 	ARTIFACT=$$(find packer/output-base -maxdepth 1 -type f ! -name '*.lock' | head -1); \
 	if [ -z "$$ARTIFACT" ]; then \
@@ -250,6 +261,56 @@ CLUSTER_NAME ?= k8labs
 CAPISHIM_KUBECONFIG := $${HOME}/.kube/capishim.kubeconfig
 WORKLOAD_KUBECONFIG := build/kubeconfig
 MGMT_UNITS := capishim-pod.service k8netd.service cluster-api-hypervisor.service
+
+# Provider state root: the provider quadlet bind-mounts this into /build and
+# boots machines from the baked base image, firmware, and vm-disks. It also
+# needs /tmp/ch-capi (CH api socket dir) to exist.
+PROVIDER_STATE := $${HOME}/.local/state/k8slab/build
+PROVIDER_STATE_SSH_KEY := $(PROVIDER_STATE)/ssh-lab.pub
+
+.PHONY: provider-state
+provider-state: ## Create provider state dirs and publish bake artifacts into the provider's build mount (idempotent)
+	@set -euo pipefail; \
+	echo '==> Creating provider state dirs...'; \
+	mkdir -p "$(PROVIDER_STATE)/vm-disks"; \
+	mkdir -p /tmp/ch-capi; \
+	echo '==> Publishing bake artifacts to $(PROVIDER_STATE)...'; \
+	cp -f "$(BASE_IMAGE_DEST)" "$(PROVIDER_STATE)/k8labs-base.qcow2"; \
+	cp -f "$(FIRMWARE_DEST)" "$(PROVIDER_STATE)/CLOUDHV.fd"; \
+	if [ ! -f "$(SSH_KEY).pub" ]; then \
+		echo "ERROR: $(SSH_KEY).pub not found - run 'make base-ssh-key' first" >&2; \
+		exit 1; \
+	fi; \
+	cp -f "$(SSH_KEY).pub" "$(PROVIDER_STATE_SSH_KEY)"; \
+	echo "    Published base image, firmware, and lab SSH key"
+
+# Management-plane images come from CI: each sibling repo (capishim,
+# cluster-api-hypervisor, k8netd) builds and pushes its images to ghcr.io via
+# GitHub Actions. mgmt-images pulls the pinned tags and retags them to the
+# localhost/* names the installed quadlets reference, so the quadlet Image=
+# lines stay unchanged.
+GHCR_OWNER := moeryomenko
+MGMT_IMAGE_TAG ?= latest
+
+.PHONY: mgmt-images
+mgmt-images: ## Pull management-plane images from ghcr.io and retag to the quadlet localhost/* names (idempotent; keeps existing local images when the registry tag is not yet published)
+	@set -euo pipefail; \
+	pull_retag() { \
+		src="$$1"; dst="$$2"; \
+		if podman image exists "$${dst}" 2>/dev/null; then \
+			echo "==> $${dst} already present (keeping local image)"; \
+			return 0; \
+		fi; \
+		echo "==> $(GHCR_OWNER)/$${src}:$(MGMT_IMAGE_TAG) -> $${dst}"; \
+		podman pull "ghcr.io/$(GHCR_OWNER)/$${src}:$(MGMT_IMAGE_TAG)"; \
+		podman tag "ghcr.io/$(GHCR_OWNER)/$${src}:$(MGMT_IMAGE_TAG)" "$${dst}"; \
+	}; \
+	pull_retag "k8netd" "localhost/k8netd:dev"; \
+	pull_retag "cluster-api-hypervisor" "localhost/cluster-api-hypervisor:dev"; \
+	for comp in setup core cabpk kcp capd; do \
+		pull_retag "capishim-$${comp}" "localhost/capishim-$${comp}:v0.1.0"; \
+	done; \
+	echo '    Management-plane images present (localhost/* names)'
 
 .PHONY: prereq
 prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, python3 venv, clusterctl, kubectl, podman), quadlet units, the capishim kubeconfig, KVM readiness (/dev/kvm + kvm group), and baked build artifacts
@@ -407,9 +468,27 @@ cluster-down: ## Delete the workload Cluster via the management plane and wait f
 	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" wait --for=delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=10m; \
 	echo '    Cluster deleted and reclaimed'
 
-.PHONY: cluster
-cluster: prereq ## Full CAPI pipeline: prereq -> mgmt-up -> cluster-up -> addons-up -> wait Cluster ready -> kubeconfig -> smoke-test
+.PHONY: cluster-clean
+cluster-clean: ## Remove leftover workload-cluster resources on the management plane without deleting the plane itself
 	@set -euo pipefail; \
+	if ! command -v kubectl >/dev/null 2>&1; then \
+		echo 'ERROR: kubectl not found on PATH' >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -f "$(CAPISHIM_KUBECONFIG)" ]; then \
+		echo "ERROR: capishim kubeconfig not found at $(CAPISHIM_KUBECONFIG)" >&2; \
+		exit 1; \
+	fi; \
+	echo '==> Cleaning leftover workload-cluster resources on the management plane...'; \
+	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" delete hypervisormachines.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name=$(CLUSTER_NAME)" --ignore-not-found; \
+	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" delete hypervisormachinetemplates.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name=$(CLUSTER_NAME)" --ignore-not-found; \
+	echo '    Leftover workload-cluster resources cleaned'
+
+.PHONY: cluster
+cluster: prereq ## Full CAPI pipeline: prereq -> mgmt-images -> provider-state -> mgmt-up -> cluster-up -> addons-up -> wait Cluster ready -> kubeconfig -> smoke-test
+	@set -euo pipefail; \
+	$(MAKE) mgmt-images; \
+	$(MAKE) provider-state; \
 	$(MAKE) mgmt-up; \
 	$(MAKE) cluster-up; \
 	$(MAKE) addons-up; \
