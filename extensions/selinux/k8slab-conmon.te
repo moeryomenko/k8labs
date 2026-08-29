@@ -98,12 +98,19 @@ require {
     class rawip_socket { create bind read write getattr setattr };
     class packet_socket { create bind read write getattr setattr };
     class socket { create bind read write getattr setattr };
+    class service { start stop status enable disable reload };
 }
 
 # conmon: crio (init_t) execs the dnf-baked conmon (conmon_exec_t). No
 # type_transition from init_t exists, so conmon stays in init_t and both
 # execute and execute_no_trans are required (E2E: crio.service 203/EXEC).
 allow init_t conmon_exec_t:file { execute execute_no_trans map open read getattr };
+
+# systemd unit control: k8slab-merge (init_t) starts the k8s services with
+# `systemctl start`; the unit files merged from the sysext overlay carry the
+# unlabeled_t label, so systemd's unit-authorization check (class service)
+# denies the start unless init_t may operate on unlabeled_t units.
+allow init_t unlabeled_t:service { start stop status enable disable reload };
 
 # Ports: apiserver -> etcd 2379 (unreserved), crio -> registry 443 (http).
 allow init_t unreserved_port_t:tcp_socket name_connect;
