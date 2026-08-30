@@ -32,6 +32,7 @@ All targets are namespaced per series. From this directory:
 ```bash
 cd research
 make cpu-sched-experiment-weight-share   # run one experiment
+make cpu-sched-all-experiments            # run all experiments sequentially
 make cpu-sched-test                      # run the series test suites
 make cpu-sched-perfetto-view             # view the newest Perfetto trace
 ```
@@ -55,7 +56,7 @@ root). `make help` lists every series target.
 
 ## Prerequisites
 
-- A healthy k8labs cluster: `kubectl --kubeconfig kubeconfig get nodes`
+- A healthy k8labs cluster: `kubectl --kubeconfig build/kubeconfig get nodes`
   returns 3 Ready nodes, plus kubectl and tofu on the host.
 - Series-specific tooling is documented in each series README
   (e.g. `research/cpu-sched/README.md`).
