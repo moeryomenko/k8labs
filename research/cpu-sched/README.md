@@ -12,7 +12,7 @@ Reproducible research on the k8labs Kubernetes cluster investigating:
 
 ## Prerequisites
 
-- **k8labs cluster running and healthy** (`kubectl --kubeconfig kubeconfig get nodes` returns 3 Ready nodes)
+- **k8labs cluster running and healthy** (`kubectl --kubeconfig build/kubeconfig get nodes` returns 3 Ready nodes)
 - **kubectl** with a working kubeconfig
 - **tofu** (or terraform) with state from `tofu apply`
 - **virsh** with access to the KVM VMs
@@ -49,7 +49,7 @@ Targets can also be invoked from the repo root: `make -C research cpu-sched-expe
 ### 4. Run all experiments sequentially
 
 ```bash
-make cpu-sched-all-experiments   # ~2 hours total
+make cpu-sched-all-experiments   # all 20+ configs sequentially (includes dist families)
 ```
 
 ### 5. Generate analysis report
@@ -242,6 +242,23 @@ Override the derivation:
 | `make cpu-sched-eevdf-analyze` | Run EEVDF analysis pipeline |
 | `make cpu-sched-eevdf-plots` | Generate EEVDF visualization plots |
 | `make cpu-sched-eevdf-report` | Show pointer to EEVDF deep-dive report |
+
+### Make Targets for Distribution Experiments (Families A-F)
+
+| Target | Description |
+|--------|-------------|
+| `make cpu-sched-experiment-dist-api` | Family A: api-server request x limit matrix (EEVDF + Perfetto) |
+| `make cpu-sched-experiment-dist-db` | Family A: db-simulator request x limit matrix (EEVDF + Perfetto) |
+| `make cpu-sched-experiment-dist-burner` | Family A: cpu-burner request x limit matrix (EEVDF + Perfetto) |
+| `make cpu-sched-experiment-dist-stress` | Family A: stress-ng saturating control (EEVDF + Perfetto) |
+| `make cpu-sched-experiment-dist-weight` | Family B: weight-share matrix (EEVDF + Perfetto) |
+| `make cpu-sched-experiment-dist-qos` | Family C: QoS hierarchy (EEVDF + Perfetto) |
+| `make cpu-sched-dist-all` | Run all six dist families sequentially |
+| `make cpu-sched-dist-analyze` | Run dist-analyze.py slice-level extraction pipeline |
+| `make cpu-sched-dist-plots` | Generate static distribution images |
+| `make cpu-sched-dist-gif` | Generate animated distribution GIFs |
+| `make cpu-sched-dist-steps` | Generate step-by-step distribution images |
+| `make cpu-sched-dist-report` | Regenerate DEEP-DIVE-EEVDF-EXEC.md report |
 
 ### Workloads (`research/cpu-sched/workloads/`)
 
