@@ -31,7 +31,7 @@ CPU_SCHED_DIST_ANALYSIS_OUTPUT_DIR := $(CPU_SCHED_ANALYSIS_DIR)/output
 CPU_SCHED_INTERACTION_REPORT_OUTPUT_DIR := $(CPU_SCHED_ANALYSIS_DIR)/output/interaction-report
 
 # Resolve KUBECONFIG path
-KUBECONFIG := $(PROJECT_ROOT)/kubeconfig
+KUBECONFIG := $(PROJECT_ROOT)/build/kubeconfig
 export KUBECONFIG
 
 # ---- Config Validation ----
@@ -90,7 +90,7 @@ cpu-sched-setup: ## Verify prerequisites (kubectl access, tools, tofu state)
 	echo "--- Cluster Access ---"
 	if [ ! -f "$(KUBECONFIG)" ]; then
 		echo "  WARNING: kubeconfig not found at $(KUBECONFIG)"
-		echo "  Run 'make kubeconfig' from project root first." >&2
+		echo "  Run 'make kubeconfig' from project root first (build/kubeconfig)." >&2
 		exit 1
 	fi
 	export KUBECONFIG=$(KUBECONFIG)
