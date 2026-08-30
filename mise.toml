@@ -6,4 +6,4 @@ uv = "0.12.3"
 
 [env]
 # Use project-wide kubeconfig so kubectl works without --kubeconfig flag
-KUBECONFIG = "{{config_root}}/kubeconfig"
+KUBECONFIG = "{{config_root}}/build/kubeconfig"
