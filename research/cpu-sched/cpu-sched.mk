@@ -384,20 +384,50 @@ cpu-sched-eevdf-report: ## Generate EEVDF deep-dive report
 cpu-sched-all-experiments: ## Run all experiments sequentially
 	@echo "=== Running all experiments ==="
 	@echo ""
-	@echo "=== 1/4: Baseline ==="
+	@echo "=== 1/20: Baseline ==="
 	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/throttling-baseline.yaml
 	@echo ""
-	@echo "=== 2/4: Limits ==="
+	@echo "=== 2/20: Limits ==="
 	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/throttling-limits.yaml
 	@echo ""
-	@echo "=== 3/4: Request-Limit ==="
+	@echo "=== 3/20: Request-Limit ==="
 	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/throttling-request-limit.yaml
 	@echo ""
-	@echo "=== 4/4: Co-located ==="
+	@echo "=== 4/20: Co-located ==="
 	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/co-located.yaml
 	@echo ""
-	@echo "=== 5/5: EEVDF metrics ==="
+	@echo "=== 5/20: EEVDF metrics ==="
 	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/eevdf-metrics.yaml
+	@echo ""
+	@echo "=== 6/20: EEVDF stress ==="
+	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/eevdf-metrics-stress.yaml
+	@echo ""
+	@echo "=== 7/20: EEVDF API baseline ==="
+	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/eevdf-api-baseline.yaml
+	@echo ""
+	@echo "=== 8/20: EEVDF DB baseline ==="
+	$(CPU_SCHED_RUNNER) $(CPU_SCHED_CONFIGS_DIR)/eevdf-db-baseline.yaml
+	@echo ""
+	@echo "=== 9/20: Weight-share ==="
+	$(CPU_SCHED_EXPERIMENTS_DIR)/run-experiment.sh $(CPU_SCHED_CONFIGS_DIR)/weight-share.yaml --eevdf
+	@echo ""
+	@echo "=== 10/20: Request-limit-matrix ==="
+	$(CPU_SCHED_EXPERIMENTS_DIR)/run-experiment.sh $(CPU_SCHED_CONFIGS_DIR)/request-limit-matrix.yaml --eevdf
+	@echo ""
+	@echo "=== 11/20: QoS hierarchy ==="
+	$(CPU_SCHED_EXPERIMENTS_DIR)/run-experiment.sh $(CPU_SCHED_CONFIGS_DIR)/qos-hierarchy.yaml --eevdf
+	@echo ""
+	@echo "=== 12/20: Latency interference ==="
+	$(CPU_SCHED_EXPERIMENTS_DIR)/run-experiment.sh $(CPU_SCHED_CONFIGS_DIR)/latency-interference.yaml
+	@echo ""
+	@echo "=== 13/20: CPU burst ==="
+	$(CPU_SCHED_EXPERIMENTS_DIR)/run-experiment.sh $(CPU_SCHED_CONFIGS_DIR)/cpu-burst.yaml
+	@echo ""
+	@echo "=== 14/20: Tunables contention ==="
+	$(CPU_SCHED_EXPERIMENTS_DIR)/run-experiment.sh $(CPU_SCHED_CONFIGS_DIR)/tunables-contention.yaml
+	@echo ""
+	@echo "=== 15-20: Dist families (A-F) ==="
+	$(MAKE) cpu-sched-dist-all
 	@echo ""
 	@echo "=== All experiments complete ==="
 
