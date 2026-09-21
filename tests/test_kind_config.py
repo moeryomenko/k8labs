@@ -12,3 +12,10 @@ def test_management_kind_uses_default_cni() -> None:
     networking = config.get("networking", {})
     assert networking.get("disableDefaultCNI") is not True
     assert config["nodes"][0]["image"].startswith("kindest/node:v1.37.0@sha256:")
+    mounts = {mount["containerPath"] for mount in config["nodes"][0]["extraMounts"]}
+    assert {
+        "/dev/kvm",
+        "/run/user/1000/bus",
+        "/run/user/1000/k8snet",
+        "/host-state",
+    } <= mounts
