@@ -1,12 +1,3 @@
-# ClusterResourceSet applying the cilium/ manifests to k8labs.
-#
-# The selector matches the cluster-name label carried by the Cluster in
-# capi/cluster.yaml.
-#
-# The install tree (cilium/install/) exceeds the ~1MiB Kubernetes Secret
-# limit, so its payloads are split across cilium-install-manifests-{1..4};
-# every referenced Secret also embeds the top-level cilium/*.yaml manifests.
-
 apiVersion: addons.cluster.x-k8s.io/v1beta2
 kind: ClusterResourceSet
 metadata:
@@ -17,13 +8,9 @@ spec:
     matchLabels:
       cluster.x-k8s.io/cluster-name: k8labs
   resources:
-    - kind: Secret
-      name: cilium-manifests
-    - kind: Secret
-      name: cilium-install-manifests-1
-    - kind: Secret
-      name: cilium-install-manifests-2
-    - kind: Secret
-      name: cilium-install-manifests-3
-    - kind: Secret
-      name: cilium-install-manifests-4
+  - kind: Secret
+    name: cilium-manifests-1
+  - kind: Secret
+    name: cilium-manifests-2
+  - kind: Secret
+    name: cilium-manifests-3

@@ -125,12 +125,16 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+import pytest
 import yaml
+
+import generate_capi_addons as gen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CAPI_DIR = REPO_ROOT / "capi"
 CLUSTER_YAML = CAPI_DIR / "cluster.yaml"
-ADDONS_DIR = CAPI_DIR / "addons"
+ADDONS_CRS_DIR = CAPI_DIR / "addons"
+GENERATED_ADDONS_DIR = REPO_ROOT / "build" / "capi-addons"
 SMOKE_JOB = CAPI_DIR / "smoke-test" / "job.yaml"
 EXT_MANIFEST = REPO_ROOT / "extensions" / "manifest.yaml"
 FETCH_SCRIPT = REPO_ROOT / "scripts" / "fetch-kubeconfig"
@@ -187,6 +191,17 @@ CLUSTER_SCOPED_DENYLIST = {
 
 DNS_SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 TEMPLATE_MARKER_RE = re.compile(r"\$\{[A-Z_][A-Z0-9_]*\}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def generated_addons() -> Path:
+    """Generate addon resource-set Secrets before any tests run.
+
+    This ensures the generated output exists in GENERATED_ADDONS_DIR for
+    tests that validate Secret payloads against the committed source trees.
+    """
+    gen.generate_all(REPO_ROOT, GENERATED_ADDONS_DIR)
+    return GENERATED_ADDONS_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +517,23 @@ def _addon_yaml_files(directory: Path) -> list[Path]:
 
 
 def _addon_crs_files() -> list[Path]:
-    return _addon_yaml_files(ADDONS_DIR)
+    """Return only the ClusterResourceSet manifests from capi/addons/.
+
+    The Secret manifests are generated into build/capi-addons/ and are not
+    checked into the repository.
+    """
+    return [
+        p for p in _addon_yaml_files(ADDONS_CRS_DIR) if p.name.endswith("-crs.yaml")
+    ]
+
+
+def _generated_secret_files() -> list[Path]:
+    """Return the generated Secret manifests from build/capi-addons/."""
+    return [
+        p
+        for p in _addon_yaml_files(GENERATED_ADDONS_DIR)
+        if not p.name.endswith("-crs.yaml")
+    ]
 
 
 def test_label_selector_match_expressions_semantics() -> None:
@@ -633,11 +664,11 @@ def test_addons_cover_all_three_addon_sets() -> None:
 
 def test_crs_resources_reference_existing_secrets() -> None:
     secrets_by_name: set[str] = set()
-    for path in _addon_crs_files():
+    for path in _generated_secret_files():
         for secret in docs_of_kind(load_docs(path), "Secret"):
             name = obj_name(secret)
             assert name not in secrets_by_name, (
-                f"duplicate Secret name {name!r} across capi/addons/"
+                f"duplicate Secret name {name!r} across build/capi-addons/"
             )
             secrets_by_name.add(name)
     for path in _addon_crs_files():
@@ -652,12 +683,12 @@ def test_crs_resources_reference_existing_secrets() -> None:
                 )
                 ref = resource.get("name")
                 assert ref in secrets_by_name, (
-                    f"CRS {name!r}: referenced Secret {ref!r} not found in {ADDONS_DIR}"
+                    f"CRS {name!r}: referenced Secret {ref!r} not found in generated output"
                 )
 
 
 def test_resource_secrets_use_resource_set_type() -> None:
-    for path in _addon_crs_files():
+    for path in _generated_secret_files():
         for secret in docs_of_kind(load_docs(path), "Secret"):
             name = obj_name(secret)
             assert secret.get("type") == RESOURCE_SET_SECRET_TYPE, (
@@ -698,9 +729,13 @@ def test_secret_payloads_normalized_equal_repo_manifests() -> None:
                 key_to_relpath[canonical] = rel
             spec = as_mapping(crs.get("spec") or {}, f"CRS {crs_name}.spec")
             resources = cast(list[dict[str, object]], spec.get("resources") or [])
+
+            # Collect all payloads across all Secrets for this CRS
+            all_payloads: dict[str, bytes] = {}
+            all_keys: set[str] = set()
             for resource in resources:
                 ref = str(resource.get("name"))
-                secret_path = ADDONS_DIR / f"{ref}.yaml"
+                secret_path = GENERATED_ADDONS_DIR / f"{ref}.yaml"
                 matches = [
                     doc
                     for doc in load_docs(secret_path)
@@ -708,28 +743,35 @@ def test_secret_payloads_normalized_equal_repo_manifests() -> None:
                 ]
                 assert matches, f"referenced Secret {ref!r} missing at red phase"
                 payloads = secret_payloads(matches[0])
-                keys = sorted(payloads)
-                for key in keys:
-                    assert key in key_to_relpath, (
-                        f"CRS {crs_name!r}: Secret {ref!r} embeds {key!r} "
-                        f"which does not map to any manifest under {dirname}/"
-                    )
-                missing = [f for f in repo_top_level if f not in keys]
-                assert not missing, (
-                    f"CRS {crs_name!r}: Secret {ref!r} does not embed "
-                    f"top-level {dirname}/ manifest(s) {missing}"
+                all_payloads.update(payloads)
+                all_keys.update(payloads.keys())
+
+            # Verify all keys map to real repo files
+            for key in all_keys:
+                assert key in key_to_relpath, (
+                    f"CRS {crs_name!r}: embeds {key!r} "
+                    f"which does not map to any manifest under {dirname}/"
                 )
-                for key in keys:
-                    rel = key_to_relpath[key]
-                    repo_file = repo_dir / rel
-                    assert repo_file.is_file(), (
-                        f"CRS {crs_name!r}: embedded key {key!r} resolves to "
-                        f"non-file {repo_file}"
-                    )
-                    assert normalized_yaml_equal(payloads[key], repo_file), (
-                        f"CRS {crs_name!r}: Secret {ref!r} payload {key!r} is "
-                        f"not normalized-YAML-equal to {dirname}/{rel}"
-                    )
+
+            # Verify top-level files are covered across all Secrets
+            missing = [f for f in repo_top_level if f not in all_keys]
+            assert not missing, (
+                f"CRS {crs_name!r}: Secrets do not collectively embed "
+                f"top-level {dirname}/ manifest(s) {missing}"
+            )
+
+            # Verify each payload matches its source file
+            for key, payload in all_payloads.items():
+                rel = key_to_relpath[key]
+                repo_file = repo_dir / rel
+                assert repo_file.is_file(), (
+                    f"CRS {crs_name!r}: embedded key {key!r} resolves to "
+                    f"non-file {repo_file}"
+                )
+                assert normalized_yaml_equal(payload, repo_file), (
+                    f"CRS {crs_name!r}: payload {key!r} is "
+                    f"not normalized-YAML-equal to {dirname}/{rel}"
+                )
 
 
 def canonical_install_key(install_file: Path) -> str:
@@ -809,7 +851,7 @@ def test_cilium_crs_embeds_install_manifests_exactly_once() -> None:
                 if ref in seen_refs:
                     continue
                 seen_refs.add(ref)
-                secret_path = ADDONS_DIR / f"{ref}.yaml"
+                secret_path = GENERATED_ADDONS_DIR / f"{ref}.yaml"
                 matches = [
                     doc
                     for doc in load_docs(secret_path)

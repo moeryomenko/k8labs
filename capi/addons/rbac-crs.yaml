@@ -1,8 +1,3 @@
-# ClusterResourceSet applying the rbac/ manifests to k8labs.
-#
-# The selector matches the cluster-name label carried by the Cluster in
-# capi/cluster.yaml.
-
 apiVersion: addons.cluster.x-k8s.io/v1beta2
 kind: ClusterResourceSet
 metadata:
@@ -13,5 +8,5 @@ spec:
     matchLabels:
       cluster.x-k8s.io/cluster-name: k8labs
   resources:
-    - kind: Secret
-      name: rbac-manifests
+  - kind: Secret
+    name: rbac-manifests

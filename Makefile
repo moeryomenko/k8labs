@@ -27,12 +27,15 @@ FEDORA_CLOUD_DEST := build/fedora-cloud-base.qcow2
 BASE_IMAGE_DEST := build/k8labs-base.qcow2
 CLOUDINIT_DISK := build/cloudinit.img
 SSH_KEY := build/packer-ssh-key
-# Bake container: the base image is baked with Packer + the Cloud-Hypervisor
-# plugin running inside a rootless podman container (its own netns), so the
-# bake needs no host bridge/TAP/dnsmasq/NAT. The plugin is built into the
-# image from source at PACKER_PLUGIN_REF (default: main).
+# All dependency versions are recorded in versions.lock.yaml. Keep the Packer
+# plugin immutable: mutable branches make a golden image unreproducible.
+PACKER_VERSION ?= 1.16.1
+PACKER_PLUGIN_REF ?= e902aef57dadb47f0dfe40c9a8ade9cd9fb50d2f
+KUBERNETES_VERSION ?= v1.37.0
+CRIO_VERSION ?= v1.37.0
+CRUN_VERSION ?= 1.29.1
+CILIUM_VERSION ?= v1.20.2
 BAKE_IMAGE := localhost/k8labs-bake:dev
-PACKER_PLUGIN_REF ?= main
 
 .PHONY: bake-image
 bake-image: ## Build the rootless bake container image (packer + CH plugin + bake-net.sh)
@@ -41,14 +44,88 @@ bake-image: ## Build the rootless bake container image (packer + CH plugin + bak
 		--build-arg PACKER_PLUGIN_REF="$(PACKER_PLUGIN_REF)" \
 		bake/
 
-# `make plugin` is now an alias for `bake-image`: the Cloud-Hypervisor Packer
-# plugin is built inside the bake container (cloned from source at
-# PACKER_PLUGIN_REF during the image build) instead of being built on the host.
+# `make plugin` remains an alias for the bake image target.
 .PHONY: plugin plugin-rebuild
-plugin: bake-image ## Build/refresh the bake container image (Packer CH plugin now lives inside it)
-	@echo '    Cloud-Hypervisor Packer plugin is baked into $(BAKE_IMAGE)'
+plugin: bake-image ## Build/refresh the bake container image
+plugin-rebuild: bake-image ## Force refresh of the bake container image
 
-plugin-rebuild: bake-image ## Force refresh of the bake container image (rebuilds the plugin from source)
+.PHONY: versions-check
+versions-check: ## Validate the immutable dependency lock and reject mutable references
+	@python3 scripts/lock.py --lock versions.lock.yaml
+
+K8LABS_CACHE_ROOT ?= $${XDG_CACHE_HOME:-$${HOME}/.cache}/k8labs
+LOCK_DIGEST_FILE := $(K8LABS_CACHE_ROOT)/lock.sha256
+
+.PHONY: prepare-render-capi
+prepare-render-capi: versions-check ## Normalize a verified CAPI release manifest before cache validation
+	@set -Eeuo pipefail; \
+	input="$${CAPI_CORE_COMPONENTS:-$${XDG_CACHE_HOME:-$${HOME}/.cache}/k8labs/bootstrap/cluster-api-v1.14.2/core-components.yaml}"; \
+	output="$${CAPI_RENDERED_OUTPUT:-$${XDG_CACHE_HOME:-$${HOME}/.cache}/k8labs/manifests/cluster-api-v1.14.2-core-components.yaml}"; \
+	test -f "$$input" || { echo "ERROR: verified CAPI manifest not found: $$input" >&2; exit 1; }; \
+	python3 scripts/normalize_manifest.py "$$input" "$$output"; \
+	printf 'normalized CAPI manifest: %s\\n' "$$output"
+
+
+	@python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --check
+	@lock_sha=$$(python3 scripts/lock.py --lock versions.lock.yaml | sed -n 's/^lock_sha256=//p'); \
+	OFFLINE=1 python3 scripts/offline.py --cache-root "$(K8LABS_CACHE_ROOT)" --lock-digest "$$lock_sha"
+
+.PHONY: prepare-prune
+prepare-prune: versions-check ## Remove cache keys not referenced by the active lock
+	@python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --prune
+
+.PHONY: registry-install registry-up registry-down registry-check
+registry-install: ## Install the k8labs rootless registry quadlet
+	@set -Eeuo pipefail; \
+	qdir="$${XDG_CONFIG_HOME:-$${HOME}/.config}/containers/systemd"; \
+	mkdir -p "$$qdir" "$${HOME}/.local/state/k8slab/registry"; \
+	install -m 0644 quadlet/registry.container "$$qdir/k8slabs-registry.container"; \
+	systemctl --user daemon-reload
+
+registry-up: registry-install ## Start the local registry
+	@systemctl --user start k8slabs-registry.service
+
+registry-down: ## Stop the local registry without deleting its state
+	@systemctl --user stop k8slabs-registry.service || true
+
+registry-check: ## Verify the local registry API is reachable
+	@python3 -c 'import urllib.request; response=urllib.request.urlopen("http://127.0.0.1:5000/v2/", timeout=5); assert response.status in (200, 401)'
+
+.PHONY: prepare
+prepare: versions-check ## Populate or verify the lock-keyed artifact cache
+	@set -Eeuo pipefail; \
+	mkdir -p "$(K8LABS_CACHE_ROOT)"; \
+	python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --write-metadata; \
+	python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --check
+
+.PHONY: run-bundle prune-runs
+run-bundle: ## Create a redacted schema-versioned run bundle
+	@python3 scripts/run_bundle.py --lock versions.lock.yaml $(if $(RUN_ID),--run-id "$(RUN_ID)",)
+
+prune-runs: ## Remove successful run bundles older than RUN_RETENTION_DAYS
+	@set -Eeuo pipefail; \
+	days="$${RUN_RETENTION_DAYS:-14}"; \
+	find build/runs -mindepth 1 -maxdepth 1 -type d -mtime "+$$days" -exec rm -rf -- {} + 2>/dev/null || true
+
+.PHONY: kind-up kind-down kind-check
+kind-up: prepare-check ## Create or reuse the digest-pinned kind management cluster
+	@set -Eeuo pipefail; \
+	command -v kind >/dev/null 2>&1 || { echo "ERROR: kind is required; install the locked kind version" >&2; exit 1; }; \
+	if kind get clusters 2>/dev/null | grep -qx k8labs-mgmt; then \
+		echo 'kind management cluster already exists'; \
+	else \
+		if [ "$${OFFLINE:-0}" = 1 ]; then \
+			kind create cluster --config kind.yaml --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5; \
+		else \
+			kind create cluster --config kind.yaml; \
+		fi; \
+	fi
+
+kind-down: ## Delete only the k8labs-owned kind management cluster
+	@kind delete cluster --name k8labs-mgmt
+
+kind-check: ## Check kind management-cluster reachability
+	@kubectl --context kind-k8labs-mgmt get nodes --no-headers
 
 .PHONY: base-deps
 base-deps: ## Download CLOUDHV.fd firmware and Fedora Cloud Base image
@@ -295,6 +372,10 @@ MGMT_IMAGE_TAG ?= latest
 .PHONY: mgmt-images
 mgmt-images: ## Pull management-plane images from ghcr.io and retag to the quadlet localhost/* names (idempotent; keeps existing local images when the registry tag is not yet published)
 	@set -euo pipefail; \
+	if [ "$${OFFLINE:-0}" = 1 ]; then \
+		echo 'ERROR: OFFLINE=1 forbids GHCR pulls; import verified management images into the lock cache first' >&2; \
+		exit 1; \
+	fi; \
 	pull_retag() { \
 		src="$$1"; dst="$$2"; \
 		if podman image exists "$${dst}" 2>/dev/null; then \
@@ -452,10 +533,42 @@ cluster-up: ## Server-side apply capi/cluster.yaml against the capishim manageme
 	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f capi/cluster.yaml; \
 	echo '    Cluster manifest applied'
 
-.PHONY: addons-up
-addons-up: ## Server-side apply capi/addons/ (ClusterResourceSets + resource Secrets) against the capishim management plane (idempotent)
+# --- Generated CAPI Addon Secrets ---
+#
+# The addon resource-set Secrets are generated from the committed source trees
+# (cilium/, coredns/, rbac/) into build/capi-addons/. capi/addons/ retains
+# only the three ClusterResourceSet definitions. The generated output is
+# deterministic and reproducible; run `make addons-generate` to refresh it.
+# build/capi-addons/ is ignored by .gitignore (build/ rule).
+
+.PHONY: addons-generate
+addons-generate: ## Generate addon resource-set Secrets into build/capi-addons/ (deterministic output)
 	@set -euo pipefail; \
-	echo '==> Applying capi/addons/ (server-side) to the management plane...'; \
+	echo '==> Generating addon resource-set Secrets...'; \
+	uv run python scripts/generate_capi_addons.py --repo-root . --output-dir build/capi-addons; \
+	echo '    Generated secrets written to build/capi-addons/'
+
+.PHONY: addons-check
+addons-check: ## Validate that generated addon secrets match the committed source trees
+	@set -euo pipefail; \
+	echo '==> Checking addon resource-set Secrets against source trees...'; \
+	uv run python scripts/generate_capi_addons.py --repo-root . --output-dir build/capi-addons --check; \
+	echo '    Addon secrets validated OK'
+
+.PHONY: addons-clean
+addons-clean: ## Remove generated addon resource-set Secrets (build/capi-addons/)
+	@set -euo pipefail; \
+	echo '==> Removing generated addon secrets...'; \
+	rm -rf build/capi-addons; \
+	echo '    Removed build/capi-addons/'
+
+.PHONY: addons-up
+addons-up: addons-generate ## Generate then apply addon resources: Secrets first, then CRS manifests (idempotent)
+	@set -euo pipefail; \
+	echo '==> Applying generated addon Secrets (server-side)...'; \
+	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f build/capi-addons/; \
+	echo '    Generated Secrets applied'; \
+	echo '==> Applying capi/addons/ ClusterResourceSets (server-side)...'; \
 	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f capi/addons/; \
 	echo '    ClusterResourceSet addons applied'
 
@@ -485,7 +598,7 @@ cluster-clean: ## Remove leftover workload-cluster resources on the management p
 	echo '    Leftover workload-cluster resources cleaned'
 
 .PHONY: cluster
-cluster: prereq ## Full CAPI pipeline: prereq -> mgmt-images -> provider-state -> mgmt-up -> cluster-up -> addons-up -> wait Cluster ready -> kubeconfig -> smoke-test
+cluster: prepare-check prereq ## Full CAPI pipeline: prepare-check -> prereq -> mgmt-images -> provider-state -> mgmt-up -> cluster-up -> addons-up -> wait Cluster ready -> kubeconfig -> smoke-test
 	@set -euo pipefail; \
 	$(MAKE) mgmt-images; \
 	$(MAKE) provider-state; \
@@ -722,6 +835,6 @@ validate-packer: ## Validate Packer template syntax
 	cd packer && packer validate -var-file=vars.pkrvars.hcl .
 
 .PHONY: validate
-validate: node-tools validate-packer ## Run all validations (packer + python tooling)
+validate: node-tools versions-check validate-packer ## Run all validations (dependency lock + packer + python tooling)
 	@echo 'All validations passed.'
 
