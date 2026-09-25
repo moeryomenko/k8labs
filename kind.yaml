@@ -25,3 +25,5 @@ nodes:
         containerPath: /run/user/1000/k8snet
       - hostPath: /home/eryoma/.local/state/k8slab
         containerPath: /host-state
+      - hostPath: /home/eryoma/.config/systemd/user
+        containerPath: /home/eryoma/.config/systemd/user
