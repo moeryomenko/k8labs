@@ -65,10 +65,12 @@ prepare-render-capi: versions-check ## Normalize a verified CAPI release manifes
 	python3 scripts/normalize_manifest.py "$$input" "$$output"; \
 	printf 'normalized CAPI manifest: %s\\n' "$$output"
 
-
-	@python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --check
-	@lock_sha=$$(python3 scripts/lock.py --lock versions.lock.yaml | sed -n 's/^lock_sha256=//p'); \
-	OFFLINE=1 python3 scripts/offline.py --cache-root "$(K8LABS_CACHE_ROOT)" --lock-digest "$$lock_sha"
+.PHONY: prepare-check
+prepare-check: versions-check ## Validate every cached artifact before side effects
+	@set -Eeuo pipefail; \
+	python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --check; \
+	lock_sha=$$(python3 scripts/lock.py --lock versions.lock.yaml | sed -n 's/^lock_sha256=//p'); \
+	python3 scripts/offline.py --cache-root "$(K8LABS_CACHE_ROOT)" --lock-digest "$$lock_sha"
 
 .PHONY: prepare-prune
 prepare-prune: versions-check ## Remove cache keys not referenced by the active lock
