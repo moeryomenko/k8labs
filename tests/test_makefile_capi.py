@@ -499,6 +499,16 @@ def _build_fake_env(
         _write_executable(bin_dir / "kubectl", FAKE_KUBECTL)
     if "sudo" in tools:
         _write_executable(bin_dir / "sudo", FAKE_SUDO)
+    if "podman" in tools:
+        _write_executable(bin_dir / "podman", "#!/bin/sh\nexit 0\n")
+    if "uv" in tools:
+        _write_executable(
+            bin_dir / "uv",
+            "#!/bin/sh\n"
+            'if [ "$1" = run ]; then shift; fi\n'
+            'if [ "$1" = python ]; then shift; exec python3 "$@"; fi\n'
+            'exec "$@"\n',
+        )
 
     env = FakeEnv(
         home=tmp_path / "home",
@@ -1094,7 +1104,11 @@ def test_cluster_composite_runs_stages_in_order(tmp_path: Path) -> None:
     """
     env = _env_ready_except(tmp_path)
 
-    with _readyz_server(mode="ok"):
+    with (
+        _placeholder(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _placeholder(REPO_ROOT / FIRMWARE_RELPATH),
+        _readyz_server(mode="ok"),
+    ):
         result = env.run_make("cluster", timeout=SMOKE_TIMEOUT)
 
     assert result.returncode == 0, f"make cluster failed:\n{_combined(result)}"
@@ -1182,7 +1196,11 @@ def test_cluster_composite_propagates_smoke_stage_failure(tmp_path: Path) -> Non
     """
     env = _env_ready_except(tmp_path)
 
-    with _readyz_server(mode="ok"):
+    with (
+        _placeholder(REPO_ROOT / BASE_IMAGE_RELPATH),
+        _placeholder(REPO_ROOT / FIRMWARE_RELPATH),
+        _readyz_server(mode="ok"),
+    ):
         result = env.run_make(
             "cluster", kubectl_mode="job-wait-fails", timeout=SMOKE_TIMEOUT
         )
@@ -1466,7 +1484,7 @@ def _env_ready_except(
     include_podman: bool = True,
 ) -> FakeEnv:
     """Full P1 environment minus the dimensions a test deliberately breaks."""
-    tools = DEFAULT_TOOLS + (("podman",) if include_podman else ())
+    tools = DEFAULT_TOOLS + ("uv",) + (("podman",) if include_podman else ())
     env = _build_fake_env(tmp_path, tools=tools)
     _install_identity(env, identity_groups)
     env.install_quadlets()

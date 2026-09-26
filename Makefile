@@ -66,9 +66,8 @@ prepare-render-capi: versions-check ## Normalize a verified CAPI release manifes
 	printf 'normalized CAPI manifest: %s\\n' "$$output"
 
 .PHONY: prepare-check
-prepare-check: versions-check ## Validate every cached artifact before side effects
+prepare-check: versions-check ## Require a verified artifact cache for offline execution
 	@set -Eeuo pipefail; \
-	python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --check; \
 	lock_sha=$$(python3 scripts/lock.py --lock versions.lock.yaml | sed -n 's/^lock_sha256=//p'); \
 	python3 scripts/offline.py --cache-root "$(K8LABS_CACHE_ROOT)" --lock-digest "$$lock_sha"
 
@@ -94,11 +93,10 @@ registry-check: ## Verify the local registry API is reachable
 	@python3 -c 'import urllib.request; response=urllib.request.urlopen("http://127.0.0.1:5000/v2/", timeout=5); assert response.status in (200, 401)'
 
 .PHONY: prepare
-prepare: versions-check ## Populate or verify the lock-keyed artifact cache
+prepare: versions-check ## Download and verify artifacts into the lock-keyed cache
 	@set -Eeuo pipefail; \
 	mkdir -p "$(K8LABS_CACHE_ROOT)"; \
-	python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --write-metadata; \
-	python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --check
+	python3 scripts/cache.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --populate
 
 .PHONY: run-bundle prune-runs
 run-bundle: ## Create a redacted schema-versioned run bundle
