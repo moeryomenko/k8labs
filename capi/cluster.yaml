@@ -6,7 +6,7 @@
 #
 #   CLUSTER_NAME                = k8labs
 #   NAMESPACE                   = default
-#   KUBERNETES_VERSION          = v1.32.13
+#   KUBERNETES_VERSION          = v1.37.0
 #     (the kubelet and kubernetes-cp pins in extensions/manifest.yaml)
 #   CONTROL_PLANE_MACHINE_COUNT = 1
 #   WORKER_MACHINE_COUNT        = 3
@@ -78,6 +78,9 @@ metadata:
 spec:
   template:
     spec:
+      images:
+        - version: v1.37.0
+          path: /build/k8labs-base.qcow2
       network:
         cidr: 192.168.124.0/24
         gateway: 192.168.124.1
@@ -158,7 +161,7 @@ spec:
   topology:
     classRef:
       name: hypervisor-cluster-template
-    version: v1.32.13
+    version: v1.37.0
     controlPlane:
       replicas: 1
     workers:

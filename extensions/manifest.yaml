@@ -32,7 +32,7 @@ settings:
   # Base OS metadata — all extensions target the same host OS
   id: "fedora"
   version_id: "44"
-  kernel_version: "7.1"
+  kernel_version: "7.2.5-200.fc44"
 
   # Directory (relative to project root) where built .raw images are placed
   release_dir: "extensions/release"
@@ -78,12 +78,12 @@ sysexts:
   # Source: single binary from dl.k8s.io
   # -----------------------------------------------------------------------
   - name: kubelet
-    version: v1.32.13
+    version: v1.37.0
     source_dir: sysext/kubelet
     metadata:
       extension_name: kubelet
     sources:
-      - url: "https://dl.k8s.io/v1.32.13/bin/linux/amd64/kubelet"
+      - url: "https://dl.k8s.io/v1.37.0/bin/linux/amd64/kubelet"
         path: usr/bin/kubelet
         type: binary
         mode: 755
@@ -95,12 +95,12 @@ sysexts:
   # Source: archive from storage.googleapis.com
   # -----------------------------------------------------------------------
   - name: cri-o
-    version: v1.35.5
+    version: v1.37.0
     source_dir: sysext/cri-o
     metadata:
       extension_name: crio
     sources:
-      - url: "https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.v1.35.5.tar.gz"
+      - url: "https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.v1.37.0.tar.gz"
         type: archive
         archive_paths:
           - from: "*/bin/crio"
@@ -121,12 +121,12 @@ sysexts:
   # Source: single binary from GitHub releases
   # -----------------------------------------------------------------------
   - name: crun
-    version: "1.28"
+    version: "1.29.1"
     source_dir: sysext/crun
     metadata:
       extension_name: crun
     sources:
-      - url: "https://github.com/containers/crun/releases/download/1.28/crun-1.28-linux-amd64"
+      - url: "https://github.com/containers/crun/releases/download/1.29.1/crun-1.29.1-linux-amd64"
         path: usr/bin/crun
         type: binary
         mode: 755
@@ -174,12 +174,12 @@ sysexts:
   # Source: archive from dl.k8s.io (apiserver, controller-manager, scheduler, kubectl)
   # -----------------------------------------------------------------------
   - name: kubernetes-cp
-    version: v1.32.13
+    version: v1.37.0
     source_dir: sysext/kubernetes-cp
     metadata:
       extension_name: kubernetes-cp
     sources:
-      - url: "https://dl.k8s.io/v1.32.13/kubernetes-server-linux-amd64.tar.gz"
+      - url: "https://dl.k8s.io/v1.37.0/kubernetes-server-linux-amd64.tar.gz"
         type: archive
         archive_paths:
           - from: "kubernetes/server/bin/kube-apiserver"

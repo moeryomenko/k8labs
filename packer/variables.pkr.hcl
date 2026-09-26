@@ -1,9 +1,9 @@
-# Base OS: Fedora 44 (kernel 7.1)
+# Base OS: Fedora 44 (kernel 7.2.5-200.fc44)
 
 variable "kernel_version" {
   description = "Kernel version to pin during image baking"
   type        = string
-  default     = "7.1"
+  default     = "7.2.5-200.fc44"
 }
 
 # ---------------------------------------------------------------------------

@@ -9,36 +9,31 @@ set -eux
 # images do not accidentally upgrade it.  KERNEL_VERSION is passed through
 # the Packer shell provisioner environment_vars.
 # ---------------------------------------------------------------------------
-KERNEL_VERSION="${KERNEL_VERSION:-7.1}"
+KERNEL_VERSION="${KERNEL_VERSION:-7.2.5-200.fc44}"
 
 echo "==> Baking with kernel target: ${KERNEL_VERSION}"
 
-# Install the target kernel from the Fedora updates repo if available.
-# The base ISO ships with the GA kernel (e.g. 6.19); we upgrade to the
-# target version so the image is already running the desired kernel.
-if dnf install -y "kernel-core-${KERNEL_VERSION}*" \
-    "kernel-modules-${KERNEL_VERSION}*" \
-    "kernel-modules-core-${KERNEL_VERSION}*" \
-    2>/dev/null; then
-    echo "==> Kernel ${KERNEL_VERSION} installed from updates"
+# Install the exact target kernel from the Fedora updates repo. A missing
+# exact build is a hard failure: silently falling back makes the image
+# non-reproducible and can invalidate extension compatibility metadata.
+dnf install -y "kernel-core-${KERNEL_VERSION}" \
+    "kernel-modules-${KERNEL_VERSION}" \
+    "kernel-modules-core-${KERNEL_VERSION}"
 
-    # Set the newly installed kernel as the default boot entry
-    NEW_KERNEL=$(find /boot -maxdepth 1 -name "vmlinuz-${KERNEL_VERSION}*" \
-        -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-    if [ -n "${NEW_KERNEL}" ]; then
-        grubby --set-default "${NEW_KERNEL}" 2>/dev/null || true
-    fi
+echo "==> Kernel ${KERNEL_VERSION} installed from updates"
 
-    # Note: old kernel packages remain installed as boot fallback
-else
-    echo "Warning: kernel ${KERNEL_VERSION} not found in repos, using default" >&2
+# Set the exact target kernel as the default boot entry. The original Fedora
+# kernel remains installed as a recovery fallback.
+NEW_KERNEL=$(find /boot -maxdepth 1 -name "vmlinuz-${KERNEL_VERSION}" \
+    -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+if [ -z "${NEW_KERNEL}" ]; then
+    echo "ERROR: exact kernel image vmlinuz-${KERNEL_VERSION} was not installed" >&2
+    exit 1
 fi
+grubby --set-default "${NEW_KERNEL}"
 
-# Record the installed kernel version for traceability
-rpm -q kernel-core > /etc/baked-kernel-version 2>/dev/null || {
-    echo "Warning: kernel-core not installed during bake" >&2
-    echo "unknown" > /etc/baked-kernel-version
-}
+# Record the exact target for post-boot verification.
+rpm -q kernel-core > /etc/baked-kernel-version
 echo "Kernel target: ${KERNEL_VERSION}" >> /etc/baked-kernel-version
 
 # Prevent kernel updates in images derived from this base

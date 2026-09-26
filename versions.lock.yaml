@@ -1,0 +1,49 @@
+# k8labs immutable dependency lock
+# Generated from release metadata on 2026-09-20. Update this file only through
+# the version-resolution workflow; bring-up consumes exact values only.
+schema_version: 1
+platform: linux/amd64
+fedora:
+  release: "44"
+  kernel: "7.2.5-200.fc44"
+kubernetes:
+  version: "v1.37.0"
+  cri_o: "v1.37.0"
+  crun: "1.29.1"
+  cni_plugins: "v1.9.1"
+cilium:
+  version: "v1.20.2"
+  gateway_api: "v1.6.2"
+cluster_api:
+  version: "v1.14.2"
+cert_manager:
+  version: "v1.21.2"
+  manifest:
+    url: "https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml"
+    sha256: "e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f"
+artifacts:
+  - id: "cert-manager-v1.21.2-manifest"
+    cache_path: "manifests/cert-manager-v1.21.2.yaml"
+    sha256: "e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f"
+    url: "https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml"
+  - id: "cluster-api-v1.14.2-core-components"
+    cache_path: "manifests/cluster-api-v1.14.2-core-components.yaml"
+    sha256: "b2fff42cb5e35440ed963a463c5ab128004481b5a4336ea0005812be2ff7e2a8"
+    url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.2/core-components.yaml"
+kind:
+  version: "v0.33.0"
+  node_image: "kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"
+packer:
+  version: "v1.16.1"
+cloud_hypervisor:
+  version: "v53.0"
+plugins:
+  cloud_hypervisor:
+    repository: "github.com/moeryomenko/packer-plugin-cloud-hypervisor"
+    commit: "e902aef57dadb47f0dfe40c9a8ade9cd9fb50d2f"
+  systemd_ext:
+    repository: "github.com/moeryomenko/packer-plugin-systemd-ext"
+    status: "release after hardening; do not consume mutable branches"
+images:
+  policy: digest-only
+  offline_mode: "OFFLINE=1"

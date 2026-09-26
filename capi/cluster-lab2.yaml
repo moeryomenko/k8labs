@@ -28,7 +28,7 @@ spec:
   topology:
     classRef:
       name: hypervisor-cluster-template
-    version: v1.32.13
+    version: v1.37.0
     controlPlane:
       replicas: 1
     workers:
