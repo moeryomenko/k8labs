@@ -1,0 +1,20 @@
+# k8labs rootless OCI registry.
+# Install with: make registry-install
+# The registry is intentionally bound to loopback; VM access is provided by
+# k8netd's gateway-to-host-loopback mapping at 192.168.124.1:5000.
+[Unit]
+Description=k8labs local OCI registry
+After=network-online.target
+
+[Container]
+Image=registry:2
+Network=host
+Volume=%h/.local/state/k8slab/registry:/var/lib/registry:Z
+Environment=REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+Environment=REGISTRY_HTTP_ADDR=127.0.0.1:5000
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
