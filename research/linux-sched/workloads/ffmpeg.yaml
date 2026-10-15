@@ -12,7 +12,7 @@ spec:
   terminationGracePeriodSeconds: 0
   containers:
     - name: ffmpeg
-      image: docker.io/linuxserver/ffmpeg:8.0.1
+      image: docker.io/linuxserver/ffmpeg:8.0.1@sha256:c72eaf699cb104e84c5292ee9b2a65bf3110738dec113d7cfcef02d7bc21b056
       command:
         - sh
         - -c
@@ -24,3 +24,14 @@ spec:
         requests:
           cpu: "1"
         limits: {}
+      volumeMounts:
+        # The clip is baked on the node (Big Buck Bunny, CC-BY 3.0). Read-only
+        # and byte-identical for every arm; the encode writes to `-f null -`.
+        - name: fixtures
+          mountPath: /fixtures
+          readOnly: true
+  volumes:
+    - name: fixtures
+      hostPath:
+        path: /var/lib/linux-sched/fixtures
+        type: Directory

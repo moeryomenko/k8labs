@@ -100,7 +100,10 @@ rather than reporting a fake success):
 3. `bpftrace`, `perf`, and the BCC tools installed on the worker image. These
    are node-native: the image bake installs them (see `GATES.md` for the exact
    packages and paths), and the series ships no privileged observer Pod.
-4. Pinned workload images plus the licensed FFmpeg fixture.
+4. Pinned workload images plus the licensed FFmpeg fixture. The images are
+   digest-pinned per the repo's `images: digest-only` policy, and the clip,
+   the PostgreSQL snapshot and `wrk2` are baked onto the node and checksummed
+   before use (see `GATES.md` for the fixture table).
 5. A node transport for the runner. SSH to the worker VMs is still broken, but
    `kubectl logs`/`exec` work again after the `system:kube-apiserver-proxy`
    subject fix (see `GATES.md`); the capture path must be driven through the

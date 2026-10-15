@@ -24,6 +24,10 @@ ALLOWED_HOST_PATHS = {
     "/lib/modules",
     "/usr/src/kernels",
     "/var/tmp/linux-sched",
+    # Baked at image-bake time: workload fixtures the pods also read, and the
+    # load generators the observer runs.
+    "/var/lib/linux-sched/fixtures",
+    "/var/lib/linux-sched/bin",
 }
 # /var/tmp/linux-sched is the artifact spool; it must be writable. Every other
 # host path is read-only input.

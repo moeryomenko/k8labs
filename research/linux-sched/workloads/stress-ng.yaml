@@ -12,7 +12,10 @@ spec:
   terminationGracePeriodSeconds: 0
   containers:
     - name: stress-ng
-      image: docker.io/alexeiled/stress-ng:latest
+      # Third-party image, last published 2021. Pinned by digest under the
+      # repo's digest-only policy; the synthetic-load scenario is secondary, so
+      # the stale toolchain is accepted rather than pulling a mutable tag.
+      image: docker.io/alexeiled/stress-ng@sha256:91f1313a67e3c8c23f3c75855019d01c4a43e2f872b099f720047f03309d8ad4
       args:
         - --cpu
         - "2"

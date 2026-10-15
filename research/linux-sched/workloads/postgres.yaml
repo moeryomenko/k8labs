@@ -12,7 +12,9 @@ spec:
   terminationGracePeriodSeconds: 0
   containers:
     - name: postgres
-      image: docker.io/library/postgres:17.2-alpine
+      # Pinned to the Fedora 44 major version (18.6) that produced the baked
+      # snapshot: a dump cannot be restored into an older server.
+      image: docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
       env:
         - name: POSTGRES_PASSWORD
           value: linux-sched
@@ -24,6 +26,22 @@ spec:
         requests:
           cpu: "1"
         limits: {}
+      volumeMounts:
+        - name: fixtures
+          mountPath: /fixtures
+          readOnly: true
+        # The entrypoint replays this on every start. The Pod keeps no state,
+        # so each arm initialises a fresh cluster from the same baked snapshot
+        # rather than inheriting the previous arm's writes.
+        - name: fixtures
+          mountPath: /docker-entrypoint-initdb.d/01-pgbench.sql
+          subPath: pgbench.sql
+          readOnly: true
+  volumes:
+    - name: fixtures
+      hostPath:
+        path: /var/lib/linux-sched/fixtures
+        type: Directory
 ---
 apiVersion: v1
 kind: Service

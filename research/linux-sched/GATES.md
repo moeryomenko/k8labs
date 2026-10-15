@@ -340,12 +340,47 @@ container termination message as a small (≈4 KiB) result channel.
 `runqlat`/`runqlen` are **not** on `$PATH`; they live under
 `/usr/share/bcc/tools/`.
 
+## Workload fixtures
+
+The workload inputs are baked onto the node image rather than shipped in a
+container image: the lab has no PVC and no SSH to the VMs, and the workload Pods
+and the observer mount the same host paths, so every arm reads byte-identical
+inputs.
+
+| On the node | Mounted at | Used by |
+|---|---|---|
+| `/var/lib/linux-sched/fixtures/input.mp4` | `/fixtures/input.mp4` | `ffmpeg`, `mixed` |
+| `/var/lib/linux-sched/fixtures/pgbench.sql` | `/docker-entrypoint-initdb.d/01-pgbench.sql` | `postgres` |
+| `/var/lib/linux-sched/fixtures/transactions.sql` | `/fixtures/transactions.sql` | the `pgbench` load |
+| `/var/lib/linux-sched/bin/wrk2` | `/usr/local/bin/wrk2` | the `wrk2` load |
+
+- **Clip.** Big Buck Bunny 320x180 (CC-BY 3.0, Blender Foundation), verified by
+  SHA-256 as the archive and again as the extracted file, so a truncated or
+  substituted download cannot reach a run.
+- **Snapshot.** pgbench at scale 10, taken with the node's PostgreSQL 18.6 and
+  dumped plain so the pinned image's entrypoint replays it. The Pod keeps no
+  state, so every arm re-initialises from the same data — that is what makes the
+  arms comparable. The image is pinned to the same major version, because a dump
+  cannot be restored into an older server: the original `postgres:17.2-alpine`
+  could not have read this dump at all.
+- **wrk2.** Built from commit `44a94c1`, because Fedora packages `wrk`, which
+  cannot hold a fixed offered rate (`-R`) and so cannot measure latency under a
+  fixed load.
+- **pgbench.** Installed into the observer with dnf instead of mounted: the load
+  runs inside the observer container, and a client from the container's own
+  repositories matches its libpq.
+
+The observer's fixture mounts are `type: Directory`, not `DirectoryOrCreate`: an
+observer without fixtures can only produce empty samples, so it should refuse to
+start rather than run.
+
 ## Consequence for the design
 
 - Observer tooling is provisioned into the node image (node-native) and can also
   run from a capability-scoped Pod.
-- The runner still needs one working **result transport** before confirmatory
-  runs: repair the apiserver→kubelet `nodes/proxy` authorization (restores
-  `logs`/`exec`), repair VM SSH, or publish results from the node through the
-  Kubernetes API.
+- `logs`/`exec` work, so the Kubernetes API is the result transport; SSH to the
+  VMs is still unusable and is not used.
+- Before the first block: re-bake the image so the fixtures exist (the observer
+  will not start without them), then run a pilot to calibrate the HTTP offered
+  rate that the confirmatory blocks freeze.
 

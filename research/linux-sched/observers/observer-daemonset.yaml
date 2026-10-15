@@ -50,7 +50,12 @@ spec:
             - -c
             - |
               set -eu
-              dnf install -y -q bpftrace perf bcc-tools libbpf-tools python3-bcc bpftool procps-ng
+              dnf install -y -q bpftrace perf bcc-tools libbpf-tools python3-bcc bpftool procps-ng postgresql
+              # Load generators are baked on the node (see the bake's fixture
+              # section) and mounted read-only; expose them on PATH.
+              for t in /opt/linux-sched/bin/*; do
+                [ -e "$t" ] && ln -sf "$t" "/usr/local/bin/$(basename "$t")"
+              done
               touch /tmp/observer-ready
               exec sleep infinity
           securityContext:
@@ -95,6 +100,15 @@ spec:
               readOnly: true
             - name: work
               mountPath: /var/tmp/linux-sched
+            # Baked workload fixtures and load generators. The FFmpeg input
+            # clip and the PostgreSQL snapshot live here, and the Pods mount
+            # the same host path, so every arm reads byte-identical inputs.
+            - name: fixtures
+              mountPath: /fixtures
+              readOnly: true
+            - name: tools
+              mountPath: /opt/linux-sched/bin
+              readOnly: true
       volumes:
         - name: tracefs
           hostPath:
@@ -123,3 +137,14 @@ spec:
           hostPath:
             path: /var/tmp/linux-sched
             type: DirectoryOrCreate
+        # Baked at image-bake time. `Directory`, not `DirectoryOrCreate`: an
+        # observer without fixtures cannot measure anything, so it should fail
+        # to start rather than run and produce empty samples.
+        - name: fixtures
+          hostPath:
+            path: /var/lib/linux-sched/fixtures
+            type: Directory
+        - name: tools
+          hostPath:
+            path: /var/lib/linux-sched/bin
+            type: Directory

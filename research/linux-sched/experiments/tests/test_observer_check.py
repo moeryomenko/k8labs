@@ -73,3 +73,30 @@ def test_reintroduced_privileged_manifests_are_rejected(
     (tmp_path / "telemetry").mkdir()
     errors = check()
     assert any("telemetry still exists" in e for e in errors)
+
+
+def test_missing_fixture_bake_is_reported(tmp_path: Path, monkeypatch) -> None:
+    provisioner = tmp_path / "provisioner.sh"
+    provisioner.write_text(
+        "dnf install -y bpftrace perf bcc-tools libbpf-tools python3-bcc bpftool\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(observer_check, "PACKER_PROVISIONER", provisioner)
+    errors = check()
+    assert any("missing fixture" in e and "input.mp4" in e for e in errors)
+
+
+def test_observer_mounts_fixture_paths() -> None:
+    manifest = (
+        Path(observer_check.SERIES_DIR) / "observers" / "observer-daemonset.yaml"
+    ).read_text(encoding="utf-8")
+    for path in observer_check.OBSERVER_MOUNT_PATHS:
+        assert path in manifest
+
+
+def test_fixture_script_is_posix_sh() -> None:
+    # The bake runs under /bin/sh, so a bashism in the fixture section would
+    # fail the image build rather than any test.
+    text = observer_check.PACKER_PROVISIONER.read_text(encoding="utf-8")
+    assert "#!/bin/sh" in text
+    assert "[[" not in text

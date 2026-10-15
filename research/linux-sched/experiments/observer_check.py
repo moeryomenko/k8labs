@@ -35,6 +35,16 @@ REQUIRED_PACKAGES = (
     "bpftool",
 )
 
+# The workload inputs are baked too: the licensed clip the FFmpeg scenario
+# loops, the PostgreSQL snapshot every arm is restored from, and wrk2, which
+# Fedora does not package. The observer and the workload Pods mount them
+# read-only, so the bake and the mounts have to agree.
+FIXTURE_MARKERS = ("FIXTURE_DIR", "input.mp4", "pgbench.sql", "wrk2")
+OBSERVER_MOUNT_PATHS = (
+    "/var/lib/linux-sched/fixtures",
+    "/var/lib/linux-sched/bin",
+)
+
 
 def _dnf_install_block(text: str) -> str:
     """Return the concatenation of every `dnf ... install ...` command.
@@ -60,6 +70,28 @@ def _dnf_install_block(text: str) -> str:
             blocks.append(" ".join(current))
             collecting = False
     return "\n".join(blocks)
+
+
+def _check_fixtures(errors: list[str]) -> None:
+    """The node image must bake the fixtures the workloads read.
+
+    A bake that stops producing them would leave every sample empty, so the
+    gate fails here rather than a block failing at run time.
+    """
+
+    provisioner = PACKER_PROVISIONER.read_text(encoding="utf-8")
+    for marker in FIXTURE_MARKERS:
+        if marker not in provisioner:
+            errors.append(f"node-image bake is missing fixture: {marker}")
+
+    daemonset = SERIES_DIR / "observers" / "observer-daemonset.yaml"
+    if not daemonset.is_file():
+        errors.append(f"missing observer DaemonSet: {daemonset}")
+        return
+    manifest = daemonset.read_text(encoding="utf-8")
+    for path in OBSERVER_MOUNT_PATHS:
+        if path not in manifest:
+            errors.append(f"observer DaemonSet does not mount fixture path: {path}")
 
 
 def check() -> list[str]:
@@ -97,6 +129,8 @@ def check() -> list[str]:
         for tool in ("bpftrace", "perf sched", "runqlat"):
             if tool not in text:
                 errors.append(f"capture-block.sh does not invoke native tool: {tool}")
+
+    _check_fixtures(errors)
 
     return errors
 
