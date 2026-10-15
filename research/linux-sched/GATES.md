@@ -47,6 +47,27 @@ The observer tools *are* packaged and are installed into the node image by
 `linux-sched-observer-check` fails if any of these leave the image provisioner
 or if a privileged observer manifest reappears.
 
+## Scheduler builds — PASS
+
+The three sched_ext schedulers build from the local `scx/` checkout:
+
+| Item | Value |
+|---|---|
+| Source revision | `f396a010f873bea5cb4f9f1d621a25e3eecd087f` |
+| Build host toolchain | cargo/rustc 1.99.0, clang 23.1.3 |
+| `scx_bpfland`, `scx_lavd`, `scx_mavd` | all build |
+| `bpftool`, `pahole` | not required (scx uses the vendored `vmlinux.tar.zst`) |
+
+`scx_mavd` builds with clang 23, above the clang 22 floor the cid form requires.
+Performance measurements must use **release** builds; debug builds are only for
+the build gate. Release artifacts (`target/release/`):
+
+| Scheduler | Bytes | sha256 |
+|---|---|---|
+| `scx_bpfland` | 9046038 | `b13a1365583d2c5456a2f6dc3a992ca07bf633308bc2920223195818e0ae48f0` |
+| `scx_lavd` | 12862251 | `6ceff4e0f369e06fd9d9d69e7f4cbb7626151f918bce929aa805c1dffe98245f` |
+| `scx_mavd` | 13239568 | `0d89e6b1270e8feb228db23fdee4098af7c9306a0a390331215a2e3e47f8c981` |
+
 ## Transport — BLOCKED
 
 Every transport the original design assumed is currently broken on this lab:
