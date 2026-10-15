@@ -29,6 +29,7 @@ def test_observer_check_required_packages() -> None:
         "bpftrace",
         "perf",
         "bcc-tools",
+        "libbpf-tools",
         "python3-bcc",
         "bpftool",
         "kernel-devel",
@@ -40,7 +41,7 @@ def test_versioned_package_satisfies_the_gate(tmp_path: Path, monkeypatch) -> No
     # the version suffix while still rejecting substring matches.
     provisioner = tmp_path / "provisioner.sh"
     provisioner.write_text(
-        "dnf install -y bpftrace perf bcc-tools python3-bcc bpftool "
+        "dnf install -y bpftrace perf bcc-tools libbpf-tools python3-bcc bpftool "
         '"kernel-devel-${KERNEL_VERSION}"\n',
         encoding="utf-8",
     )

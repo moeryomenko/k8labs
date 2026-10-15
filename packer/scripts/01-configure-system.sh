@@ -102,5 +102,6 @@ dnf install -y conmon parted growpart \
     bpftrace \
     perf \
     bcc-tools \
+    libbpf-tools \
     python3-bcc \
     bpftool

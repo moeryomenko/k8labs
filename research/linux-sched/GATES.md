@@ -84,6 +84,33 @@ taint. Any `!node-role.kubernetes.io/control-plane` selector therefore matches
 *all* nodes. Membership is expressed by the opt-in label
 `linux-sched/research=observer` instead.
 
+
+## BCC — RESOLVED via the CO-RE tools
+
+BCC 0.35 cannot compile against the 7.2 headers:
+
+```
+include/linux/fs.h:2440:15: error: static assertion failed due to requirement
+'sizeof(struct filename) % 64 == 0'
+```
+
+No newer BCC is published for Fedora 44 (only `0.35.0-5.fc44`). The fix is not a
+newer BCC but the **CO-RE** variants shipped in `libbpf-tools`
+(`0.35.0-5.fc44`), which use libbpf and the kernel's BTF instead of compiling
+against kernel headers:
+
+| Tool | Provides |
+|---|---|
+| `bpf-runqlat` | `/usr/bin/bpf-runqlat` |
+| `bpf-runqlen` | `/usr/bin/bpf-runqlen` |
+
+Verified in an observer on kernel `7.2.10`: `bpf-runqlat 1 3` produced a
+run-queue latency histogram.
+
+`libbpf-tools` is installed by the node image and by the observer, and the
+capture path prefers `bpf-runqlat` over the BCC `runqlat`. `kernel-devel` is
+still installed so the legacy BCC tools remain usable where they work.
+
 ## Kernel pin — VERIFIED on the live cluster
 
 The redeployed cluster runs the pinned kernel on every node:
@@ -97,24 +124,6 @@ Inside an observer pod: `uname -r` → `7.2.10-200.fc44.x86_64`,
 `/lib/modules/7.2.10-200.fc44.x86_64/build` **present**, `/usr/src/kernels/`
 holds the matching tree. The `kernel-devel` install and the read-only
 `/lib/modules` + `/usr/src/kernels` mounts do what they were meant to.
-
-## BCC — still blocked, for a different reason
-
-With headers now available, BCC fails to *compile* instead of failing to find
-headers. Fedora 44 ships BCC 0.35, which predates changes in the 7.2 headers:
-
-```
-include/linux/fs.h:2440:15: error: static assertion failed due to requirement
-'sizeof(struct filename) % 64 == 0'
-```
-
-This is a version incompatibility, not a missing-package problem, so pinning the
-kernel was necessary but not sufficient. Options: a newer BCC (none available
-for Fedora 44 at the time of writing), building BCC from source, or replacing
-the BCC run-queue tools with bpftrace equivalents.
-
-`bpftrace` is unaffected — it uses BTF and works on the new kernel
-(`tracepoint:sched:sched_switch` → 6309 events in 2 s).
 
 ## Management-plane provider defect (workaround applied)
 
@@ -137,14 +146,30 @@ management pod resolves to `169.254.1.2` and can reach.
 `hostNetwork: true` does **not** help: the Kind node container uses
 `NetworkMode=bridge`, so its loopback is not the lab host's either.
 
-Workaround applied (stopgap, not committed): a `loopback-forward` socat sidecar
-in the provider Deployment forwards `127.0.0.1:20009`→`169.254.1.2:20009` and
-`127.0.0.1:20011`→`169.254.1.2:20011`, the published apiserver and etcd ports.
+Workaround (committed, re-runnable): `make provider-loopback-forward`
+
+`scripts/provider_loopback_forward.py` reads the control-plane
+HypervisorMachine's `status.publishedPorts` and installs a `loopback-forward`
+socat sidecar in the provider Deployment that forwards the published apiserver
+and etcd ports from the Pod loopback to `169.254.1.2`. It is idempotent, so it
+can be re-run after any management-plane rebootstrap. The ports are read at run
+time because they are allocated per cluster.
 
 **Durable fix:** release a provider image from `cluster-api-hypervisor` HEAD
 (contains `21ac0d1`), update `versions.lock.yaml` (source commit + image
-digest), `make prepare`, redeploy. Until then, any management-plane rebootstrap
-reverts the sidecar and re-breaks cluster creation.
+digest), `make prepare`, redeploy, then delete the workaround.
+
+## HostAgent image loss (environment gotcha)
+
+While debugging, the HostAgent entered a restart loop (`restart counter is at
+482`) with `ghcr.io/moeryomenko/cluster-api-hypervisor@sha256:e0fc1a9a…: image
+not known` — the agent's container image was gone from local Podman storage. The
+provider manager then crashlooped with `dial tcp 10.89.0.2:9444: connect: no
+route to host`, because it checks agent health at startup.
+
+`make host-agent-install` reloads the image and restores the agent; the manager
+recovers. Worth knowing because the symptom (provider crashloop) looks like the
+endpoint bug but is a different failure.
 
 ## Transport — FIXED (logs/exec), SSH not used
 

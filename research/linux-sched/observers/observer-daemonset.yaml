@@ -50,7 +50,7 @@ spec:
             - -c
             - |
               set -eu
-              dnf install -y -q bpftrace perf bcc-tools python3-bcc bpftool
+              dnf install -y -q bpftrace perf bcc-tools libbpf-tools python3-bcc bpftool
               touch /tmp/observer-ready
               exec sleep infinity
           securityContext:

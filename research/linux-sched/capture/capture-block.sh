@@ -91,9 +91,9 @@ main() {
         require_remote_tool bpftrace
         require_remote_tool perf
         runqlat_tool="$(ssh_node "$TARGET_IP" \
-            'command -v runqlat || command -v /usr/share/bcc/tools/runqlat || command -v runqlat-bpfcc' || true)"
+            'command -v bpf-runqlat || command -v runqlat || command -v /usr/share/bcc/tools/runqlat || command -v runqlat-bpfcc' || true)"
         [[ -n "$runqlat_tool" ]] \
-            || die "neither runqlat nor runqlat-bpfcc present on ${TARGET_IP}"
+            || die "no runqlat tool present on ${TARGET_IP} (want libbpf-tools bpf-runqlat)"
         ssh_node "$TARGET_IP" "sudo install -d -m 0755 ${REMOTE_DIR}"
 
         log "staging observer probe on ${TARGET_IP}"

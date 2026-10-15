@@ -30,6 +30,7 @@ REQUIRED_PACKAGES = (
     "bpftrace",
     "perf",
     "bcc-tools",
+    "libbpf-tools",
     "python3-bcc",
     "bpftool",
     "kernel-devel",
