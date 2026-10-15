@@ -1,18 +1,19 @@
-Cilium v1.19.6 (chart 1.19.6), Gateway API CRDs v1.4.0
-Generated 2026-08-10.
+Cilium v1.20.2 (chart v1.20.2), Gateway API CRDs v1.6.2
+Generated 2026-10-14 from versions.lock.yaml.
 
 Pin rationale:
-- v1.19.6 is the latest stable patch of the current stable line
-  (published 2026-07-16); v1.20.0 is too fresh to pin, and 1.17/1.18 are
-  older maintenance lines. 1.19.x fully supports the feature set already
-  committed under cilium/:
+- v1.20.2 is the immutable Cilium release selected by versions.lock.yaml.
+  It includes the v1.20 backport of Cilium PR #47737, moving the FnSetRetval
+  feature probe into BPF and avoiding the agent-start failure observed with
+  Cilium 1.19.6 on Linux 7.2. It supports the feature set committed under
+  cilium/:
     - CiliumGatewayClassConfig (needs >= 1.17, gateways/cilium/gateway-class-config.yaml)
     - CiliumL2AnnouncementPolicy (>= 1.16, cilium/l2-policy.yaml)
     - CiliumLoadBalancerIPPool (>= 1.16, cilium/lb-pool.yaml)
     - Gateway API (>= 1.14)
 
 Render method (helm template, not committed binaries):
-  helm template cilium cilium/cilium --version 1.19.6 \
+  helm template cilium cilium/cilium --version 1.20.2 \
     --namespace kube-system --include-crds \
     --set l2announcements.enabled=true \
     --set externalIPs.enabled=true \
@@ -26,7 +27,7 @@ Render method (helm template, not committed binaries):
     --set gatewayAPI.enabled=true \
     --set hubble.enabled=false
   The values mirror the previous Ansible install
-  (ansible/roles/cilium/tasks/main.yml:49-62). In 1.19.6 the chart no
+  (ansible/roles/cilium/tasks/main.yml:49-62). In 1.20.2 the chart no
   longer has a top-level externalIPs value (that --set was a no-op against
   1.16.x charts); external-IP handling now comes from l2announcements +
   lbipam, both enabled in the render.
@@ -37,17 +38,45 @@ Deviations from the raw chart render:
   objects (cilium-ca, hubble-server-certs) that contain freshly generated
   private keys — keeping the committed manifests free of secrets per
   the pinned-manifest constraints.
-- cilium.io CRDs are committed separately in 00-crds/ (21 files), extracted
-  verbatim from the pinned v1.19.6 source tree
+- cilium.io CRDs are committed separately in 00-crds/ (22 Cilium CRDs), extracted
+  verbatim from the pinned v1.20.2 source tree
   (pkg/k8s/apis/cilium.io/client/crds/{v2,v2alpha1}/), i.e. the exact CRD
   set the cilium-operator would otherwise register at startup
   (--skip-crd-creation=false). They are applied before the install manifests
   so CiliumLoadBalancerIPPool / CiliumL2AnnouncementPolicy /
   CiliumGatewayClassConfig and the rest exist even while the operator is
   not yet running (the config-init ClusterIP bootstrap blocks its start).
-- Gateway API CRDs are committed separately in 00-gateway-api-crds.yaml
-  from kubernetes-sigs/gateway-api v1.4.0 (standard channel:
-  gatewayclasses, gateways, httproutes, referencegrants). Cilium 1.19.6 is
-  built against sigs.k8s.io/gateway-api v1.4.0-rc.2; the operator only
+- Gateway API v1.6.2 standard resources are committed as one-document files
+  named `00-gateway-api-*.yaml`, split to keep each CAPI Secret data value
+  under the Kubernetes object-size budget. The v1.6.2 standard bundle's
+  GRPCRoute CRD is omitted because the retained v1.6.2 experimental
+  `00-crds/gateway.networking.k8s.io_grpcroutes.yaml` provides the same
+  resource with its experimental schema; exactly one GRPCRoute CRD is
+  installed. The standard bundle also includes BackendTLSPolicy, ListenerSet,
+  TCP/TLS/UDP routes, and safe-upgrades admission policy resources. Cilium
+  1.20.2 is built against sigs.k8s.io/gateway-api v1.6.2; the operator only
   DISCOVERS Gateway API CRDs and disables Gateway API when they are missing
   (operator/pkg/gateway-api/cell.go), so they must be applied separately.
+
+Immutable source checksums:
+- Cilium chart v1.20.2: b2afd87b7f75f875f92a14559f14f59b7babbb479d968e3fd625a20bf30ec20e
+- Cilium source v1.20.2: 2d9dd9697bf59dc592053734ac0dffe63892fc3e1a4d1fd28e1f44a0c5a49916
+- Gateway API standard v1.6.2: faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9
+- Gateway API experimental v1.6.2: fb03263a4a720cc7abe9b36ede6e308b558d2d725a39595d664f34fe37f9c503
+
+Recovery bridge for an existing Kubernetes v1.32 cluster (temporary image-only
+patch; not the steady-state Cilium lock):
+- Cilium chart v1.19.8, retrieved with `helm pull` from
+  `https://helm.cilium.io`: sha256
+  `6974e74dcc01eab39385b8b8840df483ae314062c60a9e1b290df4cd38281fe0`.
+- Cilium source v1.19.8 from
+  `https://codeload.github.com/cilium/cilium/tar.gz/refs/tags/v1.19.8`,
+  sha256 `7c997f9c15d348d5ea4abba67e229905055acc27235f542a5b608ea07088979c`.
+- Agent and init containers:
+  `quay.io/cilium/cilium:v1.19.8@sha256:e9f7ee1f2f3a41e44339612e3b6b88170bdde7679c9c9461f287bb27702a8ecf`.
+- Operator:
+  `quay.io/cilium/operator-generic:v1.19.8@sha256:786ec9bb1a9344435e3e3f994bc4ed3a4a85afa6a314e98681af241f8be79833`.
+- Envoy:
+  `quay.io/cilium/cilium-envoy:v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82@sha256:af7382699576b9e65e9184efa52eeca0b58aea70ad6e511bf260c91d9f740463`.
+- The recovery render uses `imagePullPolicy: IfNotPresent`; pre-stage these
+  exact digests on each guest before the image-only patch.

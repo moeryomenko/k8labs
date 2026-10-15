@@ -125,10 +125,9 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+import generate_capi_addons as gen
 import pytest
 import yaml
-
-import generate_capi_addons as gen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CAPI_DIR = REPO_ROOT / "capi"

@@ -781,7 +781,7 @@ rbac: ## Apply cluster RBAC (kubelet bootstrap, system:nodes, admin, apiserver-p
 
 .PHONY: cilium
 cilium: rbac ## Install Cilium from committed manifests (cilium.io CRDs + install + policies)
-	@echo 'Applying cilium.io CRD bundle (v1.19.6) first...'
+	@echo 'Applying cilium.io CRD bundle (v1.20.2) first...'
 	kubectl --kubeconfig $(KUBECONFIG) apply -f cilium/install/00-crds/
 	@echo 'Waiting for cilium.io CRDs to be established...'
 	kubectl --kubeconfig $(KUBECONFIG) wait --for=condition=Established \

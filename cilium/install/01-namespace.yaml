@@ -1,9 +1,9 @@
 ---
-# Source: cilium/templates/cilium-secrets-namespace.yaml
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: "cilium-secrets"
+  name: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
-  annotations:
+    helm.sh/chart: cilium-1.20.2
+  annotations: null

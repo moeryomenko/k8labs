@@ -1,11 +1,11 @@
 ---
-# Source: cilium/templates/cilium-agent/clusterrole.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: cilium
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
 - apiGroups:
   - networking.k8s.io
@@ -24,12 +24,11 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
+  - ''
   resources:
   - namespaces
   - services
   - pods
-  - endpoints
   - nodes
   verbs:
   - get
@@ -52,15 +51,11 @@ rules:
   verbs:
   - list
   - watch
-  # This is used when validating policies in preflight. This will need to stay
-  # until we figure out how to avoid "get" inside the preflight, and then
-  # should be removed ideally.
   - get
 - apiGroups:
   - cilium.io
   resources:
   - ciliumloadbalancerippools
-  - ciliumbgppeeringpolicies
   - ciliumbgpnodeconfigs
   - ciliumbgpadvertisements
   - ciliumbgppeerconfigs
@@ -78,6 +73,7 @@ rules:
   - ciliumcidrgroups
   - ciliuml2announcementpolicies
   - ciliumpodippools
+  - ciliumdatapathplugins
   verbs:
   - list
   - watch
@@ -91,7 +87,6 @@ rules:
   - create
 - apiGroups:
   - cilium.io
-  # To synchronize garbage collection of such resources
   resources:
   - ciliumidentities
   verbs:
@@ -121,47 +116,42 @@ rules:
   verbs:
   - patch
 ---
-# Source: cilium/templates/cilium-operator/clusterrole.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: cilium-operator
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
 - apiGroups:
-  - ""
+  - ''
   resources:
   - pods
   verbs:
   - get
   - list
   - watch
-  # to automatically delete [core|kube]dns pods so that are starting to being
-  # managed by Cilium
   - delete
 - apiGroups:
-  - ""
+  - ''
   resources:
   - configmaps
   resourceNames:
   - cilium-config
   verbs:
-   # allow patching of the configmap to set annotations
   - patch
 - apiGroups:
-  - ""
+  - ''
   resources:
   - nodes
   verbs:
   - list
   - watch
 - apiGroups:
-  - ""
+  - ''
   resources:
-  # To remove node taints
   - nodes
-  # To set NetworkUnavailable false on startup
   - nodes/status
   verbs:
   - patch
@@ -174,29 +164,26 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
+  - ''
   resources:
-  # to perform LB IP allocation for BGP
   - services/status
   verbs:
   - update
   - patch
 - apiGroups:
-  - ""
+  - ''
   resources:
-  # to check apiserver connectivity
   - namespaces
   - secrets
+  - serviceaccounts
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - ""
+  - ''
   resources:
-  # to perform the translation of a CNP that contains `ToGroup` to its endpoints
   - services
-  - endpoints
   verbs:
   - get
   - list
@@ -206,7 +193,7 @@ rules:
   - delete
   - patch
 - apiGroups:
-  - "discovery.k8s.io"
+  - discovery.k8s.io
   resources:
   - endpointslices
   verbs:
@@ -223,11 +210,9 @@ rules:
   - ciliumnetworkpolicies
   - ciliumclusterwidenetworkpolicies
   verbs:
-  # Create auto-generated CNPs and CCNPs from Policies that have 'toGroups'
   - create
   - update
   - deletecollection
-  # To update the status of the CNPs and CCNPs
   - patch
   - get
   - list
@@ -238,7 +223,6 @@ rules:
   - ciliumnetworkpolicies/status
   - ciliumclusterwidenetworkpolicies/status
   verbs:
-  # Update the auto-generated CNPs and CCNPs status.
   - patch
   - update
 - apiGroups:
@@ -247,7 +231,6 @@ rules:
   - ciliumendpoints
   - ciliumidentities
   verbs:
-  # To perform garbage collection of such resources
   - delete
   - list
   - watch
@@ -256,7 +239,6 @@ rules:
   resources:
   - ciliumidentities
   verbs:
-  # To synchronize garbage collection of such resources
   - update
 - apiGroups:
   - cilium.io
@@ -268,7 +250,6 @@ rules:
   - get
   - list
   - watch
-    # To perform CiliumNode garbage collector
   - delete
 - apiGroups:
   - cilium.io
@@ -281,9 +262,12 @@ rules:
   resources:
   - ciliumendpointslices
   - ciliumenvoyconfigs
+  - ciliumbgpclusterconfigs
+  - ciliumbgpnodeconfigoverrides
   - ciliumbgppeerconfigs
   - ciliumbgpadvertisements
   - ciliumbgpnodeconfigs
+  - ciliumcidrgroups
   verbs:
   - create
   - update
@@ -336,37 +320,42 @@ rules:
   - ciliuml2announcementpolicies.cilium.io
   - ciliumpodippools.cilium.io
   - ciliumgatewayclassconfigs.cilium.io
+  - ciliumdatapathplugins.cilium.io
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions/status
+  verbs:
+  - update
+  resourceNames:
+  - ciliumbgpclusterconfigs.cilium.io
+  - ciliumbgppeerconfigs.cilium.io
+  - ciliumbgpadvertisements.cilium.io
+  - ciliumbgpnodeconfigs.cilium.io
+  - ciliumbgpnodeconfigoverrides.cilium.io
 - apiGroups:
   - cilium.io
   resources:
   - ciliumloadbalancerippools
   - ciliumpodippools
-  - ciliumbgppeeringpolicies
-  - ciliumbgpclusterconfigs
-  - ciliumbgpnodeconfigoverrides
   - ciliumbgppeerconfigs
+  - ciliumdatapathplugins
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-    - cilium.io
+  - cilium.io
   resources:
-    - ciliumpodippools
+  - ciliumpodippools
   verbs:
-    - create
+  - create
 - apiGroups:
   - cilium.io
   resources:
   - ciliumloadbalancerippools/status
   verbs:
   - patch
-# For cilium-operator running in HA mode.
-#
-# Cilium operator running in HA mode requires the use of ResourceLock for Leader Election
-# between multiple running instances.
-# The preferred way of doing this is to use LeasesResourceLock as edits to Leases are less
-# common and fewer objects in the cluster watch "all Leases".
 - apiGroups:
   - coordination.k8s.io
   resources:
@@ -380,11 +369,15 @@ rules:
   resources:
   - gatewayclasses
   - gateways
+  - tcproutes
+  - udproutes
   - tlsroutes
   - httproutes
   - grpcroutes
   - referencegrants
   - referencepolicies
+  - backendtlspolicies
+  - listenersets
   verbs:
   - get
   - list
@@ -403,6 +396,10 @@ rules:
   - httproutes/status
   - grpcroutes/status
   - tlsroutes/status
+  - backendtlspolicies/status
+  - tcproutes/status
+  - udproutes/status
+  - listenersets/status
   verbs:
   - update
   - patch
@@ -422,6 +419,14 @@ rules:
   - update
   - patch
 - apiGroups:
+  - ''
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - multicluster.x-k8s.io
   resources:
   - serviceimports
@@ -436,39 +441,38 @@ rules:
   verbs:
   - deletecollection
 ---
-# Source: cilium/templates/cilium-agent/clusterrolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: cilium
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cilium
 subjects:
 - kind: ServiceAccount
-  name: "cilium"
+  name: cilium
   namespace: kube-system
 ---
-# Source: cilium/templates/cilium-operator/clusterrolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: cilium-operator
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cilium-operator
 subjects:
 - kind: ServiceAccount
-  name: "cilium-operator"
+  name: cilium-operator
   namespace: kube-system
 ---
-# Source: cilium/templates/cilium-agent/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -476,9 +480,10 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
 - apiGroups:
-  - ""
+  - ''
   resources:
   - configmaps
   verbs:
@@ -486,17 +491,17 @@ rules:
   - list
   - watch
 ---
-# Source: cilium/templates/cilium-agent/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: cilium-gateway-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
 - apiGroups:
-  - ""
+  - ''
   resources:
   - secrets
   verbs:
@@ -504,17 +509,17 @@ rules:
   - list
   - watch
 ---
-# Source: cilium/templates/cilium-agent/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: cilium-tlsinterception-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
 - apiGroups:
-  - ""
+  - ''
   resources:
   - secrets
   verbs:
@@ -522,17 +527,17 @@ rules:
   - list
   - watch
 ---
-# Source: cilium/templates/cilium-operator/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: cilium-operator-gateway-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
 - apiGroups:
-  - ""
+  - ''
   resources:
   - secrets
   verbs:
@@ -541,17 +546,17 @@ rules:
   - update
   - patch
 ---
-# Source: cilium/templates/cilium-operator/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: cilium-operator-tlsinterception-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
 - apiGroups:
-  - ""
+  - ''
   resources:
   - secrets
   verbs:
@@ -560,7 +565,6 @@ rules:
   - update
   - patch
 ---
-# Source: cilium/templates/cilium-operator/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -568,10 +572,8 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 rules:
-# ZTunnel DaemonSet management permissions
-# Note: These permissions must always be granted (not conditional on encryption.type)
-# because the controller needs to clean up stale DaemonSets when ztunnel is disabled.
 - apiGroups:
   - apps
   resources:
@@ -582,8 +584,15 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - ''
+  resources:
+  - serviceaccounts
+  verbs:
+  - get
+  - list
+  - watch
 ---
-# Source: cilium/templates/cilium-agent/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -591,84 +600,84 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: cilium-config-agent
 subjects:
-  - kind: ServiceAccount
-    name: "cilium"
-    namespace: kube-system
+- kind: ServiceAccount
+  name: cilium
+  namespace: kube-system
 ---
-# Source: cilium/templates/cilium-agent/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: cilium-gateway-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: cilium-gateway-secrets
 subjects:
 - kind: ServiceAccount
-  name: "cilium"
+  name: cilium
   namespace: kube-system
 ---
-# Source: cilium/templates/cilium-agent/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: cilium-tlsinterception-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: cilium-tlsinterception-secrets
 subjects:
 - kind: ServiceAccount
-  name: "cilium"
+  name: cilium
   namespace: kube-system
 ---
-# Source: cilium/templates/cilium-operator/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: cilium-operator-gateway-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: cilium-operator-gateway-secrets
 subjects:
 - kind: ServiceAccount
-  name: "cilium-operator"
+  name: cilium-operator
   namespace: kube-system
 ---
-# Source: cilium/templates/cilium-operator/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: cilium-operator-tlsinterception-secrets
-  namespace: "cilium-secrets"
+  namespace: cilium-secrets
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: cilium-operator-tlsinterception-secrets
 subjects:
 - kind: ServiceAccount
-  name: "cilium-operator"
+  name: cilium-operator
   namespace: kube-system
 ---
-# Source: cilium/templates/cilium-operator/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -676,11 +685,12 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: cilium-1.20.2
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: cilium-operator-ztunnel
 subjects:
 - kind: ServiceAccount
-  name: "cilium-operator"
+  name: cilium-operator
   namespace: kube-system

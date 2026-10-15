@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import base64
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -143,7 +143,6 @@ def discover_manifests(
     for path in yaml_files:
         if not path.is_file():
             continue
-        rel = path.relative_to(repo_root)
         # Key is relative to the addon directory (not the repo root).
         rel_to_addon = path.relative_to(addon_root)
         key = canonical_key(rel_to_addon)
@@ -202,8 +201,7 @@ def compute_default_threshold(
                     c in stripped
                     for c in "AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789+/="
                 ):
-                    if len(stripped) > max_payload:
-                        max_payload = len(stripped)
+                    max_payload = max(max_payload, len(stripped))
         if max_payload > 0:
             threshold = int(max_payload * 1.10)
             return min(threshold, limit - 4096)
