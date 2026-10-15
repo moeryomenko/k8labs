@@ -84,32 +84,67 @@ taint. Any `!node-role.kubernetes.io/control-plane` selector therefore matches
 *all* nodes. Membership is expressed by the opt-in label
 `linux-sched/research=observer` instead.
 
-## Known limitation — RESOLVED by pinning the kernel
+## Kernel pin — VERIFIED on the live cluster
 
-`bcc-tools` compiles its BPF programs at runtime and fails without headers for
-the running kernel:
+The redeployed cluster runs the pinned kernel on every node:
+
+| Node | Kernel |
+|---|---|
+| control plane | `7.2.10-200.fc44.x86_64` |
+| 3 workers | `7.2.10-200.fc44.x86_64` |
+
+Inside an observer pod: `uname -r` → `7.2.10-200.fc44.x86_64`,
+`/lib/modules/7.2.10-200.fc44.x86_64/build` **present**, `/usr/src/kernels/`
+holds the matching tree. The `kernel-devel` install and the read-only
+`/lib/modules` + `/usr/src/kernels` mounts do what they were meant to.
+
+## BCC — still blocked, for a different reason
+
+With headers now available, BCC fails to *compile* instead of failing to find
+headers. Fedora 44 ships BCC 0.35, which predates changes in the 7.2 headers:
 
 ```
-chdir(/lib/modules/7.2.7-200.fc44.x86_64/build): No such file or directory
+include/linux/fs.h:2440:15: error: static assertion failed due to requirement
+'sizeof(struct filename) % 64 == 0'
 ```
 
-The image booted `7.2.7-200.fc44` while Fedora 44 repositories carried only
-`7.2.10-200.fc44`, so no matching `kernel-devel` existed.
+This is a version incompatibility, not a missing-package problem, so pinning the
+kernel was necessary but not sufficient. Options: a newer BCC (none available
+for Fedora 44 at the time of writing), building BCC from source, or replacing
+the BCC run-queue tools with bpftrace equivalents.
 
-Resolution: pin the kernel to **`7.2.10-200.fc44`**, for which Fedora 44 ships a
-matching `kernel-devel`:
+`bpftrace` is unaffected — it uses BTF and works on the new kernel
+(`tracepoint:sched:sched_switch` → 6309 events in 2 s).
 
-- `versions.lock.yaml` and `extensions/manifest.yaml` now pin `7.2.10-200.fc44`.
-- `packer/scripts/01-configure-system.sh` installs that version's `kernel-devel`
-  (and `kernel-headers`) into the node image.
-- The observer mounts the host's `/lib/modules` and `/usr/src/kernels`
-  read-only, which is what BCC needs to build against the running kernel.
+## Management-plane provider defect (workaround applied)
 
-This takes effect only after the image is rebuilt and the workload cluster
-redeployed (`make base`, `make cluster`); the currently running nodes still boot
-`7.2.7` and BCC still fails there.
+The pinned provider image cannot reach the workload apiserver, so a cluster can
+never finish provisioning:
 
-`bpftrace` was never affected — it uses BTF.
+| Fact | Value |
+|---|---|
+| Pinned/ live image | `ghcr.io/moeryomenko/cluster-api-hypervisor@sha256:e0fc1a9a…` |
+| Built from source commit | `4206c463` (v0.3.15) |
+| `21ac0d1 fix: use published management endpoint` in that commit? | **No** |
+| Present in `cluster-api-hypervisor` HEAD (`8a11cc4`)? | **Yes** |
+
+The pre-fix image calls the healthz seam with a literal `127.0.0.1`, which
+inside the provider pod is *the pod's own* loopback, so the probe always fails,
+`ControlPlaneInitialized` stays false, and the `<cluster>-kubeconfig` secret is
+never published. The source fix passes `host.containers.internal`, which a
+management pod resolves to `169.254.1.2` and can reach.
+
+`hostNetwork: true` does **not** help: the Kind node container uses
+`NetworkMode=bridge`, so its loopback is not the lab host's either.
+
+Workaround applied (stopgap, not committed): a `loopback-forward` socat sidecar
+in the provider Deployment forwards `127.0.0.1:20009`→`169.254.1.2:20009` and
+`127.0.0.1:20011`→`169.254.1.2:20011`, the published apiserver and etcd ports.
+
+**Durable fix:** release a provider image from `cluster-api-hypervisor` HEAD
+(contains `21ac0d1`), update `versions.lock.yaml` (source commit + image
+digest), `make prepare`, redeploy. Until then, any management-plane rebootstrap
+reverts the sidecar and re-breaks cluster creation.
 
 ## Transport — FIXED (logs/exec), SSH not used
 
