@@ -83,7 +83,8 @@ sysexts:
     metadata:
       extension_name: kubelet
     sources:
-      - url: "https://dl.k8s.io/v1.37.0/bin/linux/amd64/kubelet"
+      - artifact_id: kubelet-v1.37.0
+        url: "https://dl.k8s.io/v1.37.0/bin/linux/amd64/kubelet"
         path: usr/bin/kubelet
         type: binary
         mode: 755
@@ -100,7 +101,8 @@ sysexts:
     metadata:
       extension_name: crio
     sources:
-      - url: "https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.v1.37.0.tar.gz"
+      - artifact_id: cri-o-v1.37.0
+        url: "https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.v1.37.0.tar.gz"
         type: archive
         archive_paths:
           - from: "*/bin/crio"
@@ -126,7 +128,8 @@ sysexts:
     metadata:
       extension_name: crun
     sources:
-      - url: "https://github.com/containers/crun/releases/download/1.29.1/crun-1.29.1-linux-amd64"
+      - artifact_id: crun-1.29.1
+        url: "https://github.com/containers/crun/releases/download/1.29.1/crun-1.29.1-linux-amd64"
         path: usr/bin/crun
         type: binary
         mode: 755
@@ -141,7 +144,8 @@ sysexts:
     metadata:
       extension_name: cni
     sources:
-      - url: "https://github.com/containernetworking/plugins/releases/download/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz"
+      - artifact_id: cni-plugins-v1.9.1
+        url: "https://github.com/containernetworking/plugins/releases/download/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz"
         type: archive
         archive_strip_components: 0
         archive_target_dir: usr/lib/cni
@@ -152,12 +156,13 @@ sysexts:
   # Source: archive from GitHub releases
   # -----------------------------------------------------------------------
   - name: etcd
-    version: v3.5.17
+    version: v3.5.34
     source_dir: sysext/etcd
     metadata:
       extension_name: etcd
     sources:
-      - url: "https://github.com/etcd-io/etcd/releases/download/v3.5.17/etcd-v3.5.17-linux-amd64.tar.gz"
+      - artifact_id: etcd-v3.5.34
+        url: "https://github.com/etcd-io/etcd/releases/download/v3.5.34/etcd-v3.5.34-linux-amd64.tar.gz"
         type: archive
         archive_paths:
           - from: "*/etcd"
@@ -179,7 +184,8 @@ sysexts:
     metadata:
       extension_name: kubernetes-cp
     sources:
-      - url: "https://dl.k8s.io/v1.37.0/kubernetes-server-linux-amd64.tar.gz"
+      - artifact_id: kubernetes-server-v1.37.0
+        url: "https://dl.k8s.io/v1.37.0/kubernetes-server-linux-amd64.tar.gz"
         type: archive
         archive_paths:
           - from: "kubernetes/server/bin/kube-apiserver"
@@ -201,20 +207,19 @@ sysexts:
 
   # -----------------------------------------------------------------------
   # perfetto: Performance tracing tool (tracebox)
-  # Source: pinned v57.2 linux-amd64 ELF from Perfetto's LUCI artifact mirror:
-  #   https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox
-  #   (sha256 af22b25abb57260eb22bd4dc5bd64ea25d88fd781c1c221f446d0d49eaff59e8)
+  # Source: pinned v57.2 linux-amd64 ELF from Perfetto's LUCI artifact mirror.
   # NOTE: https://get.perfetto.dev/tracebox serves a ~10KB Python prebuilt-
   # wrapper that downloads the ELF on first run; the wrapper is unusable on
   # nodes with no outbound internet, so the pinned ELF URL is used instead.
   # -----------------------------------------------------------------------
   - name: perfetto
-    version: latest
+    version: v57.2
     source_dir: sysext/perfetto
     metadata:
       extension_name: perfetto
     sources:
-      - url: "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox"
+      - artifact_id: tracebox-v57.2
+        url: "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox"
         path: usr/bin/tracebox
         type: binary
         mode: 755

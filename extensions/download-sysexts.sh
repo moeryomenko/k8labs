@@ -16,36 +16,10 @@
 set -u
 
 SCRIPT_DIR="$(dirname "$0")"
-SYSEXT_DIR="$(cd "${SCRIPT_DIR}/../sysext" && pwd)"
-
-# ---------------------------------------------------------------------------
-# Config: upstream versions and URLs
-# Keep these in sync with extension-release.d/ metadata.
-# ---------------------------------------------------------------------------
-KERNEL_VERSION="7.1"
-KUBELET_VERSION="v1.32.13"
-CRIO_VERSION="v1.35.5"
-CRUN_VERSION="1.28"
-CNI_VERSION="v1.9.1"
-
-KUBELET_URL="https://dl.k8s.io/${KUBELET_VERSION}/bin/linux/amd64/kubelet"
-# cri-o releases are now distributed via Google Cloud Storage
-CRIO_URL="https://storage.googleapis.com/cri-o/artifacts/cri-o.amd64.${CRIO_VERSION}.tar.gz"
-CRUN_URL="https://github.com/containers/crun/releases/download/${CRUN_VERSION}/crun-${CRUN_VERSION}-linux-amd64"
-CNI_URL="https://github.com/containernetworking/plugins/releases/download/${CNI_VERSION}/cni-plugins-linux-amd64-${CNI_VERSION}.tgz"
-
-ETCD_VERSION="v3.5.17"
-KUBERNETES_CP_VERSION="v1.32.13"
-
-ETCD_URL="https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
-KUBERNETES_CP_URL="https://dl.k8s.io/${KUBERNETES_CP_VERSION}/kubernetes-server-linux-amd64.tar.gz"
-
-# Pin the exact v57.2 linux-amd64 tracebox ELF. get.perfetto.dev/tracebox
-# serves Perfetto's Python prebuilt-wrapper (a text script), not the ELF —
-# do not switch back. The ELF must be present on nodes with no outbound
-# internet, so the download must be the real binary, verified by sha256.
-PERFETTO_URL="https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox"
-PERFETTO_SHA256="af22b25abb57260eb22bd4dc5bd64ea25d88fd781c1c221f446d0d49eaff59e8"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+SYSEXT_DIR="$(cd "${SCRIPT_DIR}/../sysext" && pwd -P)"
+MANIFEST_FILE="${REPO_ROOT}/extensions/manifest.yaml"
+LOCK_FILE="${REPO_ROOT}/versions.lock.yaml"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,23 +44,126 @@ die() {
     exit 1
 }
 
+# Resolve each source through the immutable artifact lock and reject manifest
+# drift before any cache check or download.
+ARTIFACT_VALUES="$(python3 - "${MANIFEST_FILE}" "${LOCK_FILE}" "${REPO_ROOT}" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+sys.path.insert(0, str(Path(sys.argv[3]) / "scripts"))
+from lock import load_lock
+
+manifest = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+lock = load_lock(Path(sys.argv[2]))
+entries = {item["name"]: item for item in manifest["sysexts"]}
+artifacts = {
+    item["id"]: item
+    for item in lock["artifacts"] + lock["guest_upgrade_artifacts"]
+}
+required = ("kubelet", "cri-o", "crun", "cni", "etcd", "kubernetes-cp", "perfetto")
+values = [manifest["settings"]["kernel_version"]]
+for name in required:
+    entry = entries.get(name)
+    if not isinstance(entry, dict):
+        raise SystemExit(f"extension manifest is missing sysext {name}")
+    sources = entry.get("sources")
+    if not isinstance(sources, list) or len(sources) != 1 or not isinstance(sources[0], dict):
+        raise SystemExit(f"{name} must have exactly one locked source")
+    source = sources[0]
+    artifact_id = source.get("artifact_id")
+    artifact = artifacts.get(artifact_id)
+    if artifact is None:
+        raise SystemExit(f"{name} source references an unknown lock artifact: {artifact_id!r}")
+    version = entry.get("version")
+    if artifact.get("version") != version:
+        raise SystemExit(f"{name} manifest version does not match artifact {artifact_id}")
+    if source.get("url") != artifact.get("url"):
+        raise SystemExit(f"{name} manifest URL does not match artifact {artifact_id}")
+    values.extend((version, artifact["sha256"], artifact["url"]))
+if any(not isinstance(value, str) or not value for value in values):
+    raise SystemExit("extension manifest or artifact lock contains an empty value")
+print("|".join(values))
+PY
+)" || die "unable to resolve locked extension artifacts from ${MANIFEST_FILE} and ${LOCK_FILE}"
+previous_ifs=$IFS
+IFS='|'
+read -r KERNEL_VERSION \
+    KUBELET_VERSION KUBELET_SHA256 KUBELET_URL \
+    CRIO_VERSION CRIO_SHA256 CRIO_URL \
+    CRUN_VERSION CRUN_SHA256 CRUN_URL \
+    CNI_VERSION CNI_SHA256 CNI_URL \
+    ETCD_VERSION ETCD_SHA256 ETCD_URL \
+    KUBERNETES_CP_VERSION KUBERNETES_CP_SHA256 KUBERNETES_CP_URL \
+    PERFETTO_VERSION PERFETTO_SHA256 PERFETTO_URL <<EOF
+${ARTIFACT_VALUES}
+EOF
+IFS=$previous_ifs
+
 info() {
     echo "==> $*"
 }
 
 # ---------------------------------------------------------------------------
-# Cache check: skip download if all expected paths exist and are non-empty
+# Cache check: require the lock digest and the current digest of every target.
 # ---------------------------------------------------------------------------
+sha256_file() {
+    file="$1"
+    output="$(sha256sum "$file" 2>/dev/null)" || return 1
+    digest="${output%% *}"
+    case "$digest" in
+        *[!0-9a-f]*|'') return 1 ;;
+    esac
+    [ "${#digest}" -eq 64 ] || return 1
+    printf '%s\n' "$digest"
+}
+
+marker_content() {
+    version="$1"
+    artifact_sha256="$2"
+    shift 2
+    printf 'version=%s\nartifact_sha256=%s\n' "$version" "$artifact_sha256"
+    for file in "$@"; do
+        [ -f "$file" ] && [ -s "$file" ] || return 1
+        digest="$(sha256_file "$file")" || return 1
+        printf 'file_sha256=%s  %s\n' "$digest" "$file"
+    done
+}
+
 check_cached() {
     desc="$1"
-    shift
-    for f in "$@"; do
-        if [ ! -f "$f" ] || [ ! -s "$f" ]; then
-            return 1  # missing or empty — need to download
-        fi
-    done
+    version="$2"
+    artifact_sha256="$3"
+    marker="$4"
+    shift 4
+    [ -f "$marker" ] || return 1
+    expected="$(marker_content "$version" "$artifact_sha256" "$@")" || return 1
+    if [ "$(cat "$marker")" != "$expected" ]; then
+        return 1
+    fi
     echo "  ${desc}: already available, skipping download"
-    return 0  # all exist — cache hit
+    return 0
+}
+
+version_marker() {
+    printf '%s\n' "${REPO_ROOT}/build/.sysext-download-cache/$1.version"
+}
+
+record_version() {
+    name="$1"
+    version="$2"
+    artifact_sha256="$3"
+    shift 3
+    [ "$dry_run" -eq 0 ] || return 0
+    marker="$(version_marker "$name")"
+    mkdir -p "$(dirname "$marker")"
+    temporary="$(mktemp "$(dirname "$marker")/.${name}.XXXXXX")" || die "unable to create cache marker for ${name}"
+    if ! marker_content "$version" "$artifact_sha256" "$@" > "$temporary"; then
+        rm -f -- "$temporary"
+        die "unable to record verified files for ${name}"
+    fi
+    mv -f -- "$temporary" "$marker" || die "unable to publish cache marker for ${name}"
 }
 
 # ---------------------------------------------------------------------------
@@ -139,24 +216,47 @@ download_file() {
     url="$1"
     dest="$2"
     desc="$3"
+    expected_sha256="$4"
 
     if [ "$dry_run" -eq 1 ]; then
         echo "  [DRY-RUN] would download: ${url}"
         echo "            to:           ${dest}"
+        echo "            sha256:       ${expected_sha256}"
         return 0
     fi
 
     mkdir -p "$(dirname "$dest")"
+    temporary="$(mktemp "$(dirname "$dest")/.$(basename "$dest").XXXXXX")" || die "unable to create temporary file for ${desc}"
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "$dest" "$url" || die "failed to download ${desc} from ${url}"
+        if ! curl -fsSL -o "$temporary" "$url"; then
+            rm -f -- "$temporary"
+            die "failed to download ${desc} from ${url}"
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$dest" "$url" || die "failed to download ${desc} from ${url}"
+        if ! wget -q -O "$temporary" "$url"; then
+            rm -f -- "$temporary"
+            die "failed to download ${desc} from ${url}"
+        fi
     else
+        rm -f -- "$temporary"
         die "neither curl nor wget found — cannot download ${desc}"
     fi
 
-    chmod 755 "$dest"
+    actual_sha256="$(sha256_file "$temporary")" || {
+        rm -f -- "$temporary"
+        die "failed to compute sha256 for ${desc}"
+    }
+    if [ "$actual_sha256" != "$expected_sha256" ]; then
+        rm -f -- "$temporary"
+        die "sha256 mismatch for ${desc}: expected ${expected_sha256}, got ${actual_sha256}"
+    fi
+    chmod 755 "$temporary" || {
+        rm -f -- "$temporary"
+        die "failed to set executable mode for ${desc}"
+    }
+    mv -f -- "$temporary" "$dest" || die "failed to install ${desc} at ${dest}"
+    echo "  Verified ${desc} sha256: ${actual_sha256}"
     echo "  Downloaded ${desc}: ${dest}"
 }
 
@@ -164,23 +264,43 @@ download_archive() {
     url="$1"
     tmpfile="$2"
     desc="$3"
+    expected_sha256="$4"
 
     if [ "$dry_run" -eq 1 ]; then
         echo "  [DRY-RUN] would download archive: ${url}"
         echo "            to:                   ${tmpfile}"
+        echo "            sha256:               ${expected_sha256}"
         return 0
     fi
 
     mkdir -p "$(dirname "$tmpfile")"
+    temporary="$(mktemp "$(dirname "$tmpfile")/.$(basename "$tmpfile").XXXXXX")" || die "unable to create temporary archive for ${desc}"
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "$tmpfile" "$url" || die "failed to download ${desc} archive from ${url}"
+        if ! curl -fsSL -o "$temporary" "$url"; then
+            rm -f -- "$temporary"
+            die "failed to download ${desc} archive from ${url}"
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$tmpfile" "$url" || die "failed to download ${desc} archive from ${url}"
+        if ! wget -q -O "$temporary" "$url"; then
+            rm -f -- "$temporary"
+            die "failed to download ${desc} archive from ${url}"
+        fi
     else
+        rm -f -- "$temporary"
         die "neither curl nor wget found — cannot download ${desc}"
     fi
 
+    actual_sha256="$(sha256_file "$temporary")" || {
+        rm -f -- "$temporary"
+        die "failed to compute sha256 for ${desc} archive"
+    }
+    if [ "$actual_sha256" != "$expected_sha256" ]; then
+        rm -f -- "$temporary"
+        die "sha256 mismatch for ${desc} archive: expected ${expected_sha256}, got ${actual_sha256}"
+    fi
+    mv -f -- "$temporary" "$tmpfile" || die "failed to install ${desc} archive at ${tmpfile}"
+    echo "  Verified ${desc} archive sha256: ${actual_sha256}"
     echo "  Downloaded ${desc} archive: ${tmpfile}"
 }
 
@@ -189,183 +309,210 @@ download_archive() {
 # ---------------------------------------------------------------------------
 download_kubelet() {
     target="${SYSEXT_DIR}/kubelet/usr/bin/kubelet"
-    check_cached "kubelet ${KUBELET_VERSION}" "$target" && return 0
-    download_file "$KUBELET_URL" "$target" "kubelet ${KUBELET_VERSION}"
+    check_cached "kubelet ${KUBELET_VERSION}" "$KUBELET_VERSION" "$KUBELET_SHA256" "$(version_marker kubelet)" "$target" && return 0
+    download_file "$KUBELET_URL" "$target" "kubelet ${KUBELET_VERSION}" "$KUBELET_SHA256"
+    record_version kubelet "$KUBELET_VERSION" "$KUBELET_SHA256" "$target"
 }
 
 download_crio() {
     target_dir="${SYSEXT_DIR}/cri-o/usr/bin"
-    check_cached "cri-o ${CRIO_VERSION}" "${target_dir}/crio" "${target_dir}/crictl" "${target_dir}/pinns" && return 0
+    check_cached "cri-o ${CRIO_VERSION}" "$CRIO_VERSION" "$CRIO_SHA256" "$(version_marker cri-o)" "${target_dir}/crio" "${target_dir}/crictl" "${target_dir}/pinns" && return 0
 
-    tmpdir="${SYSEXT_DIR}/cri-o/.download.tmp"
+    if [ "$dry_run" -eq 0 ]; then
+        mkdir -p "${SYSEXT_DIR}/cri-o"
+        tmpdir="$(mktemp -d "${SYSEXT_DIR}/cri-o/.download.XXXXXX")" || die "unable to create CRI-O extraction directory"
+    else
+        tmpdir="${SYSEXT_DIR}/cri-o/.download-dry-run"
+    fi
     archive="${tmpdir}/crio.tar.gz"
-    mkdir -p "$tmpdir"
 
-    download_archive "$CRIO_URL" "$archive" "cri-o ${CRIO_VERSION}"
+    download_archive "$CRIO_URL" "$archive" "cri-o ${CRIO_VERSION}" "$CRIO_SHA256"
 
     if [ "$dry_run" -eq 0 ]; then
         target_dir="${SYSEXT_DIR}/cri-o/usr/bin"
         mkdir -p "$target_dir"
+        extract_dir="${tmpdir}/extracted"
+        mkdir -p "$extract_dir"
 
         # Extract only the binaries we need from the tarball
-        tar -xzf "$archive" -C "$tmpdir" 2>/dev/null || die "failed to extract cri-o archive"
+        tar -xzf "$archive" -C "$extract_dir" 2>/dev/null || die "failed to extract cri-o archive"
 
         # The tarball contains bin/ with the binaries
         # Note: crio-conmon and crio-conmonrs are distributed separately
         # from the containers/conmon and containers/conmon-rs projects.
         for bin in crio crictl pinns; do
             found=0
-            for f in "${tmpdir}"/*/bin/"${bin}" "${tmpdir}"/bin/"${bin}"; do
+            for f in "${extract_dir}"/*/bin/"${bin}" "${extract_dir}"/bin/"${bin}"; do
                 if [ -f "$f" ]; then
-                    cp "$f" "${target_dir}/${bin}"
-                    chmod 755 "${target_dir}/${bin}"
+                    cp "$f" "${target_dir}/${bin}" || die "failed to install ${bin} from cri-o archive"
+                    chmod 755 "${target_dir}/${bin}" || die "failed to set executable mode for ${bin}"
                     echo "  Extracted ${bin} from cri-o archive"
                     found=1
                     break
                 fi
             done
             if [ "$found" -eq 0 ]; then
-                echo "  Warning: ${bin} not found in cri-o archive" >&2
+                die "required binary ${bin} not found in verified cri-o archive"
             fi
         done
 
         rm -rf "$tmpdir"
     fi
+    record_version cri-o "$CRIO_VERSION" "$CRIO_SHA256" "${target_dir}/crio" "${target_dir}/crictl" "${target_dir}/pinns"
 }
 
 download_crun() {
     target="${SYSEXT_DIR}/crun/usr/bin/crun"
-    check_cached "crun ${CRUN_VERSION}" "$target" && return 0
-    download_file "$CRUN_URL" "$target" "crun ${CRUN_VERSION}"
+    check_cached "crun ${CRUN_VERSION}" "$CRUN_VERSION" "$CRUN_SHA256" "$(version_marker crun)" "$target" && return 0
+    download_file "$CRUN_URL" "$target" "crun ${CRUN_VERSION}" "$CRUN_SHA256"
+    record_version crun "$CRUN_VERSION" "$CRUN_SHA256" "$target"
 }
 
 download_cni() {
     target_dir="${SYSEXT_DIR}/cni/usr/lib/cni"
-    # Check a representative plugin to gauge cache status
-    check_cached "cni-plugins ${CNI_VERSION}" "${target_dir}/bridge" "${target_dir}/host-local" && return 0
+    check_cached "cni-plugins ${CNI_VERSION}" "$CNI_VERSION" "$CNI_SHA256" "$(version_marker cni)" "${target_dir}"/* && return 0
 
-    tmpdir="${SYSEXT_DIR}/cni/.download.tmp"
+    if [ "$dry_run" -eq 0 ]; then
+        mkdir -p "${SYSEXT_DIR}/cni"
+        tmpdir="$(mktemp -d "${SYSEXT_DIR}/cni/.download.XXXXXX")" || die "unable to create CNI extraction directory"
+    else
+        tmpdir="${SYSEXT_DIR}/cni/.download-dry-run"
+    fi
     archive="${tmpdir}/cni-plugins.tgz"
-    mkdir -p "$tmpdir"
 
-    download_archive "$CNI_URL" "$archive" "cni-plugins ${CNI_VERSION}"
+    download_archive "$CNI_URL" "$archive" "cni-plugins ${CNI_VERSION}" "$CNI_SHA256"
 
     if [ "$dry_run" -eq 0 ]; then
         target_dir="${SYSEXT_DIR}/cni/usr/lib/cni"
         mkdir -p "$target_dir"
+        extract_dir="${tmpdir}/extracted"
+        mkdir -p "$extract_dir"
 
-        # Extract all CNI plugins
-        tar -xzf "$archive" -C "$target_dir" || die "failed to extract cni-plugins archive"
-        chmod 755 "$target_dir"/*
+        # Extract and validate before copying any plugins into the source tree.
+        tar -xzf "$archive" -C "$extract_dir" || die "failed to extract cni-plugins archive"
+        [ -f "${extract_dir}/bridge" ] || die "bridge plugin missing from verified CNI archive"
+        [ -f "${extract_dir}/host-local" ] || die "host-local plugin missing from verified CNI archive"
+        for plugin in "${extract_dir}"/*; do
+            [ -f "$plugin" ] || continue
+            plugin_name="$(basename "$plugin")"
+            cp "$plugin" "${target_dir}/${plugin_name}" || die "failed to install CNI plugin ${plugin_name}"
+            chmod 755 "${target_dir}/${plugin_name}" || die "failed to set executable mode for CNI plugin ${plugin_name}"
+        done
 
         rm -rf "$tmpdir"
         echo "  Extracted CNI plugins to ${target_dir}"
     fi
+    record_version cni "$CNI_VERSION" "$CNI_SHA256" "${target_dir}"/*
 }
 
 download_etcd() {
     target_dir="${SYSEXT_DIR}/etcd/usr/bin"
-    check_cached "etcd ${ETCD_VERSION}" "${target_dir}/etcd" "${target_dir}/etcdctl" && return 0
+    check_cached "etcd ${ETCD_VERSION}" "$ETCD_VERSION" "$ETCD_SHA256" "$(version_marker etcd)" "${target_dir}/etcd" "${target_dir}/etcdctl" && return 0
 
-    tmpdir="${SYSEXT_DIR}/etcd/.download.tmp"
+    if [ "$dry_run" -eq 0 ]; then
+        mkdir -p "${SYSEXT_DIR}/etcd"
+        tmpdir="$(mktemp -d "${SYSEXT_DIR}/etcd/.download.XXXXXX")" || die "unable to create etcd extraction directory"
+    else
+        tmpdir="${SYSEXT_DIR}/etcd/.download-dry-run"
+    fi
     archive="${tmpdir}/etcd.tar.gz"
-    mkdir -p "$tmpdir"
 
-    download_archive "$ETCD_URL" "$archive" "etcd ${ETCD_VERSION}"
+    download_archive "$ETCD_URL" "$archive" "etcd ${ETCD_VERSION}" "$ETCD_SHA256"
 
     if [ "$dry_run" -eq 0 ]; then
         target_dir="${SYSEXT_DIR}/etcd/usr/bin"
         mkdir -p "$target_dir"
+        extract_dir="${tmpdir}/extracted"
+        mkdir -p "$extract_dir"
 
-        tar -xzf "$archive" -C "$tmpdir" 2>/dev/null || die "failed to extract etcd archive"
+        tar -xzf "$archive" -C "$extract_dir" 2>/dev/null || die "failed to extract etcd archive"
 
-        # The tarball contains a single directory: etcd-v3.5.17-linux-amd64/
+        # The tarball contains a versioned directory with etcd and etcdctl.
         for bin in etcd etcdctl; do
             found=0
-            for f in "${tmpdir}"/*/"${bin}" "${tmpdir}"/"${bin}"; do
+            for f in "${extract_dir}"/*/"${bin}" "${extract_dir}"/"${bin}"; do
                 if [ -f "$f" ]; then
-                    cp "$f" "${target_dir}/${bin}"
-                    chmod 755 "${target_dir}/${bin}"
+                    cp "$f" "${target_dir}/${bin}" || die "failed to install ${bin} from etcd archive"
+                    chmod 755 "${target_dir}/${bin}" || die "failed to set executable mode for ${bin}"
                     echo "  Extracted ${bin} from etcd archive"
                     found=1
                     break
                 fi
             done
             if [ "$found" -eq 0 ]; then
-                echo "  Warning: ${bin} not found in etcd archive" >&2
+                die "required binary ${bin} not found in verified etcd archive"
             fi
         done
 
         rm -rf "$tmpdir"
     fi
+    record_version etcd "$ETCD_VERSION" "$ETCD_SHA256" "${target_dir}/etcd" "${target_dir}/etcdctl"
 }
 
 download_perfetto() {
     target="${SYSEXT_DIR}/perfetto/usr/bin/tracebox"
-    if is_elf_binary "$target"; then
+    if is_elf_binary "$target" && check_cached "tracebox ${PERFETTO_VERSION}" "$PERFETTO_VERSION" "$PERFETTO_SHA256" "$(version_marker perfetto)" "$target"; then
         echo "  tracebox: already available, skipping download"
         return 0
     fi
-    download_file "$PERFETTO_URL" "$target" "tracebox"
+    download_file "$PERFETTO_URL" "$target" "tracebox ${PERFETTO_VERSION}" "$PERFETTO_SHA256"
 
-    # Pin the exact v57.2 linux-amd64 ELF: verify the sha256 so a wrong or
-    # truncated artifact never ships in the sysext image. On mismatch remove
-    # the file so the ELF-magic cache check cannot hide the bad download.
     if [ "$dry_run" -eq 0 ]; then
-        actual="$(sha256sum "$target" 2>/dev/null | awk '{print $1}')"
-        if [ -z "$actual" ]; then
-            rm -f "$target"
-            die "failed to compute sha256 for tracebox (download incomplete?)"
-        fi
-        if [ "$actual" != "$PERFETTO_SHA256" ]; then
-            rm -f "$target"
-            die "sha256 mismatch for tracebox: expected ${PERFETTO_SHA256}, got ${actual}"
-        fi
-        echo "  Verified tracebox sha256: ${actual}"
+        is_elf_binary "$target" || die "tracebox download is not an ELF binary"
     fi
+    record_version perfetto "$PERFETTO_VERSION" "$PERFETTO_SHA256" "$target"
 }
 
 download_kubernetes_cp() {
     target_dir="${SYSEXT_DIR}/kubernetes-cp/usr/bin"
-    check_cached "kubernetes-cp ${KUBERNETES_CP_VERSION}" "${target_dir}/kube-apiserver" "${target_dir}/kube-controller-manager" "${target_dir}/kube-scheduler" "${target_dir}/kubectl" && return 0
+    check_cached "kubernetes-cp ${KUBERNETES_CP_VERSION}" "$KUBERNETES_CP_VERSION" "$KUBERNETES_CP_SHA256" "$(version_marker kubernetes-cp)" "${target_dir}/kube-apiserver" "${target_dir}/kube-controller-manager" "${target_dir}/kube-scheduler" "${target_dir}/kubectl" && return 0
 
-    tmpdir="${SYSEXT_DIR}/kubernetes-cp/.download.tmp"
+    if [ "$dry_run" -eq 0 ]; then
+        mkdir -p "${SYSEXT_DIR}/kubernetes-cp"
+        tmpdir="$(mktemp -d "${SYSEXT_DIR}/kubernetes-cp/.download.XXXXXX")" || die "unable to create Kubernetes extraction directory"
+    else
+        tmpdir="${SYSEXT_DIR}/kubernetes-cp/.download-dry-run"
+    fi
     archive="${tmpdir}/kubernetes-server.tar.gz"
-    mkdir -p "$tmpdir"
 
-    download_archive "$KUBERNETES_CP_URL" "$archive" "kubernetes-server ${KUBERNETES_CP_VERSION}"
+    download_archive "$KUBERNETES_CP_URL" "$archive" "kubernetes-server ${KUBERNETES_CP_VERSION}" "$KUBERNETES_CP_SHA256"
 
     if [ "$dry_run" -eq 0 ]; then
         target_dir="${SYSEXT_DIR}/kubernetes-cp/usr/bin"
         mkdir -p "$target_dir"
+        extract_dir="${tmpdir}/extracted"
+        mkdir -p "$extract_dir"
 
-        tar -xzf "$archive" -C "$tmpdir" 2>/dev/null || die "failed to extract kubernetes-server archive"
+        tar -xzf "$archive" -C "$extract_dir" 2>/dev/null || die "failed to extract kubernetes-server archive"
 
         # The tarball contains kubernetes/server/bin/
         for bin in kube-apiserver kube-controller-manager kube-scheduler kubectl; do
             found=0
-            for f in "${tmpdir}"/kubernetes/server/bin/"${bin}" "${tmpdir}"/server/bin/"${bin}" "${tmpdir}"/bin/"${bin}"; do
+            for f in "${extract_dir}"/kubernetes/server/bin/"${bin}" "${extract_dir}"/server/bin/"${bin}" "${extract_dir}"/bin/"${bin}"; do
                 if [ -f "$f" ]; then
-                    cp "$f" "${target_dir}/${bin}"
-                    chmod 755 "${target_dir}/${bin}"
+                    cp "$f" "${target_dir}/${bin}" || die "failed to install ${bin} from Kubernetes server archive"
+                    chmod 755 "${target_dir}/${bin}" || die "failed to set executable mode for ${bin}"
                     echo "  Extracted ${bin} from kubernetes-server archive"
                     found=1
                     break
                 fi
             done
             if [ "$found" -eq 0 ]; then
-                echo "  Warning: ${bin} not found in kubernetes-server archive" >&2
+                die "required binary ${bin} not found in verified Kubernetes server archive"
             fi
         done
 
         rm -rf "$tmpdir"
     fi
+    record_version kubernetes-cp "$KUBERNETES_CP_VERSION" "$KUBERNETES_CP_SHA256" "${target_dir}/kube-apiserver" "${target_dir}/kube-controller-manager" "${target_dir}/kube-scheduler" "${target_dir}/kubectl"
 }
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 main() {
+    command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify locked guest artifacts"
+
     # Map of sysext name -> download function
     downloads="cri-o crun kubelet cni etcd kubernetes-cp perfetto"
 
@@ -398,6 +545,7 @@ main() {
             case "$name" in
                 cri-o)
                     if check_cached "cri-o ${CRIO_VERSION}" \
+                        "$CRIO_VERSION" "$CRIO_SHA256" "$(version_marker cri-o)" \
                         "${SYSEXT_DIR}/cri-o/usr/bin/crio" \
                         "${SYSEXT_DIR}/cri-o/usr/bin/crictl" \
                         "${SYSEXT_DIR}/cri-o/usr/bin/pinns"
@@ -407,6 +555,7 @@ main() {
                     ;;
                 crun)
                     if check_cached "crun ${CRUN_VERSION}" \
+                        "$CRUN_VERSION" "$CRUN_SHA256" "$(version_marker crun)" \
                         "${SYSEXT_DIR}/crun/usr/bin/crun"
                     then
                         continue
@@ -414,6 +563,7 @@ main() {
                     ;;
                 kubelet)
                     if check_cached "kubelet ${KUBELET_VERSION}" \
+                        "$KUBELET_VERSION" "$KUBELET_SHA256" "$(version_marker kubelet)" \
                         "${SYSEXT_DIR}/kubelet/usr/bin/kubelet"
                     then
                         continue
@@ -421,14 +571,15 @@ main() {
                     ;;
                 cni)
                     if check_cached "cni-plugins ${CNI_VERSION}" \
-                        "${SYSEXT_DIR}/cni/usr/lib/cni/bridge" \
-                        "${SYSEXT_DIR}/cni/usr/lib/cni/host-local"
+                        "$CNI_VERSION" "$CNI_SHA256" "$(version_marker cni)" \
+                        "${SYSEXT_DIR}/cni/usr/lib/cni"/*
                     then
                         continue
                     fi
                     ;;
                 etcd)
                     if check_cached "etcd ${ETCD_VERSION}" \
+                        "$ETCD_VERSION" "$ETCD_SHA256" "$(version_marker etcd)" \
                         "${SYSEXT_DIR}/etcd/usr/bin/etcd" \
                         "${SYSEXT_DIR}/etcd/usr/bin/etcdctl"
                     then
@@ -437,6 +588,7 @@ main() {
                     ;;
                 kubernetes-cp)
                     if check_cached "kubernetes-cp ${KUBERNETES_CP_VERSION}" \
+                        "$KUBERNETES_CP_VERSION" "$KUBERNETES_CP_SHA256" "$(version_marker kubernetes-cp)" \
                         "${SYSEXT_DIR}/kubernetes-cp/usr/bin/kube-apiserver" \
                         "${SYSEXT_DIR}/kubernetes-cp/usr/bin/kube-controller-manager" \
                         "${SYSEXT_DIR}/kubernetes-cp/usr/bin/kube-scheduler" \
@@ -446,8 +598,10 @@ main() {
                     fi
                     ;;
                 perfetto)
-                    if is_elf_binary "${SYSEXT_DIR}/perfetto/usr/bin/tracebox"; then
-                        echo "  tracebox: already available, skipping download"
+                    if is_elf_binary "${SYSEXT_DIR}/perfetto/usr/bin/tracebox" &&
+                        check_cached "tracebox ${PERFETTO_VERSION}" "$PERFETTO_VERSION" "$PERFETTO_SHA256" "$(version_marker perfetto)" \
+                            "${SYSEXT_DIR}/perfetto/usr/bin/tracebox"
+                    then
                         continue
                     fi
                     ;;
