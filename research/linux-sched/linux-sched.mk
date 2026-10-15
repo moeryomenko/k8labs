@@ -28,6 +28,11 @@ LINUX_SCHED_TEST_DIR := $(LINUX_SCHED_DIR)tests
 LINUX_SCHED_DATA_ROOT ?= $(if $(K8LABS_RESEARCH_DATA_ROOT),$(K8LABS_RESEARCH_DATA_ROOT)/linux-sched,$(PROJECT_ROOT)/build/research/linux-sched)
 LINUX_SCHED_ANALYSIS_OUTPUT ?= $(LINUX_SCHED_DATA_ROOT)/analysis
 
+# Worker nodes are named after the cluster's MachineDeployment. The nodes carry
+# no role labels on this lab, so `!node-role.kubernetes.io/control-plane` matches
+# the control-plane node as well and would put an observer on it.
+LINUX_SCHED_WORKER_PATTERN ?= -md-
+
 # Resolve KUBECONFIG path (workload cluster).
 KUBECONFIG := $(PROJECT_ROOT)/build/kubeconfig
 export KUBECONFIG
@@ -38,7 +43,7 @@ export KUBECONFIG
 linux-sched-setup: ## Verify linux-sched prerequisites (tools, cluster, worker VM access)
 	@echo "=== linux-sched — prerequisites ==="
 	@fail=0; \
-	for cmd in kubectl jq python3 ssh; do \
+	for cmd in kubectl jq python3; do \
 		if command -v $$cmd >/dev/null 2>&1; then echo "  [OK] $$cmd"; else echo "  [MISSING] $$cmd"; fail=1; fi; \
 	done; \
 	if [ "$$fail" -ne 0 ]; then echo "ERROR: missing required tools" >&2; exit 1; fi; \
@@ -121,6 +126,22 @@ linux-sched-observer-check: ## Check the node image installs the native observer
 .PHONY: linux-sched-observers-apply
 linux-sched-observers-apply: ## Validate and apply the capability-scoped observer DaemonSet
 	$(LINUX_SCHED_DIR)observers/apply.sh apply
+
+.PHONY: linux-sched-workers-label
+linux-sched-workers-label: ## Label the worker nodes so the observer DaemonSet schedules on them
+	@echo "Labelling nodes matching '$(LINUX_SCHED_WORKER_PATTERN)' as research workers..."
+	@kubectl --kubeconfig $(KUBECONFIG) get nodes --no-headers \
+		-o custom-columns=':metadata.name' \
+		| grep -- '$(LINUX_SCHED_WORKER_PATTERN)' \
+		| xargs -r -I{} kubectl --kubeconfig $(KUBECONFIG) label node {} \
+			linux-sched/research=observer --overwrite
+	@count=$$(kubectl --kubeconfig $(KUBECONFIG) get nodes \
+		-l linux-sched/research=observer --no-headers | wc -l); \
+	if [ "$$count" -eq 0 ]; then \
+		echo "ERROR: no node matched '$(LINUX_SCHED_WORKER_PATTERN)'; set LINUX_SCHED_WORKER_PATTERN" >&2; \
+		exit 1; \
+	fi; \
+	echo "  observer nodes: $$count"
 
 .PHONY: linux-sched-observers-delete
 linux-sched-observers-delete: ## Delete the observer DaemonSet

@@ -41,6 +41,7 @@ make linux-sched-calibrate    SCENARIO=http              # freeze the offered ra
 make linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
 make linux-sched-analyze                                 # decision-rule summary
 make linux-sched-observer-check                          # node-native observer tooling gate
+make linux-sched-workers-label                           # label worker nodes for the observers
 make linux-sched-observers-apply                         # deploy the capability-scoped observers
 make linux-sched-observers-test                          # validate observer manifests (no cluster)
 make linux-sched-test                                    # pytest + bats
