@@ -85,4 +85,14 @@ mkdir -p /var/lib/extensions /var/lib/confexts
 # them the resize helper dies and the root disk is never grown (reviewer
 # F-001). tar/rsync are intentionally NOT installed (Ansible is gone) and
 # policy.json lives in the confext-containers image, not the base.
-dnf install -y conmon parted growpart
+#
+# Scheduler-research observer tooling is installed node-native: the linux-sched
+# series runs bpftrace, perf and the BCC tools directly on the node. Privileged
+# observer DaemonSets are deliberately absent because this lab's cri-o refuses
+# to create device nodes for privileged containers.
+dnf install -y conmon parted growpart \
+    bpftrace \
+    kernel-tools \
+    bcc-tools \
+    python3-bcc \
+    bpftool
