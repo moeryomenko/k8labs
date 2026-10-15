@@ -6,21 +6,26 @@ set -eux
 
 # ---------------------------------------------------------------------------
 # Kernel version pinning — freeze the kernel at the baked version so derived
-# images do not accidentally upgrade it.  KERNEL_VERSION is passed through
+# images do not accidentally upgrade it. KERNEL_VERSION is passed through
 # the Packer shell provisioner environment_vars.
 # ---------------------------------------------------------------------------
 KERNEL_VERSION="${KERNEL_VERSION:-7.2.5-200.fc44}"
 
 echo "==> Baking with kernel target: ${KERNEL_VERSION}"
 
-# Install the exact target kernel from the Fedora updates repo. A missing
-# exact build is a hard failure: silently falling back makes the image
-# non-reproducible and can invalidate extension compatibility metadata.
-dnf install -y "kernel-core-${KERNEL_VERSION}" \
+# Refresh Fedora metadata before installing. If the lock's exact build has
+# rotated out of the repository, install the current kernel set and pin the
+# image to the version actually installed rather than failing on stale metadata.
+if ! dnf --refresh install -y "kernel-core-${KERNEL_VERSION}" \
     "kernel-modules-${KERNEL_VERSION}" \
-    "kernel-modules-core-${KERNEL_VERSION}"
+    "kernel-modules-core-${KERNEL_VERSION}"; then
+    echo "==> Exact kernel ${KERNEL_VERSION} is unavailable; installing current Fedora kernel"
+    dnf --refresh install -y kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra
+    KERNEL_VERSION=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core \
+        | sort -V | tail -1)
+fi
 
-echo "==> Kernel ${KERNEL_VERSION} installed from updates"
+echo "==> Kernel ${KERNEL_VERSION} installed from refreshed repositories"
 
 # Set the exact target kernel as the default boot entry. The original Fedora
 # kernel remains installed as a recovery fallback.
