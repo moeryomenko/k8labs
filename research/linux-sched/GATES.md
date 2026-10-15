@@ -68,33 +68,35 @@ the build gate. Release artifacts (`target/release/`):
 | `scx_lavd` | 12862251 | `6ceff4e0f369e06fd9d9d69e7f4cbb7626151f918bce929aa805c1dffe98245f` |
 | `scx_mavd` | 13239568 | `0d89e6b1270e8feb228db23fdee4098af7c9306a0a390331215a2e3e47f8c981` |
 
-## Transport — PARTIALLY BLOCKED
-
-The originally planned privileged observer DaemonSets cannot run, but the reason
-turned out to be narrower than it first appeared.
+## Transport — FIXED (logs/exec), SSH still broken
 
 **Capability-scoped Pods work.** A Pod with `hostPID: true` and capabilities
 `BPF`, `PERFMON`, `SYS_ADMIN`, `SYS_RESOURCE`, `SYS_PTRACE`, `IPC_LOCK` starts
 normally — unlike a `privileged: true` Pod, which fails with
 `mknodat /dev/loop0: Permission denied`. In that Pod, `bpftrace` attaches probes
 and observed host scheduling activity (8598 `sched_switch` events in 3 s). So
-BPF tracing does **not** require the privileged flag on this lab; the observer
-can be a capability-scoped DaemonSet.
+BPF tracing does **not** require the privileged flag on this lab.
 
-Still broken:
+**`kubectl logs` / `exec` were forbidden, now fixed.** The apiserver's kubelet
+client authenticates as `kube-apiserver`, but
+`rbac/03-kube-apiserver-proxy.yaml` only bound `kubernetes`, so every call failed
+with `Forbidden (user=kube-apiserver, ... resource=nodes, subresource=[proxy])`.
+Adding the `kube-apiserver` subject to `system:kube-apiserver-proxy` repairs it:
 
-1. **SSH to the VMs.** TCP connects to ports 22 on all four nodes, but no SSH
-   banner ever arrives (`Connection timed out during banner exchange`). Any
-   SSH-driven transport cannot be used.
-2. **`kubectl logs` / `exec`.** Forbidden cluster-wide: the apiserver's kubelet
-   client lacks `nodes/proxy`
-   (`Forbidden (user=kube-apiserver, verb=get, resource=nodes,
-   subresource(s)=[proxy])`), reproduced against a Cilium pod. Pod stdout cannot
-   be read this way, which is what a full tracing agent would naturally use.
+```
+kubectl -n kube-system logs cilium-8mf8v --tail=2   # now returns log lines
+kubectl -n kube-system exec cilium-8mf8v -- true     # now succeeds
+```
 
-What works today: image pulls, `kubectl apply/get/delete`, capability-scoped and
-non-privileged Pods, read-only host mounts, and the container termination
-message as a small (≈4 KiB) result channel.
+The manifest change is committed so a rebuilt cluster keeps the fix.
+
+Still broken: **SSH to the VMs.** TCP connects to ports 22 on all four nodes, but
+no SSH banner ever arrives (`Connection timed out during banner exchange`), so
+any SSH-driven transport remains unusable.
+
+What works today: image pulls, `kubectl apply/get/delete/logs/exec`,
+capability-scoped and non-privileged Pods, read-only host mounts, and the
+container termination message as a small (≈4 KiB) result channel.
 
 ## Packaging notes (Fedora 44)
 

@@ -95,6 +95,7 @@ rather than reporting a fake success):
    are node-native: the image bake installs them (see `GATES.md` for the exact
    packages and paths), and the series ships no privileged observer Pod.
 4. Pinned workload images plus the licensed FFmpeg fixture.
-5. A working node transport for the runner. SSH to the worker VMs and the
-   cluster's `kubectl logs`/`exec` path are both currently broken in this lab
-   (see `GATES.md`); the runner refuses to run until one is repaired.
+5. A node transport for the runner. SSH to the worker VMs is still broken, but
+   `kubectl logs`/`exec` work again after the `system:kube-apiserver-proxy`
+   subject fix (see `GATES.md`); the capture path must be driven through the
+   Kubernetes API.
