@@ -227,7 +227,57 @@ alone still produced `EINVAL`.
 
 Verified in an observer on `7.3.0-0.rc7…fc46`: `scx_bpfland` attaches, holds for
 30 s, and detaches cleanly (`EXIT: unregistered from user space`,
-`Unregister scx_bpfland scheduler`).
+`Unregister scx_bpfland scheduler`). `scx_lavd` verifies the same way through the
+runner.
+
+Two further things were needed for the runner to drive the arms, both found by
+running it: a process started through `kubectl exec` dies with that exec, so the
+scheduler is supervised by a long-lived local `kubectl exec`; and the binary is
+exec'd through `sh -c` because the runtime refuses a hostPath binary directly.
+
+## `scx_mavd` — blocked: needs a 7.4 kernel
+
+`scx_mavd` is the only arm on the **cid** path, and on this kernel it fails to
+load with `EINVAL` and no verifier log:
+
+```
+libbpf: prog 'scx_lib_init_probe': BPF program load failed: -EINVAL
+Error: Failed to load BPF program
+Caused by: Invalid argument (os error 22)
+```
+
+This is not the kernel ABI and not the kcfg problem. `scx_mavd/build.rs` passes
+`-DSCX_ARENA_SCALAR`, so the object carries the `__SCX_MARKER_arena_scalar`
+rodata marker; the cid open path reads that marker and sets `BPF_F_ARENA_SCALAR`
+(`1 << 8`) on **every** program. The running kernel predates that flag:
+
+- `kernel/bpf/syscall.c:2948` returns `-EINVAL` for any `BPF_PROG_LOAD`
+  `prog_flags` bit outside its known set, before the verifier runs — which is why
+  there is no verifier log to read.
+- In this tree the known set tops out at bit 7, with
+  `BPF_F_TOKEN_FD = (1U << 16)`. Bit 8 is not in it.
+- The flag itself (`4c651a91bdfc` in bpf-next) is not in `include/uapi/linux/bpf.h`
+  and is due in v7.4.
+
+It is the flag and not the probe's attach target: bpftrace attaches
+`fentry:bpf_scx_reg_cid` on this kernel without error, and both `bpf_scx_reg` and
+`bpf_scx_reg_cid` are present as functions in kallsyms and in the kernel BTF.
+
+The marker cannot simply be dropped, because `scx_mavd`'s sources now compile
+only under scalar-arena semantics — removing `-DSCX_ARENA_SCALAR` fails to build:
+
+```
+src/bpf/lavd.bpf.h:366:9: error: returning '__arena_global struct cpdom_ctx *'
+    from a function with result type 'struct cpdom_ctx *' changes address space of pointer
+```
+
+Loading the scalar-built object *without* the flag is not an option either: the
+JIT adds the arena base only under the flag, so the scheduler would dereference
+ordinary addresses and corrupt memory. The change that introduced this for
+`scx_mavd` is `6b9fe0d69` ("scx_mavd: Drop the __arena tags"), 2026-10-07.
+
+So `scx_mavd` runs in this lab only under a kernel that has the flag (v7.4), or
+as the pre-`6b9fe0d69` revision built in the classic arena form.
 
 Note the BCC situation is unrelated: `libbpf-tools` CO-RE binaries cover the
 run-queue metrics, and `kernel-devel` is deliberately not installed when the
