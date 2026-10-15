@@ -1,0 +1,105 @@
+# linux-sched observer DaemonSet.
+#
+# Runs ONE long-lived observer per research worker. It is deliberately **not**
+# privileged: a `privileged: true` Pod cannot start on this lab (cri-o fails
+# with `mknodat /dev/loop0: Permission denied`), while a Pod with `hostPID` and
+# the capability set below starts normally and can attach BPF programs (verified
+# on-host with bpftrace counting sched_switch events).
+#
+# The observer is a shell that installs the node-native tooling once and then
+# idles; the runner drives captures with `kubectl exec` and copies artifacts
+# with `kubectl cp`. Results are also readable through `kubectl logs`.
+#
+# Requires the node label `linux-sched/research=observer`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: linux-sched
+  labels:
+    app.kubernetes.io/part-of: linux-sched
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: linux-sched-observer
+  namespace: linux-sched
+  labels:
+    app.kubernetes.io/name: linux-sched-observer
+    app.kubernetes.io/part-of: linux-sched
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: linux-sched-observer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: linux-sched-observer
+        app.kubernetes.io/part-of: linux-sched
+    spec:
+      hostPID: true
+      hostNetwork: false
+      hostIPC: false
+      automountServiceAccountToken: false
+      nodeSelector:
+        linux-sched/research: observer
+      containers:
+        - name: observer
+          image: docker.io/library/fedora:44
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              dnf install -y -q bpftrace perf bcc-tools python3-bcc bpftool
+              # BCC tools compile BPF at runtime and need headers matching the
+              # RUNNING kernel. Best effort: the repo may only carry headers for
+              # a newer kernel than the pinned image boots.
+              dnf install -y -q "kernel-devel-$(uname -r)" kernel-headers \
+                || dnf install -y -q kernel-devel kernel-headers \
+                || echo "WARN: kernel-devel unavailable for $(uname -r)"
+              touch /tmp/observer-ready
+              exec sleep infinity
+          securityContext:
+            capabilities:
+              add:
+                - BPF
+                - PERFMON
+                - SYS_ADMIN
+                - SYS_RESOURCE
+                - SYS_PTRACE
+                - IPC_LOCK
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/observer-ready"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: tracefs
+              mountPath: /sys/kernel/tracing
+              readOnly: true
+            - name: btf
+              mountPath: /sys/kernel/btf
+              readOnly: true
+            - name: work
+              mountPath: /var/tmp/linux-sched
+      volumes:
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing
+            type: DirectoryOrCreate
+        - name: btf
+          hostPath:
+            path: /sys/kernel/btf
+            type: Directory
+        - name: work
+          hostPath:
+            path: /var/tmp/linux-sched
+            type: DirectoryOrCreate

@@ -107,13 +107,27 @@ linux-sched-observer-check: ## Check the node image installs the native observer
 	@echo "Checking node-native observer tooling provisioning..."
 	python3 $(LINUX_SCHED_EXPERIMENTS_DIR)/observer_check.py
 
+# ---- Observer DaemonSet ----
+
+.PHONY: linux-sched-observers-apply
+linux-sched-observers-apply: ## Validate and apply the capability-scoped observer DaemonSet
+	$(LINUX_SCHED_DIR)observers/apply.sh apply
+
+.PHONY: linux-sched-observers-delete
+linux-sched-observers-delete: ## Delete the observer DaemonSet
+	$(LINUX_SCHED_DIR)observers/apply.sh delete
+
+.PHONY: linux-sched-observers-test
+linux-sched-observers-test: ## Validate the observer DaemonSet manifests offline
+	$(LINUX_SCHED_DIR)observers/apply.sh test
+
 # ---- Test / clean ----
 
 .PHONY: linux-sched-test
 linux-sched-test: ## Run the linux-sched test suite (pytest + bats)
 	@set -e
 	@echo "Running linux-sched test suite..."
-	uv run pytest $(LINUX_SCHED_ANALYSIS_DIR)/tests/ $(LINUX_SCHED_EXPERIMENTS_DIR)/tests/
+	uv run pytest $(LINUX_SCHED_ANALYSIS_DIR)/tests/ $(LINUX_SCHED_EXPERIMENTS_DIR)/tests/ $(LINUX_SCHED_DIR)observers/tests/
 	@if command -v bats >/dev/null 2>&1; then bats $(LINUX_SCHED_TEST_DIR)/*.bats; else echo "  bats not installed; skipping shell tests"; fi
 
 .PHONY: linux-sched-clean

@@ -68,7 +68,41 @@ the build gate. Release artifacts (`target/release/`):
 | `scx_lavd` | 12862251 | `6ceff4e0f369e06fd9d9d69e7f4cbb7626151f918bce929aa805c1dffe98245f` |
 | `scx_mavd` | 13239568 | `0d89e6b1270e8feb228db23fdee4098af7c9306a0a390331215a2e3e47f8c981` |
 
-## Transport — FIXED (logs/exec), SSH still broken
+## Observer DaemonSet — deployed and verified
+
+A capability-scoped observer DaemonSet (`observers/observer-daemonset.yaml`)
+runs one Pod per research worker. Verified on the live cluster:
+
+- 3/3 observers Ready on the three `k8labs-md-0-*` workers; the control-plane
+  node is excluded because it is not labelled.
+- Inside an observer: `bpftrace` counts host scheduling activity
+  (`tracepoint:sched:sched_switch` → 5925 events in 2 s).
+
+**Node roles are unlabelled.** Every node reports `ROLES <none>` and the
+control-plane node carries neither `node-role.kubernetes.io/control-plane` nor a
+taint. Any `!node-role.kubernetes.io/control-plane` selector therefore matches
+*all* nodes. Membership is expressed by the opt-in label
+`linux-sched/research=observer` instead.
+
+## Known limitation — BCC needs matching kernel headers
+
+`bcc-tools` compiles its BPF programs at runtime and fails without headers for
+the running kernel:
+
+```
+chdir(/lib/modules/7.2.7-200.fc44.x86_64/build): No such file or directory
+```
+
+The image boots `7.2.7-200.fc44` while the Fedora repositories now carry
+`7.2.10-200.fc44`, so a matching `kernel-devel` may be unavailable. The observer
+attempts `kernel-devel-$(uname -r)` first and falls back to unpinned
+`kernel-devel`.
+
+`bpftrace` is unaffected — it uses BTF — so run-queue latency and migration
+metrics can be derived from bpftrace if BCC cannot be made to work on this
+kernel.
+
+## Transport — FIXED (logs/exec), SSH not used
 
 **Capability-scoped Pods work.** A Pod with `hostPID: true` and capabilities
 `BPF`, `PERFMON`, `SYS_ADMIN`, `SYS_RESOURCE`, `SYS_PTRACE`, `IPC_LOCK` starts

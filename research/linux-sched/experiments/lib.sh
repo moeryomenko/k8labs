@@ -25,6 +25,8 @@ LINUX_SCHED_QUIESCE_PCT="${LINUX_SCHED_QUIESCE_PCT:-10}"
 LINUX_SCHED_QUIESCE_HOLD_S="${LINUX_SCHED_QUIESCE_HOLD_S:-30}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
 
+OBSERVER_NAMESPACE="${OBSERVER_NAMESPACE:-linux-sched}"
+
 log() { printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
 die() { printf '[%s] FATAL: %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; exit 1; }
 
@@ -62,11 +64,31 @@ load_scenario() {
     : "${DURATION_S:?scenario $name missing DURATION_S}"
 }
 
-# ready_workers — Ready worker node names (control plane excluded by role label).
+# ready_workers — research workers, identified by the observer opt-in label.
+#
+# The lab's control-plane node carries neither a role label nor a taint (every
+# node reports ROLES <none>), so `!node-role.kubernetes.io/control-plane`
+# selects everything. The observer label is the only reliable discriminator.
 ready_workers() {
     kubectl_wl get nodes --no-headers \
-        -l '!node-role.kubernetes.io/control-plane' \
+        -l 'linux-sched/research=observer' \
         -o custom-columns=:metadata.name 2>/dev/null || true
+}
+
+# observer_pod POD_NAMESPACE — name of the observer pod on the target worker.
+observer_pod_for_node() {
+    local node="$1"
+    kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
+        -l 'app.kubernetes.io/name=linux-sched-observer' \
+        --field-selector "spec.nodeName=${node}" \
+        -o custom-columns=:metadata.name --no-headers 2>/dev/null | head -1
+}
+
+# kexec POD [args...] — run a command inside the observer pod.
+kexec() {
+    local pod="$1"
+    shift
+    kubectl_wl -n "$OBSERVER_NAMESPACE" exec "$pod" -- "$@"
 }
 
 node_internal_ip() {

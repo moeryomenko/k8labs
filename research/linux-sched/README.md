@@ -37,6 +37,8 @@ make linux-sched-experiment   SCENARIO=http              # confirmatory blocks
 make linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
 make linux-sched-analyze                                 # decision-rule summary
 make linux-sched-observer-check                          # node-native observer tooling gate
+make linux-sched-observers-apply                         # deploy the capability-scoped observers
+make linux-sched-observers-test                          # validate observer manifests (no cluster)
 make linux-sched-test                                    # pytest + bats
 ```
 
@@ -64,7 +66,8 @@ linux-sched/
 │   ├── capture-block.sh           # one measured sample per arm
 │   └── probes/sched-trace.bt      # sched_wakeup/switch/migrate trace
 ├── workloads/*.yaml               # pinned workload manifests
-├── GATES.md                       # recorded Phase 2 environment findings
+├── observers/                     # capability-scoped observer DaemonSet + gate
+├── GATES.md                       # recorded environment findings
 └── analysis/                      # paired analysis core + tests
 ```
 
