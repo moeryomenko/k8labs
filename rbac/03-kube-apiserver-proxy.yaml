@@ -24,3 +24,11 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: User
   name: kubernetes
+# The apiserver talks to kubelets with the CN on --kubelet-client-certificate
+# (/etc/kubernetes/pki/kubernetes.pem), which on this image authenticates as
+# `kube-apiserver`, not `kubernetes`. Without this subject every kubectl
+# logs/exec (and Cilium's node-proxy health checks) fails with Forbidden on
+# nodes/proxy.
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: kube-apiserver
