@@ -219,10 +219,12 @@ which carries features ahead of mainline.
 
 No current scx release can attach to this kernel. Two ways out:
 
-1. **Run the kernel the schedulers expect.** The local `linux/` checkout already
-   carries the newer sched_ext interface (`sched_ext_ops_cid`, `scx_bpf_cid_*`
-   kfuncs), so building and booting it — which the plan already allows for —
-   should align the ABI with `scx` v1.1.3/main.
+1. **Run the kernel the schedulers expect.** The local `linux/` checkout is
+   **v7.3.0-rc6** and carries the fields `scx` needs
+   (`rescue_bandwidth_ppt`, `rescue_quantum_us` in
+   `kernel/sched/ext/ext.c`) alongside the cid form, so building and booting it
+   aligns the ABI with `scx` main. This is the "build one pinned kernel from
+   `linux/`" path the plan already allows.
 2. **Match an older scx** whose struct equals 472/45; none of the recent tags do
    (v1.1.3 is 512, main is 528).
 
