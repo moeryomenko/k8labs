@@ -7,6 +7,9 @@ build/base/
 # Python virtual environment — created by uv sync
 .venv/
 
+# Local HostAgent configuration and generated mTLS material
+host-agent/
+
 # Extension release artifacts — squashfs images and directory-mode copies (reproducible)
 extensions/release/*.raw
 extensions/release/*/
