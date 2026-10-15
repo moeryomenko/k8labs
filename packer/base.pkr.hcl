@@ -67,6 +67,14 @@ build {
     environment_vars = [
       "KERNEL_VERSION=${var.kernel_version}",
       "KERNEL_REPO_URL=${var.kernel_repo_url}",
+      "FIXTURE_DIR=${var.fixture_dir}",
+      "FIXTURE_BIN_DIR=${var.fixture_bin_dir}",
+      "FIXTURE_CLIP_URL=${var.fixture_clip_url}",
+      "FIXTURE_CLIP_ZIP_SHA256=${var.fixture_clip_zip_sha256}",
+      "FIXTURE_CLIP_MP4_SHA256=${var.fixture_clip_mp4_sha256}",
+      "WRK2_REPO_URL=${var.wrk2_repo_url}",
+      "WRK2_COMMIT=${var.wrk2_commit}",
+      "PGBENCH_SCALE=${var.pgbench_scale}",
     ]
     scripts = [
       "scripts/01-configure-system.sh",

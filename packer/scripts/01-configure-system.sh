@@ -136,3 +136,115 @@ dnf install -y conmon parted growpart \
     libbpf-tools \
     python3-bcc \
     bpftool
+
+# ---------------------------------------------------------------------------
+# Scheduler-research fixtures
+# ---------------------------------------------------------------------------
+# Baked onto the node because the workload Pods mount them read-only and the lab
+# has no PVC and no SSH to the VMs. The load generators themselves run inside
+# the observer container, so wrk2 is installed into FIXTURE_BIN_DIR, which the
+# observer also mounts. Node and container are both Fedora 44, so a node-built
+# binary runs in the container.
+#
+# Set FIXTURE_DIR empty to skip this section entirely (a bake that is not for
+# the scheduler-research series).
+FIXTURE_DIR="${FIXTURE_DIR:-/var/lib/linux-sched/fixtures}"
+FIXTURE_BIN_DIR="${FIXTURE_BIN_DIR:-/var/lib/linux-sched/bin}"
+FIXTURE_CLIP_URL="${FIXTURE_CLIP_URL:-https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4.zip}"
+FIXTURE_CLIP_ZIP_SHA256="${FIXTURE_CLIP_ZIP_SHA256:-109e3ede8790bd633f374ca311d9cc61dce8d7f98f5b0797ca98199c9fbceedf}"
+FIXTURE_CLIP_MP4_SHA256="${FIXTURE_CLIP_MP4_SHA256:-f78f39603e6774907f2faafabf26a667f4a6fc31769ec304a8a8f7c62d280508}"
+WRK2_REPO_URL="${WRK2_REPO_URL:-https://github.com/giltene/wrk2}"
+WRK2_COMMIT="${WRK2_COMMIT:-44a94c17d8e6a0bac8559b53da76848e430cb7a7}"
+PGBENCH_SCALE="${PGBENCH_SCALE:-10}"
+
+if [ -n "${FIXTURE_DIR}" ]; then
+    mkdir -p "${FIXTURE_DIR}" "${FIXTURE_BIN_DIR}"
+
+    # Build tools plus the PostgreSQL server used to take the snapshot. The
+    # server package is bake-time only; the workload runs the pinned
+    # postgres image, and the observer installs the client for pgbench.
+    dnf install -y gcc make git openssl-devel curl unzip \
+        postgresql postgresql-server
+
+    # Fedora packages wrk, which cannot hold a fixed offered rate (wrk2's -R).
+    # The scenarios measure latency under a fixed rate, so the fork is built
+    # here and pinned by commit.
+    wrk2_tmp=$(mktemp -d)
+    git clone --quiet --recursive "${WRK2_REPO_URL}" "${wrk2_tmp}/wrk2"
+    git -C "${wrk2_tmp}/wrk2" checkout --quiet "${WRK2_COMMIT}"
+    make -C "${wrk2_tmp}/wrk2" WITH_OPENSSL=1
+    install -m 0755 "${wrk2_tmp}/wrk2/wrk" "${FIXTURE_BIN_DIR}/wrk2"
+    rm -rf "${wrk2_tmp}"
+
+    # The FFmpeg scenario loops a licensed clip. Both the archive and the
+    # extracted file are verified, so a truncated or substituted download
+    # cannot reach a run.
+    clip_tmp=$(mktemp -d)
+    curl -fsSL -o "${clip_tmp}/clip.zip" "${FIXTURE_CLIP_URL}"
+    echo "${FIXTURE_CLIP_ZIP_SHA256}  ${clip_tmp}/clip.zip" | sha256sum -c -
+    unzip -j -o -q "${clip_tmp}/clip.zip" -d "${clip_tmp}"
+    clip_mp4=$(find "${clip_tmp}" -maxdepth 1 -name '*.mp4' | head -1)
+    if [ -z "${clip_mp4}" ]; then
+        echo "ERROR: clip archive contained no .mp4" >&2
+        exit 1
+    fi
+    echo "${FIXTURE_CLIP_MP4_SHA256}  ${clip_mp4}" | sha256sum -c -
+    install -m 0644 "${clip_mp4}" "${FIXTURE_DIR}/input.mp4"
+    rm -rf "${clip_tmp}"
+
+    # pgbench transaction script. The row ranges follow the snapshot's scale
+    # and are written out as literals: a script that reads :scale depends on
+    # how pgbench was invoked, and the workload must be identical for every
+    # arm. The shell leaves :aid and friends alone, so the heredoc stays
+    # unquoted only to interpolate the ranges.
+    PGBENCH_AID_MAX=$(( 100000 * PGBENCH_SCALE ))
+    PGBENCH_BID_MAX=$(( 1 * PGBENCH_SCALE ))
+    PGBENCH_TID_MAX=$(( 10 * PGBENCH_SCALE ))
+    cat > "${FIXTURE_DIR}/transactions.sql" <<SQL
+\\set aid random(1, ${PGBENCH_AID_MAX})
+\\set bid random(1, ${PGBENCH_BID_MAX})
+\\set tid random(1, ${PGBENCH_TID_MAX})
+\\set delta random(-5000, 5000)
+BEGIN;
+UPDATE pgbench_accounts SET abalance = abalance + :delta WHERE aid = :aid;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
+UPDATE pgbench_tellers SET tbalance = tbalance + :delta WHERE tid = :tid;
+UPDATE pgbench_branches SET bbalance = bbalance + :delta WHERE bid = :bid;
+INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (:tid, :bid, :aid, :delta, CURRENT_TIMESTAMP);
+END;
+SQL
+
+    # PostgreSQL snapshot, taken with this image's server. The workload image
+    # is pinned to the same major version, because a dump cannot be restored
+    # into an older server. Restoring this same dump before every arm is what
+    # makes the arms comparable, so it is a plain SQL dump the image's
+    # entrypoint can replay from /docker-entrypoint-initdb.d.
+    pgsnap_data=/var/lib/pgsql/sched-snap
+    pgsnap_sock=/tmp/sched-snap
+    rm -rf "${pgsnap_data}" "${pgsnap_sock}"
+    install -d -o postgres -g postgres "${pgsnap_data}" "${pgsnap_sock}"
+    runuser -u postgres -- initdb -D "${pgsnap_data}" >/dev/null
+    runuser -u postgres -- pg_ctl -D "${pgsnap_data}" \
+        -o "-k ${pgsnap_sock} -p 55432 -c fsync=off" -w start >/dev/null
+    runuser -u postgres -- createdb -h "${pgsnap_sock}" -p 55432 bench
+    runuser -u postgres -- pgbench -h "${pgsnap_sock}" -p 55432 \
+        -i -s "${PGBENCH_SCALE}" bench >/dev/null
+    runuser -u postgres -- pg_dump -h "${pgsnap_sock}" -p 55432 bench \
+        > "${FIXTURE_DIR}/pgbench.sql"
+    runuser -u postgres -- pg_ctl -D "${pgsnap_data}" -m immediate -w stop >/dev/null
+    rm -rf "${pgsnap_data}" "${pgsnap_sock}"
+
+    # The observer and the workload Pods mount these paths. A freshly baked
+    # path does not carry the container file type, so label it where the
+    # policy is enforcing. Best effort: on a permissive node this is a no-op.
+    chcon -R -t container_file_t "${FIXTURE_DIR}" "${FIXTURE_BIN_DIR}" 2>/dev/null || true
+
+    # Record what was baked, so a run can state its inputs.
+    {
+        echo "clip_url=${FIXTURE_CLIP_URL}"
+        echo "clip_sha256=${FIXTURE_CLIP_MP4_SHA256}"
+        echo "wrk2_commit=${WRK2_COMMIT}"
+        echo "pgbench_scale=${PGBENCH_SCALE}"
+        echo "postgres_server=$(rpm -q --qf '%{VERSION}' postgresql-server)"
+    } > "${FIXTURE_DIR}/BAKED"
+fi

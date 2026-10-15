@@ -15,6 +15,63 @@ variable "kernel_repo_url" {
 }
 
 # ---------------------------------------------------------------------------
+# Scheduler-research fixtures
+# ---------------------------------------------------------------------------
+# Baked onto the node, not shipped in an image: the lab has no PVC and no SSH to
+# the VMs, and the workload Pods and the observer DaemonSet mount these paths
+# read-only. The load generators execute inside the observer container, so the
+# observer also mounts the tools directory; node and container are both
+# Fedora 44, so a node-built binary runs in the container.
+
+variable "fixture_dir" {
+  description = "On-node directory holding the baked workload fixtures"
+  type        = string
+  default     = "/var/lib/linux-sched/fixtures"
+}
+
+variable "fixture_bin_dir" {
+  description = "On-node directory holding the baked research tools (wrk2)"
+  type        = string
+  default     = "/var/lib/linux-sched/bin"
+}
+
+variable "fixture_clip_url" {
+  description = "URL of the licensed FFmpeg input clip archive (Big Buck Bunny, CC-BY 3.0)"
+  type        = string
+  default     = "https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4.zip"
+}
+
+variable "fixture_clip_zip_sha256" {
+  description = "SHA256 of the downloaded clip archive"
+  type        = string
+  default     = "109e3ede8790bd633f374ca311d9cc61dce8d7f98f5b0797ca98199c9fbceedf"
+}
+
+variable "fixture_clip_mp4_sha256" {
+  description = "SHA256 of the extracted clip, which is what the workload reads"
+  type        = string
+  default     = "f78f39603e6774907f2faafabf26a667f4a6fc31769ec304a8a8f7c62d280508"
+}
+
+variable "wrk2_repo_url" {
+  description = "Git repository for wrk2 (fixed-rate HTTP load generator)"
+  type        = string
+  default     = "https://github.com/giltene/wrk2"
+}
+
+variable "wrk2_commit" {
+  description = "wrk2 commit to build; wrk2 is not packaged in Fedora"
+  type        = string
+  default     = "44a94c17d8e6a0bac8559b53da76848e430cb7a7"
+}
+
+variable "pgbench_scale" {
+  description = "pgbench scale factor for the baked PostgreSQL snapshot"
+  type        = number
+  default     = 10
+}
+
+# ---------------------------------------------------------------------------
 # Cloud-Hypervisor builder settings
 # ---------------------------------------------------------------------------
 
