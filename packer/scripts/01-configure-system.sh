@@ -92,7 +92,7 @@ mkdir -p /var/lib/extensions /var/lib/confexts
 # to create device nodes for privileged containers.
 dnf install -y conmon parted growpart \
     bpftrace \
-    kernel-tools \
+    perf \
     bcc-tools \
     python3-bcc \
     bpftool

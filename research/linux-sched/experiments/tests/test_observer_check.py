@@ -24,10 +24,10 @@ def test_dnf_install_block_collects_continuations() -> None:
     assert "other command" not in block
 
 
-def test_every_required_package_is_declared() -> None:
+def test_observer_check_required_packages() -> None:
     assert set(REQUIRED_PACKAGES) == {
         "bpftrace",
-        "kernel-tools",
+        "perf",
         "bcc-tools",
         "python3-bcc",
         "bpftool",
@@ -39,7 +39,7 @@ def test_missing_package_is_reported(tmp_path: Path, monkeypatch) -> None:
     provisioner.write_text("dnf install -y bpftrace\n", encoding="utf-8")
     monkeypatch.setattr(observer_check, "PACKER_PROVISIONER", provisioner)
     errors = check()
-    assert any("kernel-tools" in e for e in errors)
+    assert any("perf" in e and "does not install" in e for e in errors)
 
 
 def test_package_substring_does_not_match(tmp_path: Path, monkeypatch) -> None:

@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PACKER_PROVISIONER = PROJECT_ROOT / "packer" / "scripts" / "01-configure-system.sh"
 SERIES_DIR = PROJECT_ROOT / "research" / "linux-sched"
 
-REQUIRED_PACKAGES = ("bpftrace", "kernel-tools", "bcc-tools", "python3-bcc", "bpftool")
+REQUIRED_PACKAGES = ("bpftrace", "perf", "bcc-tools", "python3-bcc", "bpftool")
 
 
 def _dnf_install_block(text: str) -> str:

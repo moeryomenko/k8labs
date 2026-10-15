@@ -68,30 +68,53 @@ the build gate. Release artifacts (`target/release/`):
 | `scx_lavd` | 12862251 | `6ceff4e0f369e06fd9d9d69e7f4cbb7626151f918bce929aa805c1dffe98245f` |
 | `scx_mavd` | 13239568 | `0d89e6b1270e8feb228db23fdee4098af7c9306a0a390331215a2e3e47f8c981` |
 
-## Transport — BLOCKED
+## Transport — PARTIALLY BLOCKED
 
-Every transport the original design assumed is currently broken on this lab:
+The originally planned privileged observer DaemonSets cannot run, but the reason
+turned out to be narrower than it first appeared.
+
+**Capability-scoped Pods work.** A Pod with `hostPID: true` and capabilities
+`BPF`, `PERFMON`, `SYS_ADMIN`, `SYS_RESOURCE`, `SYS_PTRACE`, `IPC_LOCK` starts
+normally — unlike a `privileged: true` Pod, which fails with
+`mknodat /dev/loop0: Permission denied`. In that Pod, `bpftrace` attaches probes
+and observed host scheduling activity (8598 `sched_switch` events in 3 s). So
+BPF tracing does **not** require the privileged flag on this lab; the observer
+can be a capability-scoped DaemonSet.
+
+Still broken:
 
 1. **SSH to the VMs.** TCP connects to ports 22 on all four nodes, but no SSH
-   banner ever arrives (`Connection timed out during banner exchange`). The
-   runner's `ssh_node` transport cannot be used.
+   banner ever arrives (`Connection timed out during banner exchange`). Any
+   SSH-driven transport cannot be used.
 2. **`kubectl logs` / `exec`.** Forbidden cluster-wide: the apiserver's kubelet
    client lacks `nodes/proxy`
    (`Forbidden (user=kube-apiserver, verb=get, resource=nodes,
-   subresource(s)=[proxy])`), reproduced against a Cilium pod. Collecting results
-   from a Pod this way is impossible.
-3. **Privileged Pods.** Containers with `privileged: true` fail to start with
-   `mknodat /dev/loop0: Permission denied`, so the originally planned privileged
-   observer DaemonSets cannot run at all.
+   subresource(s)=[proxy])`), reproduced against a Cilium pod. Pod stdout cannot
+   be read this way, which is what a full tracing agent would naturally use.
 
-What *does* work: image pulls, `kubectl apply/get/delete`, and non-privileged
-Pods with a read-only `hostPath` mount.
+What works today: image pulls, `kubectl apply/get/delete`, capability-scoped and
+non-privileged Pods, read-only host mounts, and the container termination
+message as a small (≈4 KiB) result channel.
+
+## Packaging notes (Fedora 44)
+
+| Tool | Package | Path |
+|---|---|---|
+| `bpftrace` | `bpftrace` | `/usr/bin/bpftrace` |
+| `perf` | `perf` (not `kernel-tools`) | `/usr/bin/perf` |
+| `runqlat`, `runqlen` | `bcc-tools` | `/usr/share/bcc/tools/` |
+| BCC Python bindings | `python3-bcc` | — |
+| `bpftool` | `bpftool` | `/usr/bin/bpftool` |
+
+`runqlat`/`runqlen` are **not** on `$PATH`; they live under
+`/usr/share/bcc/tools/`.
 
 ## Consequence for the design
 
-- Observer tooling is node-native in the image; there are no privileged
-  DaemonSets in this series.
-- The runner needs one working transport before confirmatory runs. Candidates,
-  in rough order of effort: repair the apiserver→kubelet `nodes/proxy`
-  authorization, repair VM SSH, or have a node-native service publish results
-  through the Kubernetes API.
+- Observer tooling is provisioned into the node image (node-native) and can also
+  run from a capability-scoped Pod.
+- The runner still needs one working **result transport** before confirmatory
+  runs: repair the apiserver→kubelet `nodes/proxy` authorization (restores
+  `logs`/`exec`), repair VM SSH, or publish results from the node through the
+  Kubernetes API.
+

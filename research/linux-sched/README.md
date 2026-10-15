@@ -91,9 +91,9 @@ rather than reporting a fake success):
    and clang 22+.
 2. `scx_bpfland`/`scx_lavd`/`scx_mavd` binaries staged on the worker, with
    verifier/attach/progress/detach checks passing.
-3. `bpftrace`, `perf` (kernel-tools), and the BCC tools installed on the worker
-   image. These are node-native: the image bake installs them, and the series
-   never runs a privileged observer Pod (see `GATES.md`).
+3. `bpftrace`, `perf`, and the BCC tools installed on the worker image. These
+   are node-native: the image bake installs them (see `GATES.md` for the exact
+   packages and paths), and the series ships no privileged observer Pod.
 4. Pinned workload images plus the licensed FFmpeg fixture.
 5. A working node transport for the runner. SSH to the worker VMs and the
    cluster's `kubectl logs`/`exec` path are both currently broken in this lab
