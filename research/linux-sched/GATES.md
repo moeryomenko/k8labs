@@ -198,36 +198,36 @@ Open gap: nothing recreates `/tmp/ch-capi` after a `/tmp` cleanup, so this
 recurs. A user `tmpfiles.d` entry, or moving the socket root out of `/tmp`,
 would close it.
 
-## sched_ext arms — blocked by a vmlinux.h / kernel mismatch
+## sched_ext arms — blocked, cause not yet identified
 
 The release binaries build and run in the observer (`scx_bpfland 1.1.3`), but
 attaching fails:
 
 ```
+libbpf: object 'bpf_bpf': failed (-95) to create BPF token from '/sys/fs/bpf', skipping optional step...
+libbpf: failed to load BPF skeleton 'bpf_bpf': -EINVAL
 Error: Failed to load BPF program
 Caused by:
     Invalid argument (os error 22)
 ```
 
-libbpf reports no verifier failure, only `failed to open system Kconfig`, which
-points at the struct_ops load rather than program verification. The likely cause
-is an ABI mismatch between the build and the kernel:
+The `-95` BPF-token step is optional and skipped. There is **no verifier log**,
+so the failure is not program verification — it happens at object/map load.
+`/sys/fs/bpf` being absent was fixed in the observer and changed nothing.
 
-| | |
-|---|---|
-| `scx` vendored vmlinux.h | `vmlinux-v7.3-rc5-g6ebdea0d0fb8.h` |
-| running node kernel | `7.2.10-200.fc44.x86_64` |
+**The vmlinux.h mismatch was tested and did not fix it.** The scx checkout ships
+`vmlinux-v7.3-rc5-g6ebdea0d0fb8.h` while the nodes run `7.2.10`. Regenerating a
+dump from the running kernel's BTF, repointing `scheds/vmlinux/arch/x86/vmlinux.h`,
+rebuilding `rust/scx_utils/vmlinux.tar.zst`, and rebuilding `scx_bpfland`
+produced the identical `EINVAL`. That experiment was reverted; the scx checkout
+is clean.
 
-`sched_ext_ops` is a struct_ops type whose layout libbpf must match the running
-kernel's BTF; building against 7.3-rc5 and loading on 7.2.10 is expected to
-reject.
-
-Next step: regenerate vmlinux.h from the running kernel's BTF (the observer has
-`bpftool`; the host has `bpftool` absent, so dump from `/sys/kernel/btf/vmlinux`
-inside the observer) and rebuild `scx_bpfland`/`scx_lavd`/`scx_mavd` against it,
-following `scx/AGENTS.md` "Updating vmlinux.h". Mounting `/sys/fs/bpf` in the
-observer is also required (it is absent by default) so libbpf can create its
-BPF token.
+Still unidentified. What is known: the observer holds `CAP_BPF`/`CAP_SYS_ADMIN`
+with `hostPID`; `unprivileged_bpf_disabled=1`; the kernel advertises
+`sched_ext/enable_seq`; the failure yields no verifier output. Next candidates:
+read the kernel's own rejection from the host (`dmesg`/journal, unavailable
+inside the pod), or run a minimal `sched_ext` struct_ops loader to isolate
+whether the kernel rejects the map type or the scheduler.
 
 Until then only the EEVDF arm is runnable end to end.
 
