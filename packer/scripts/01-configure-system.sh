@@ -180,6 +180,13 @@ if [ -n "${FIXTURE_DIR}" ]; then
     install -m 0755 "${wrk2_tmp}/wrk2/wrk" "${FIXTURE_BIN_DIR}/wrk2"
     rm -rf "${wrk2_tmp}"
 
+    # Verify the load generator actually runs. The link emitted
+    # "ld.bfd: obj/bytecode.o: string table [3] is corrupt" once and still
+    # produced a binary; a load generator that cannot start would otherwise
+    # only surface in the middle of a block.
+    "${FIXTURE_BIN_DIR}/wrk2" --version 2>&1 | grep -q '^wrk ' \
+        || { echo "ERROR: baked wrk2 does not run" >&2; exit 1; }
+
     # The FFmpeg scenario loops a licensed clip. Both the archive and the
     # extracted file are verified, so a truncated or substituted download
     # cannot reach a run.
@@ -237,6 +244,15 @@ SQL
         > "${FIXTURE_DIR}/pgbench.sql"
     runuser -u postgres -- pg_ctl -D "${pgsnap_data}" -m immediate -w stop >/dev/null
     rm -rf "${pgsnap_data}" "${pgsnap_sock}"
+
+    # Verify the snapshot is not empty. Without postgresql-contrib the pgbench
+    # step fails while still writing a valid-looking dump of an empty database,
+    # so presence alone proves nothing; pgbench -i creates four tables.
+    pgsnap_tables=$(grep -c 'CREATE TABLE' "${FIXTURE_DIR}/pgbench.sql" || true)
+    if [ "${pgsnap_tables}" -lt 4 ]; then
+        echo "ERROR: snapshot has ${pgsnap_tables} tables, expected 4" >&2
+        exit 1
+    fi
 
     # The observer and the workload Pods mount these paths. A freshly baked
     # path does not carry the container file type, so label it where the
