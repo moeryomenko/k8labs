@@ -108,24 +108,39 @@ prune-runs: ## Remove successful run bundles older than RUN_RETENTION_DAYS
 	find build/runs -mindepth 1 -maxdepth 1 -type d -mtime "+$$days" -exec rm -rf -- {} + 2>/dev/null || true
 
 .PHONY: kind-up kind-down kind-check
-kind-up: prepare-check ## Create or reuse the digest-pinned kind management cluster
+MGMT_CLUSTER_NAME ?= k8labs-mgmt
+MGMT_CONTEXT ?= kind-$(MGMT_CLUSTER_NAME)
+MGMT_FORCE ?= 0
+
+kind-up: prepare-check ## Create or reuse the cached-image Kind management cluster
 	@set -Eeuo pipefail; \
 	command -v kind >/dev/null 2>&1 || { echo "ERROR: kind is required; install the locked kind version" >&2; exit 1; }; \
-	if kind get clusters 2>/dev/null | grep -qx k8labs-mgmt; then \
-		echo 'kind management cluster already exists'; \
+	python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --image-id kind-node; \
+	if kind get clusters 2>/dev/null | grep -qx "$(MGMT_CLUSTER_NAME)"; then \
+		echo 'Kind management cluster already exists'; \
+		kind export kubeconfig --name "$(MGMT_CLUSTER_NAME)"; \
 	else \
-		if [ "$${OFFLINE:-0}" = 1 ]; then \
-			kind create cluster --config kind.yaml --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5; \
-		else \
-			kind create cluster --config kind.yaml; \
-		fi; \
-	fi
+		kind create cluster --name "$(MGMT_CLUSTER_NAME)" --config kind.yaml; \
+	fi; \
+	kubectl config get-contexts -o name | grep -qx "$(MGMT_CONTEXT)" || { \
+		echo "ERROR: Kind cluster $(MGMT_CLUSTER_NAME) did not provide context $(MGMT_CONTEXT)" >&2; \
+		exit 1; \
+	}
 
-kind-down: ## Delete only the k8labs-owned kind management cluster
-	@kind delete cluster --name k8labs-mgmt
+kind-down: ## Delete the owned Kind management cluster only when it has no CAPI Clusters (MGMT_FORCE=1 overrides)
+	@set -Eeuo pipefail; \
+	if ! kind get clusters 2>/dev/null | grep -qx "$(MGMT_CLUSTER_NAME)"; then \
+		echo 'Kind management cluster does not exist'; \
+		exit 0; \
+	fi; \
+	if [ "$(MGMT_FORCE)" != 1 ] && kubectl --context "$(MGMT_CONTEXT)" get clusters.cluster.x-k8s.io --no-headers 2>/dev/null | grep -q .; then \
+		echo 'ERROR: refusing to delete management cluster while CAPI Cluster objects remain; run make cluster-down or set MGMT_FORCE=1' >&2; \
+		exit 1; \
+	fi; \
+	kind delete cluster --name "$(MGMT_CLUSTER_NAME)"
 
-kind-check: ## Check kind management-cluster reachability
-	@kubectl --context kind-k8labs-mgmt get nodes --no-headers
+kind-check: ## Check Kind management-cluster reachability
+	@kubectl --context "$(MGMT_CONTEXT)" get nodes --no-headers
 
 .PHONY: base-deps
 base-deps: ## Download CLOUDHV.fd firmware and Fedora Cloud Base image
@@ -328,93 +343,35 @@ all: base extensions ## Build base image + all extensions
 
 # --- CAPI Management Plane ---
 #
-# The cluster lifecycle is driven by a rootless capishim management plane:
-# quadlet units run capishim-pod (etcd + apiserver), k8netd (userspace
-# networking) and the cluster-api-hypervisor provider manager as systemd
-# user services. clusterctl-style flows apply capi/cluster.yaml against that
-# plane; the resulting workload kubeconfig lands in build/kubeconfig.
+# The management API is the owned Kind cluster. The provider manager runs in
+# that cluster with no host mounts; the HostAgent is a separate rootless host
+# service and is the only component that receives KVM and user-session inputs.
 
 CLUSTER_NAME ?= k8labs
-CAPISHIM_KUBECONFIG := $${HOME}/.kube/capishim.kubeconfig
 WORKLOAD_KUBECONFIG := build/kubeconfig
-MGMT_UNITS := capishim-pod.service k8netd.service cluster-api-hypervisor.service
+HOST_AGENT_CONFIG ?= $${XDG_CONFIG_HOME:-$${HOME}/.config}/k8labs/host-agent
 
-# Provider state root: the provider quadlet bind-mounts this into /build and
-# boots machines from the baked base image, firmware, and vm-disks. It also
-# needs /tmp/ch-capi (CH api socket dir) to exist.
-PROVIDER_STATE := $${HOME}/.local/state/k8slab/build
-PROVIDER_STATE_SSH_KEY := $(PROVIDER_STATE)/ssh-lab.pub
+.PHONY: host-agent-install host-agent-up host-agent-check
+host-agent-install: prepare-check ## Render the separately managed HostAgent service from locked inputs
+	@python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --image-id cluster-api-hypervisor
+	@python3 scripts/host_agent.py install --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --config-dir "$(HOST_AGENT_CONFIG)"
 
-.PHONY: provider-state
-provider-state: ## Create provider state dirs and publish bake artifacts into the provider's build mount (idempotent)
-	@set -euo pipefail; \
-	echo '==> Creating provider state dirs...'; \
-	mkdir -p "$(PROVIDER_STATE)/vm-disks"; \
-	mkdir -p /tmp/ch-capi; \
-	echo '==> Publishing bake artifacts to $(PROVIDER_STATE)...'; \
-	cp -f "$(BASE_IMAGE_DEST)" "$(PROVIDER_STATE)/k8labs-base.qcow2"; \
-	cp -f "$(FIRMWARE_DEST)" "$(PROVIDER_STATE)/CLOUDHV.fd"; \
-	if [ ! -f "$(SSH_KEY).pub" ]; then \
-		echo "ERROR: $(SSH_KEY).pub not found - run 'make base-ssh-key' first" >&2; \
-		exit 1; \
-	fi; \
-	cp -f "$(SSH_KEY).pub" "$(PROVIDER_STATE_SSH_KEY)"; \
-	echo "    Published base image, firmware, and lab SSH key"
+host-agent-up: host-agent-install ## Start the separately managed HostAgent service
+	@python3 scripts/host_agent.py start --config-dir "$(HOST_AGENT_CONFIG)"
 
-# Management-plane images come from CI: each sibling repo (capishim,
-# cluster-api-hypervisor, k8netd) builds and pushes its images to ghcr.io via
-# GitHub Actions. mgmt-images pulls the pinned tags and retags them to the
-# localhost/* names the installed quadlets reference, so the quadlet Image=
-# lines stay unchanged.
-GHCR_OWNER := moeryomenko
-MGMT_IMAGE_TAG ?= latest
-
-.PHONY: mgmt-images
-mgmt-images: ## Pull management-plane images from ghcr.io and retag to the quadlet localhost/* names (idempotent; keeps existing local images when the registry tag is not yet published)
-	@set -euo pipefail; \
-	if [ "$${OFFLINE:-0}" = 1 ]; then \
-		echo 'ERROR: OFFLINE=1 forbids GHCR pulls; import verified management images into the lock cache first' >&2; \
-		exit 1; \
-	fi; \
-	pull_retag() { \
-		src="$$1"; dst="$$2"; \
-		if podman image exists "$${dst}" 2>/dev/null; then \
-			echo "==> $${dst} already present (keeping local image)"; \
-			return 0; \
-		fi; \
-		echo "==> $(GHCR_OWNER)/$${src}:$(MGMT_IMAGE_TAG) -> $${dst}"; \
-		podman pull "ghcr.io/$(GHCR_OWNER)/$${src}:$(MGMT_IMAGE_TAG)"; \
-		podman tag "ghcr.io/$(GHCR_OWNER)/$${src}:$(MGMT_IMAGE_TAG)" "$${dst}"; \
-	}; \
-	pull_retag "k8netd" "localhost/k8netd:dev"; \
-	pull_retag "cluster-api-hypervisor" "localhost/cluster-api-hypervisor:dev"; \
-	for comp in setup core cabpk kcp capd; do \
-		pull_retag "capishim-$${comp}" "localhost/capishim-$${comp}:v0.1.0"; \
-	done; \
-	echo '    Management-plane images present (localhost/* names)'
+host-agent-check: ## Verify HostAgent service state and required local inputs
+	@python3 scripts/host_agent.py check --config-dir "$(HOST_AGENT_CONFIG)"
 
 .PHONY: prereq
-prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, python3 venv, clusterctl, kubectl, podman), quadlet units, the capishim kubeconfig, KVM readiness (/dev/kvm + kvm group), and baked build artifacts
+prereq: ## Validate tools, KVM access, baked artifacts, and the locked management cache
 	@set -euo pipefail; \
 	fail=0; \
-	for cmd in cloud-hypervisor openssl systemctl jq python3 clusterctl kubectl; do \
-		if ! command -v $$cmd &>/dev/null; then \
+	for cmd in cloud-hypervisor openssl jq python3 clusterctl kubectl podman kind skopeo; do \
+		if ! command -v $$cmd >/dev/null 2>&1; then \
 			echo "ERROR: required tool '$$cmd' not found on PATH" >&2; \
 			fail=1; \
 		fi; \
 	done; \
-	QDIR="$${XDG_CONFIG_HOME:-$$HOME/.config}/containers/systemd"; \
-	for unit in capishim.pod k8netd.container cluster-api-hypervisor.container; do \
-		if [ ! -f "$$QDIR/$$unit" ]; then \
-			echo "ERROR: quadlet unit '$$unit' not found in $$QDIR - install it for the capishim management plane" >&2; \
-			fail=1; \
-		fi; \
-	done; \
-	KC="$${HOME}/.kube/capishim.kubeconfig"; \
-	if [ ! -f "$$KC" ]; then \
-		echo "ERROR: capishim kubeconfig not found at $$KC - provision the management plane first" >&2; \
-		fail=1; \
-	fi; \
 	if [ ! -d ".venv" ]; then \
 		echo "ERROR: Python virtual environment '.venv' not found - run make node-tools first" >&2; \
 		fail=1; \
@@ -427,10 +384,6 @@ prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, pyth
 		echo "ERROR: current user is not in the kvm group - add your user to the kvm group: sudo usermod -aG kvm $$USER" >&2; \
 		fail=1; \
 	fi; \
-	if ! command -v podman &>/dev/null; then \
-		echo "ERROR: required tool 'podman' not found on PATH - install podman (rootless container runtime for the management plane)" >&2; \
-		fail=1; \
-	fi; \
 	if [ ! -f "$(BASE_IMAGE_DEST)" ]; then \
 		echo "ERROR: base image '$(BASE_IMAGE_DEST)' not found - run 'make base' to bake it first" >&2; \
 		fail=1; \
@@ -441,96 +394,27 @@ prereq: ## Validate CAPI tooling (cloud-hypervisor, openssl, systemctl, jq, pyth
 	fi; \
 	exit $$fail
 
-# Setup ordering: after the management API answers, mgmt-up first waits for
-# the capishim-setup oneshot to converge (Result=success via `systemctl --user
-# show -p Result --value capishim-setup.service`; a probe that cannot read the
-# unit counts as converged; 'unknown'/empty Result while activating keeps
-# polling) BEFORE the readyz gate below, so cluster applies never race
-# not-yet-installed webhooks.
-#
-# REQ-012 (D7): after the management API answers, mgmt-up additionally gates
-# on the provider health endpoint http://127.0.0.1:9440/readyz so cluster-up
-# never races fail-closed admission. Only an HTTP 200 answer passes the gate.
-# Every other outcome — a non-200 status or a transport-level failure such as
-# connection refused (the provider unit is dead) — counts as not-ready and is
-# retried until the bounded timeout expires (~60s, 2s interval), then fails
-# naming the provider unit and the health address. Probe mechanism: curl,
-# falling back to wget, then python3 (prereq guarantees python3).
-.PHONY: mgmt-up
-mgmt-up: ## Start the capishim management plane units and wait until its API and the provider /readyz respond (idempotent)
-	@set -euo pipefail; \
-	echo '==> Starting capishim management plane ($(MGMT_UNITS))...'; \
-	systemctl --user start $(MGMT_UNITS); \
-	plane_ready=0; \
-	for i in $$(seq 1 30); do \
-		if kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" get namespaces >/dev/null 2>&1; then \
-			plane_ready=1; \
-			break; \
-		fi; \
-		echo "    waiting for management plane ($$i/30)..."; \
-		sleep 2; \
-	done; \
-	if [ "$$plane_ready" != "1" ]; then \
-		echo 'ERROR: capishim management plane did not respond within timeout' >&2; \
-		exit 1; \
-	fi; \
-	echo '    Management plane ready'; \
-	echo '==> Waiting for capishim-setup oneshot convergence (capishim-setup.service)...'; \
-	setup_ok=0; \
-	for i in $$(seq 1 30); do \
-		if ! setup_result=$$(systemctl --user show -p Result --value capishim-setup.service 2>/dev/null); then \
-			setup_ok=1; \
-			break; \
-		fi; \
-		if [ "$$setup_result" = "success" ]; then \
-			setup_ok=1; \
-			break; \
-		fi; \
-		echo "    waiting for capishim-setup ($$i/30)..."; \
-		sleep 2; \
-	done; \
-	if [ "$$setup_ok" != "1" ]; then \
-		echo 'ERROR: capishim-setup.service did not converge within the bounded wait; applying clusters now would race not-yet-installed webhooks' >&2; \
-		echo '       Inspect the setup oneshot: journalctl --user -u capishim-setup -n 50' >&2; \
-		exit 1; \
-	fi; \
-	echo '    capishim-setup converged'; \
-	echo '==> Waiting for provider readiness (cluster-api-hypervisor.service)...'; \
-	readyz_url='http://127.0.0.1:9440/readyz'; \
-	if command -v curl >/dev/null 2>&1; then \
-		readyz_probe() { [ "$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$$readyz_url")" = "200" ]; }; \
-	elif command -v wget >/dev/null 2>&1; then \
-		readyz_probe() { wget -q -T 5 -O /dev/null "$$readyz_url"; }; \
-	elif command -v python3 >/dev/null 2>&1; then \
-		readyz_probe() { python3 -c 'import urllib.request as u, sys; r = u.urlopen(sys.argv[1], timeout=5); sys.exit(0 if r.status == 200 else 1)' "$$readyz_url" 2>/dev/null; }; \
-	else \
-		echo 'ERROR: no fetch tool (curl/wget/python3) on PATH to probe the provider health address http://127.0.0.1:9440/readyz' >&2; \
-		exit 1; \
-	fi; \
-	for i in $$(seq 1 30); do \
-		if readyz_probe; then \
-			echo '    Provider ready'; \
-			exit 0; \
-		fi; \
-		echo "    waiting for provider readyz ($$i/30)..."; \
-		sleep 2; \
-	done; \
-	echo 'ERROR: cluster-api-hypervisor.service never became ready: http://127.0.0.1:9440/readyz did not answer ok within the bounded wait' >&2; \
-	echo '       Inspect the provider unit: journalctl --user -u cluster-api-hypervisor.service -n 50' >&2; \
-	exit 1
+.PHONY: mgmt-bootstrap mgmt-check mgmt-up mgmt-down
+mgmt-bootstrap: kind-up host-agent-up ## Bootstrap cert-manager, CAPI, and the hardened provider manager in Kind
+	@set -Eeuo pipefail; \
+	python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --image-id cluster-api-hypervisor --kind-name "$(MGMT_CLUSTER_NAME)"; \
+	python3 scripts/bootstrap_management.py --lock versions.lock.yaml --cache-root "$(K8LABS_CACHE_ROOT)" --context "$(MGMT_CONTEXT)" --host-agent-config "$(HOST_AGENT_CONFIG)"
 
-.PHONY: mgmt-down
-mgmt-down: ## Stop the capishim management plane units (never deletes management state)
-	@set -euo pipefail; \
-	echo '==> Stopping capishim management plane ($(MGMT_UNITS))...'; \
-	systemctl --user stop $(MGMT_UNITS); \
-	echo '    Management plane stopped (state preserved)'
+mgmt-check: kind-check host-agent-check ## Verify management controllers and HostAgent connectivity
+	@set -Eeuo pipefail; \
+	kubectl --context "$(MGMT_CONTEXT)" -n cert-manager wait --for=condition=Available deployment --all --timeout=5m; \
+	kubectl --context "$(MGMT_CONTEXT)" -n hypervisor-system wait --for=condition=Available deployment/controller-manager --timeout=5m; \
+	python3 scripts/host_agent.py check --config-dir "$(HOST_AGENT_CONFIG)"
+
+mgmt-up: prereq mgmt-bootstrap mgmt-check ## Create the Kind management plane and bootstrap its controllers
+
+mgmt-down: kind-down ## Destructive alias for kind-down; HostAgent state is preserved
 
 .PHONY: cluster-up
-cluster-up: ## Server-side apply capi/cluster.yaml against the capishim management plane (idempotent)
+cluster-up: ## Server-side apply capi/cluster.yaml against the Kind management plane (idempotent)
 	@set -euo pipefail; \
 	echo '==> Applying capi/cluster.yaml (server-side) to the management plane...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f capi/cluster.yaml; \
+	kubectl --context "$(MGMT_CONTEXT)" apply --server-side -f capi/cluster.yaml; \
 	echo '    Cluster manifest applied'
 
 # --- Generated CAPI Addon Secrets ---
@@ -566,19 +450,19 @@ addons-clean: ## Remove generated addon resource-set Secrets (build/capi-addons/
 addons-up: addons-generate ## Generate then apply addon resources: Secrets first, then CRS manifests (idempotent)
 	@set -euo pipefail; \
 	echo '==> Applying generated addon Secrets (server-side)...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f build/capi-addons/; \
+	kubectl --context "$(MGMT_CONTEXT)" apply --server-side -f build/capi-addons/; \
 	echo '    Generated Secrets applied'; \
 	echo '==> Applying capi/addons/ ClusterResourceSets (server-side)...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f capi/addons/; \
+	kubectl --context "$(MGMT_CONTEXT)" apply --server-side -f capi/addons/; \
 	echo '    ClusterResourceSet addons applied'
 
 .PHONY: cluster-down
 cluster-down: ## Delete the workload Cluster via the management plane and wait for reclamation
 	@set -euo pipefail; \
 	echo '==> Deleting Cluster $(CLUSTER_NAME) via the management plane...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)"; \
+	kubectl --context "$(MGMT_CONTEXT)" delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)"; \
 	echo '==> Waiting for infrastructure reclamation...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" wait --for=delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=10m; \
+	kubectl --context "$(MGMT_CONTEXT)" wait --for=delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=10m; \
 	echo '    Cluster deleted and reclaimed'
 
 .PHONY: cluster-clean
@@ -588,26 +472,23 @@ cluster-clean: ## Remove leftover workload-cluster resources on the management p
 		echo 'ERROR: kubectl not found on PATH' >&2; \
 		exit 1; \
 	fi; \
-	if [ ! -f "$(CAPISHIM_KUBECONFIG)" ]; then \
-		echo "ERROR: capishim kubeconfig not found at $(CAPISHIM_KUBECONFIG)" >&2; \
-		exit 1; \
-	fi; \
 	echo '==> Cleaning leftover workload-cluster resources on the management plane...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" delete hypervisormachines.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name=$(CLUSTER_NAME)" --ignore-not-found; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" delete hypervisormachinetemplates.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name=$(CLUSTER_NAME)" --ignore-not-found; \
+	kubectl --context "$(MGMT_CONTEXT)" delete hypervisormachines.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name=$(CLUSTER_NAME)" --ignore-not-found; \
+	kubectl --context "$(MGMT_CONTEXT)" delete hypervisormachinetemplates.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name=$(CLUSTER_NAME)" --ignore-not-found; \
 	echo '    Leftover workload-cluster resources cleaned'
 
 .PHONY: cluster
-cluster: prepare-check prereq ## Full CAPI pipeline: prepare-check -> prereq -> mgmt-images -> provider-state -> mgmt-up -> cluster-up -> addons-up -> wait Cluster ready -> kubeconfig -> smoke-test
+cluster: mgmt-up ## Full CAPI pipeline: management bootstrap -> cluster -> addons -> ready -> kubeconfig -> smoke-test
 	@set -euo pipefail; \
-	$(MAKE) mgmt-images; \
-	$(MAKE) provider-state; \
-	$(MAKE) mgmt-up; \
 	$(MAKE) cluster-up; \
 	$(MAKE) addons-up; \
-	echo '==> Waiting for Cluster $(CLUSTER_NAME) to become Ready...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" wait --for=condition=Ready "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=30m; \
+	echo '==> Waiting for Cluster $(CLUSTER_NAME) to become Available...'; \
+	kubectl --context "$(MGMT_CONTEXT)" wait --for=condition=Available "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=30m; \
 	$(MAKE) kubeconfig; \
+	echo '==> Waiting for all four workload Nodes to become Ready...'; \
+	kubectl --kubeconfig "$(WORKLOAD_KUBECONFIG)" wait --for=condition=Ready nodes --all --timeout=10m; \
+	node_count=$$(kubectl --kubeconfig "$(WORKLOAD_KUBECONFIG)" get nodes --no-headers | wc -l | tr -d '[:space:]'); \
+	if [ "$$node_count" -ne 4 ]; then echo "ERROR [readiness] expected 4 workload Nodes, found $$node_count" >&2; exit 1; fi; \
 	$(MAKE) smoke-test; \
 	echo 'Cluster ready.'
 
@@ -621,7 +502,7 @@ kubeconfig: ## Fetch the workload Secret $(CLUSTER_NAME)-kubeconfig from the man
 	kubeconfig_out=$$(mktemp); \
 	trap 'rm -f "$$secret_json" "$$kubeconfig_out"' EXIT; \
 	echo "==> Fetching Secret $(CLUSTER_NAME)-kubeconfig from the management plane..."; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" get secret "$(CLUSTER_NAME)-kubeconfig" -n default -o json > "$$secret_json"; \
+	kubectl --context "$(MGMT_CONTEXT)" get secret "$(CLUSTER_NAME)-kubeconfig" -n default -o json > "$$secret_json"; \
 	scripts/fetch-kubeconfig "$$secret_json" > "$$kubeconfig_out"; \
 	mv "$$kubeconfig_out" "$(WORKLOAD_KUBECONFIG)"; \
 	chmod 600 "$(WORKLOAD_KUBECONFIG)"; \
@@ -663,8 +544,8 @@ MULTI_KUBECONFIG_2 := build/kubeconfig.k8labs-2
 #
 # Resource floor: the 8 concurrent workload VMs need ~16 CPU cores and
 # ~28 GiB RAM free on the host (per cluster: 1 control plane at 2 vCPU/2 GiB
-# plus 3 workers at 2 vCPU/4 GiB), on top of the capishim/k8netd management
-# plane; budget ~20-40 minutes end to end.
+# plus 3 workers at 2 vCPU/4 GiB), on top of the Kind/k8netd management
+# plane and host-side k8netd; budget ~20-40 minutes end to end.
 #
 # Every per-cluster kubectl lifecycle call (readiness wait, delete,
 # reclamation wait) pins --cache-dir to build/.kube-cache-<cluster>:
@@ -674,30 +555,30 @@ MULTI_KUBECONFIG_2 := build/kubeconfig.k8labs-2
 .PHONY: multi-cluster-test
 multi-cluster-test: prereq ## Provision k8labs AND k8labs-2 concurrently, smoke-test both, tear both down (REQ-013; heavy: ~16 CPU / ~28 GiB RAM floor)
 	@set -euo pipefail; \
-	echo '==> Bringing up the capishim management plane...'; \
+	echo '==> Bringing up the Kind management plane...'; \
 	$(MAKE) mgmt-up; \
 	echo '==> Applying both Cluster manifests (server-side)...'; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f capi/cluster.yaml; \
-	kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" apply --server-side -f "$(MULTI_CLUSTER2_MANIFEST)"; \
+	kubectl --context "$(MGMT_CONTEXT)" apply --server-side -f capi/cluster.yaml; \
+	kubectl --context "$(MGMT_CONTEXT)" apply --server-side -f "$(MULTI_CLUSTER2_MANIFEST)"; \
 	echo '    Both Cluster manifests applied'; \
-	echo '==> Waiting for Cluster $(CLUSTER_NAME) to become Ready...'; \
-	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" wait --for=condition=Ready "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=30m; then \
-		echo "ERROR [readiness] Cluster $(CLUSTER_NAME) did not become Ready within 30m" >&2; \
+	echo '==> Waiting for Cluster $(CLUSTER_NAME) to become Available...'; \
+	if ! kubectl --context "$(MGMT_CONTEXT)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" wait --for=condition=Available "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=30m; then \
+		echo "ERROR [readiness] Cluster $(CLUSTER_NAME) did not become Available within 30m" >&2; \
 		exit 1; \
 	fi; \
-	echo '==> Waiting for Cluster $(MULTI_CLUSTER2_NAME) to become Ready...'; \
-	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" wait --for=condition=Ready "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)" --timeout=30m; then \
-		echo "ERROR [readiness] Cluster $(MULTI_CLUSTER2_NAME) did not become Ready within 30m" >&2; \
+	echo '==> Waiting for Cluster $(MULTI_CLUSTER2_NAME) to become Available...'; \
+	if ! kubectl --context "$(MGMT_CONTEXT)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" wait --for=condition=Available "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)" --timeout=30m; then \
+		echo "ERROR [readiness] Cluster $(MULTI_CLUSTER2_NAME) did not become Available within 30m" >&2; \
 		exit 1; \
 	fi; \
-	echo '    Both Clusters Ready'; \
+	echo '    Both Clusters Available'; \
 	mkdir -p build; \
 	fetch_wc_kubeconfig() { \
 		cluster="$$1"; \
 		out="$$2"; \
 		secret_json="$$(mktemp)"; \
 		echo "==> Fetching Secret $${cluster}-kubeconfig from the management plane..."; \
-		kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" get secret "$${cluster}-kubeconfig" -n default -o json > "$$secret_json"; \
+		kubectl --context "$(MGMT_CONTEXT)" get secret "$${cluster}-kubeconfig" -n default -o json > "$$secret_json"; \
 		scripts/fetch-kubeconfig "$$secret_json" > "$$out"; \
 		chmod 600 "$$out"; \
 		rm -f "$$secret_json"; \
@@ -721,20 +602,20 @@ multi-cluster-test: prereq ## Provision k8labs AND k8labs-2 concurrently, smoke-
 	$(MAKE) smoke-test SMOKE_KUBECONFIG="$(MULTI_KUBECONFIG_2)"; \
 	echo '==> Deleting both Clusters (best-effort)...'; \
 	del_failures=''; \
-	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)"; then \
+	if ! kubectl --context "$(MGMT_CONTEXT)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)"; then \
 		echo "ERROR [teardown] deleting Cluster $(CLUSTER_NAME) failed" >&2; \
 		del_failures=" $$del_failures $(CLUSTER_NAME)"; \
 	fi; \
-	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" delete "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)"; then \
+	if ! kubectl --context "$(MGMT_CONTEXT)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" delete "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)"; then \
 		echo "ERROR [teardown] deleting Cluster $(MULTI_CLUSTER2_NAME) failed" >&2; \
 		del_failures=" $$del_failures $(MULTI_CLUSTER2_NAME)"; \
 	fi; \
 	echo '==> Waiting for infrastructure reclamation (both Clusters)...'; \
-	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" wait --for=delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=10m; then \
+	if ! kubectl --context "$(MGMT_CONTEXT)" --cache-dir "build/.kube-cache-$(CLUSTER_NAME)" wait --for=delete "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=10m; then \
 		echo "ERROR [reclamation] Cluster $(CLUSTER_NAME) was not reclaimed within 10m" >&2; \
 		del_failures=" $$del_failures $(CLUSTER_NAME)"; \
 	fi; \
-	if ! kubectl --kubeconfig "$(CAPISHIM_KUBECONFIG)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" wait --for=delete "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)" --timeout=10m; then \
+	if ! kubectl --context "$(MGMT_CONTEXT)" --cache-dir "build/.kube-cache-$(MULTI_CLUSTER2_NAME)" wait --for=delete "cluster.cluster.x-k8s.io/$(MULTI_CLUSTER2_NAME)" --timeout=10m; then \
 		echo "ERROR [reclamation] Cluster $(MULTI_CLUSTER2_NAME) was not reclaimed within 10m" >&2; \
 		del_failures=" $$del_failures $(MULTI_CLUSTER2_NAME)"; \
 	fi; \
@@ -837,4 +718,3 @@ validate-packer: ## Validate Packer template syntax
 .PHONY: validate
 validate: node-tools versions-check validate-packer ## Run all validations (dependency lock + packer + python tooling)
 	@echo 'All validations passed.'
-
