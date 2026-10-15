@@ -198,38 +198,36 @@ Open gap: nothing recreates `/tmp/ch-capi` after a `/tmp` cleanup, so this
 recurs. A user `tmpfiles.d` entry, or moving the socket root out of `/tmp`,
 would close it.
 
-## sched_ext arms — blocked, cause not yet identified
+## sched_ext arms — blocked by a kernel ABI gap
 
-The release binaries build and run in the observer (`scx_bpfland 1.1.3`), but
-attaching fails:
+The schedulers build and run in the observer, but attaching fails with `EINVAL`
+and no verifier log. The cause is now measured, not guessed: the compiled BPF
+object's `sched_ext_ops` struct is larger than the running kernel's, so the
+struct_ops map cannot be created.
 
-```
-libbpf: object 'bpf_bpf': failed (-95) to create BPF token from '/sys/fs/bpf', skipping optional step...
-libbpf: failed to load BPF skeleton 'bpf_bpf': -EINVAL
-Error: Failed to load BPF program
-Caused by:
-    Invalid argument (os error 22)
-```
+| Build | `struct sched_ext_ops` |
+|---|---|
+| running kernel `7.2.10-200.fc44` (BTF) | **size=472, vlen=45** |
+| `scx` v1.1.3 (dump `v7.2-rc6`) | size=512, vlen=51 |
+| `scx` main (dump `v7.3-rc5`) | size=528, vlen=53 |
 
-The `-95` BPF-token step is optional and skipped. There is **no verifier log**,
-so the failure is not program verification — it happens at object/map load.
-`/sys/fs/bpf` being absent was fixed in the observer and changed nothing.
+Building `scx` against the running kernel's BTF fails to compile — the Rust code
+needs fields (`rescue_bandwidth_ppt`, `rescue_quantum_us`) that 7.2.10 does not
+have. So the Fedora kernel's sched_ext is **older than the sched_ext tree the
+scx releases track**: the scx dumps come from the `sched_ext` development tree,
+which carries features ahead of mainline.
 
-**The vmlinux.h mismatch was tested and did not fix it.** The scx checkout ships
-`vmlinux-v7.3-rc5-g6ebdea0d0fb8.h` while the nodes run `7.2.10`. Regenerating a
-dump from the running kernel's BTF, repointing `scheds/vmlinux/arch/x86/vmlinux.h`,
-rebuilding `rust/scx_utils/vmlinux.tar.zst`, and rebuilding `scx_bpfland`
-produced the identical `EINVAL`. That experiment was reverted; the scx checkout
-is clean.
+No current scx release can attach to this kernel. Two ways out:
 
-Still unidentified. What is known: the observer holds `CAP_BPF`/`CAP_SYS_ADMIN`
-with `hostPID`; `unprivileged_bpf_disabled=1`; the kernel advertises
-`sched_ext/enable_seq`; the failure yields no verifier output. Next candidates:
-read the kernel's own rejection from the host (`dmesg`/journal, unavailable
-inside the pod), or run a minimal `sched_ext` struct_ops loader to isolate
-whether the kernel rejects the map type or the scheduler.
+1. **Run the kernel the schedulers expect.** The local `linux/` checkout already
+   carries the newer sched_ext interface (`sched_ext_ops_cid`, `scx_bpf_cid_*`
+   kfuncs), so building and booting it — which the plan already allows for —
+   should align the ABI with `scx` v1.1.3/main.
+2. **Match an older scx** whose struct equals 472/45; none of the recent tags do
+   (v1.1.3 is 512, main is 528).
 
-Until then only the EEVDF arm is runnable end to end.
+`/sys/fs/bpf` missing in the observer was fixed and changed nothing; the
+`-95` BPF-token step is optional and skipped.
 
 ## Transport — FIXED (logs/exec), SSH not used
 
