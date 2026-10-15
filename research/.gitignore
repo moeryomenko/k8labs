@@ -1,11 +1,16 @@
-# Research experiment data — large, auto-generated, not part of source
-cpu-sched/experiments/data/
-cpu-sched/analysis/output/
+# Research experiment data — large, auto-generated, not part of source.
+#
+# Raw experiment data must live under a host-owned data root outside the Git
+# worktree (${K8LABS_RESEARCH_DATA_ROOT:-<repo>/build}/research/...). These rules
+# are a backstop for anything written under research/ by mistake.
 *.csv
 *.json
-!cpu-sched/data/tunable-sets.json
-!cpu-sched/data/tunable-baseline.json
-!cpu-sched/experiments/tests/fixtures/*.json
+!**/tests/fixtures/*.json
 *.png
+*.svg
 *.pyc
 __pycache__/
+linux-sched/experiments/data/
+linux-sched/analysis/output/
+kube-sched/experiments/data/
+kube-sched/analysis/output/

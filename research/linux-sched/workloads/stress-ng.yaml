@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: linux-sched-stress-ng
+  labels:
+    app: linux-sched-stress-ng
+    linux-sched/run: "__ARM__"
+    linux-sched/role: target
+spec:
+  nodeName: __NODE_NAME__
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: stress-ng
+      image: docker.io/alexeiled/stress-ng:latest
+      args:
+        - --cpu
+        - "2"
+        - --cpu-method
+        - matrixprod
+        - --verify
+        - --timeout
+        - 180s
+        - --metrics-brief
+      resources:
+        requests:
+          cpu: "1"
+        limits: {}

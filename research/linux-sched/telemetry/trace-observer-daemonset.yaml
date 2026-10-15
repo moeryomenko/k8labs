@@ -1,0 +1,78 @@
+# Trace observer: BCC (runqlat/runqlen), the sched_* bpftrace probe, and
+# `perf sched`. Runs only on nodes labelled linux-sched/research=observer.
+#
+# Host access is deliberately minimal: hostPID for perf/BPF task visibility and
+# read-only hostPath mounts for tracefs/debugfs, /proc, and the cgroup tree.
+# Host root is never mounted, and the ServiceAccount gets no API permissions
+# beyond the automatic token (which is disabled here).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: linux-sched-trace-observer
+  namespace: research-telemetry
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: linux-sched-trace-observer
+  namespace: research-telemetry
+  labels:
+    app.kubernetes.io/name: linux-sched-trace-observer
+    app.kubernetes.io/part-of: linux-sched
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: linux-sched-trace-observer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: linux-sched-trace-observer
+        app.kubernetes.io/part-of: linux-sched
+    spec:
+      serviceAccountName: linux-sched-trace-observer
+      automountServiceAccountToken: false
+      hostPID: true
+      hostNetwork: false
+      hostIPC: false
+      tolerations:
+        - operator: Exists
+      nodeSelector:
+        linux-sched/research: observer
+      containers:
+        - name: trace-observer
+          image: docker.io/library/fedora:44
+          command: ["/bin/sh", "-c", "sleep infinity"]
+          securityContext:
+            privileged: true
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys-kernel
+              mountPath: /host/sys/kernel
+              readOnly: true
+            - name: sys-fs-cgroup
+              mountPath: /host/sys/fs/cgroup
+              readOnly: true
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: sys-kernel
+          hostPath:
+            path: /sys/kernel
+            type: Directory
+        - name: sys-fs-cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory

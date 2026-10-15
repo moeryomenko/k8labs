@@ -1,0 +1,20 @@
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+# Treatment profile: PodTopologySpread with DoNotSchedule defaulting enabled.
+# The workload carries a spread constraint over three synthetic topology
+# domains (topology.kubernetes.io/zone).
+profiles:
+  - schedulerName: default-scheduler
+    pluginConfig:
+      - name: PodTopologySpread
+        args:
+          defaultingType: List
+          defaultConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+    plugins:
+      score:
+        enabled:
+          - name: PodTopologySpread
+            weight: 2

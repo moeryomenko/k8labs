@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: linux-sched-ffmpeg
+  labels:
+    app: linux-sched-ffmpeg
+    linux-sched/run: "__ARM__"
+    linux-sched/role: target
+spec:
+  nodeName: __NODE_NAME__
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: ffmpeg
+      image: docker.io/linuxserver/ffmpeg:8.0.1
+      command:
+        - sh
+        - -c
+        - >-
+          ffmpeg -nostdin -hide_banner -stream_loop -1 -i /fixtures/input.mp4
+          -map 0:v:0 -an -c:v libx264 -preset medium -threads 2 -t 180
+          -f null -
+      resources:
+        requests:
+          cpu: "1"
+        limits: {}

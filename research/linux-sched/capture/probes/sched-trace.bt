@@ -1,0 +1,40 @@
+#!/usr/bin/env bpftrace
+/*
+ * sched-trace.bt — scheduler trace for one linux-sched measured sample.
+ *
+ * Emits one CSV line per scheduler event so wakeup-to-run latency and
+ * migration counts can be reconstructed per workload. Columns:
+ *   ts_ns,cpu,pid,comm,event,target_pid,target_comm,prio
+ *
+ * The plan requires all four events; dropping any one makes the derived
+ * wakeup-to-run metric invalid for the sample.
+ */
+
+BEGIN
+{
+    printf("ts_ns,cpu,pid,comm,event,target_pid,target_comm,prio\n");
+}
+
+tracepoint:sched:sched_wakeup
+{
+    printf("%llu,%d,%d,%s,sched_wakeup,%d,%s,%d\n",
+        nsecs, cpu, pid, comm, args->pid, args->comm, args->prio);
+}
+
+tracepoint:sched:sched_wakeup_new
+{
+    printf("%llu,%d,%d,%s,sched_wakeup_new,%d,%s,%d\n",
+        nsecs, cpu, pid, comm, args->pid, args->comm, args->prio);
+}
+
+tracepoint:sched:sched_switch
+{
+    printf("%llu,%d,%d,%s,sched_switch,%d,%s,%d\n",
+        nsecs, cpu, pid, comm, args->next_pid, args->next_comm, args->next_prio);
+}
+
+tracepoint:sched:sched_migrate_task
+{
+    printf("%llu,%d,%d,%s,sched_migrate_task,%d,%s,%d\n",
+        nsecs, cpu, pid, comm, args->pid, args->comm, args->prio);
+}

@@ -1,7 +1,7 @@
 # research/ Makefile — pure aggregator
 #
 # Every target lives in a series makefile (<series>/<series>.mk, e.g.
-# cpu-sched/cpu-sched.mk) and is namespaced per series (cpu-sched-*). This
+# linux-sched/linux-sched.mk) and is namespaced per series (linux-sched-*). This
 # file defines no experiment/analysis/setup/clean targets of its own; it only
 # includes the series makefiles and owns the help listing.
 

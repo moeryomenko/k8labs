@@ -1,0 +1,11 @@
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+# Control profile: default NodeResourcesFit scoring (LeastAllocated).
+# Reference: k8s-site/content/en/docs/reference/scheduling/config.md
+profiles:
+  - schedulerName: default-scheduler
+    plugins:
+      score:
+        enabled:
+          - name: NodeResourcesFit
+            weight: 1

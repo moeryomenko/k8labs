@@ -37,19 +37,11 @@ crash.*.log
 
 perfetto-plots
 perfetto-analysis
-research/cpu-sched/analysis/output/
 
-# Go compiled binaries — built from source
-**/api-server/api-server
-**/db-simulator/db-simulator
-**/api-server/bin/
-**/db-simulator/bin/
-**/cpu-burner/cpu-burner
-
-# Experiment data directories — generated, not committed
-research/cpu-sched/experiments/data/
-research/cpu-sched/analysis/output/tunable-sweep-results/
-research/cpu-sched/analysis/output/cpu-manager-comparison/
-research/cpu-sched/analysis/output/eevdf-metrics-stress/
-research/cpu-sched/analysis/output/throttling-stress/
-/tmp/tunable-sweep/
+# Research experiment data — written under a host-owned data root
+# (${K8LABS_RESEARCH_DATA_ROOT:-build}/research/...); these rules are a backstop
+# for anything produced under research/ by mistake.
+research/linux-sched/experiments/data/
+research/linux-sched/analysis/output/
+research/kube-sched/experiments/data/
+research/kube-sched/analysis/output/
