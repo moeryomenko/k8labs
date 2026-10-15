@@ -1,9 +1,17 @@
-# Base OS: Fedora 44 (kernel 7.2.5-200.fc44)
+# Base OS: Fedora 44 with a kernel from a pinned repository. Fedora 44's own
+# kernel (7.2.x) carries an older sched_ext ABI than the sched_ext tree the scx
+# releases track, so the kernel comes from rawhide and is pinned by full NVR.
 
 variable "kernel_version" {
-  description = "Kernel version to pin during image baking"
+  description = "Kernel version (full NVR) to pin during image baking"
   type        = string
-  default     = "7.2.5-200.fc44"
+  default     = "7.3.0-0.rc7.261014g4056b3c9d3c9.60.fc46"
+}
+
+variable "kernel_repo_url" {
+  description = "rpm-md repository base URL to install the kernel from (empty = base OS repos)"
+  type        = string
+  default     = "https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/x86_64/os/"
 }
 
 # ---------------------------------------------------------------------------

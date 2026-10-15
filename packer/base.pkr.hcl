@@ -66,6 +66,7 @@ build {
   provisioner "shell" {
     environment_vars = [
       "KERNEL_VERSION=${var.kernel_version}",
+      "KERNEL_REPO_URL=${var.kernel_repo_url}",
     ]
     scripts = [
       "scripts/01-configure-system.sh",

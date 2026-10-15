@@ -13,26 +13,57 @@ KERNEL_VERSION="${KERNEL_VERSION:-7.2.10-200.fc44}"
 
 echo "==> Baking with kernel target: ${KERNEL_VERSION}"
 
+# The kernel may come from a repository other than the base image's, which is
+# how the scheduler-research kernel (a newer sched_ext ABI than Fedora 44 ships)
+# is installed. KERNEL_REPO_URL is a base URL of an rpm-md repository.
+if [ -n "${KERNEL_REPO_URL:-}" ]; then
+    echo "==> Kernel repository: ${KERNEL_REPO_URL}"
+    # The ad-hoc repo carries no configured OpenPGP key, so signature checking
+    # is disabled for it. Packages are fetched over HTTPS from the vendor's
+    # official mirror, and the kernel version is pinned by full NVR.
+    dnf_install_kernel() {
+        dnf install -y --refresh \
+            --repofrompath=k8labs-kernel,"${KERNEL_REPO_URL}" \
+            --repo=k8labs-kernel \
+            --setopt=k8labs-kernel.gpgcheck=0 \
+            --setopt=k8labs-kernel.repo_gpgcheck=0 \
+            "$@"
+    }
+else
+    dnf_install_kernel() {
+        dnf --refresh install -y "$@"
+    }
+fi
+
 # Refresh Fedora metadata before installing. If the lock's exact build has
 # rotated out of the repository, install the current kernel set and pin the
 # image to the version actually installed rather than failing on stale metadata.
-if ! dnf --refresh install -y "kernel-core-${KERNEL_VERSION}" \
+if ! dnf_install_kernel "kernel-core-${KERNEL_VERSION}" \
     "kernel-modules-${KERNEL_VERSION}" \
     "kernel-modules-core-${KERNEL_VERSION}"; then
     echo "==> Exact kernel ${KERNEL_VERSION} is unavailable; installing current Fedora kernel"
-    dnf --refresh install -y kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra
-    KERNEL_VERSION=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core \
-        | sort -V | tail -1)
+    dnf_install_kernel kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra
 fi
+
+# Resolve the version actually installed, including the architecture suffix:
+# the /boot filename and grubby both need the full NVR. The value passed in may
+# omit the arch (the lock stores the version without it).
+KERNEL_VERSION=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core | sort -V | tail -1)
 
 echo "==> Kernel ${KERNEL_VERSION} installed from refreshed repositories"
 
-# kernel-devel supplies /usr/src/kernels/<ver> and the /lib/modules/<ver>/build
-# symlink. The BCC observer tools compile their BPF programs at runtime and fail
-# without headers matching the RUNNING kernel, so the image must carry the same
-# version's devel tree.
-if ! dnf --refresh install -y "kernel-devel-${KERNEL_VERSION}" kernel-headers; then
-    echo "WARN: kernel-devel-${KERNEL_VERSION} unavailable; BCC tools will not compile"
+# kernel-devel supplies /usr/src/kernels/<ver>. Only install it when the kernel
+# came from the base repositories: an ad-hoc kernel repository (a different
+# Fedora release) has no devel tree for this image's release, and pulling one
+# drags that release's dependency set in and conflicts with the image's own
+# packages. Run-queue metrics use the libbpf-tools CO-RE binaries, which read
+# BTF and need no headers.
+if [ -z "${KERNEL_REPO_URL:-}" ]; then
+    if ! dnf --refresh install -y "kernel-devel-${KERNEL_VERSION}" kernel-headers; then
+        echo "WARN: kernel-devel-${KERNEL_VERSION} unavailable; BCC tools will not compile"
+    fi
+else
+    dnf --refresh install -y kernel-headers || true
 fi
 
 # Set the exact target kernel as the default boot entry. The original Fedora

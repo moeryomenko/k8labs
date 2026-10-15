@@ -5,7 +5,7 @@ schema_version: 2
 platform: linux/amd64
 fedora:
   release: "44"
-  kernel: "7.2.10-200.fc44"
+  kernel: "7.3.0-0.rc7.261014g4056b3c9d3c9.60.fc46"
 kubernetes:
   version: "v1.37.0"
   cri_o: "v1.37.0"
