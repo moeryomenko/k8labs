@@ -85,10 +85,15 @@ observer_pod_for_node() {
 }
 
 # kexec POD [args...] — run a command inside the observer pod.
+#
+# Bounded: a hung kubectl exec would otherwise stall an experiment with no
+# output, which is worse than a failed sample.
 kexec() {
     local pod="$1"
     shift
-    kubectl_wl -n "$OBSERVER_NAMESPACE" exec "$pod" -- "$@"
+    timeout "${LINUX_SCHED_EXEC_TIMEOUT_S:-60}" \
+        kubectl --kubeconfig "$(workload_kubeconfig)" -n "$OBSERVER_NAMESPACE" \
+        exec "$pod" -- "$@"
 }
 
 # NOTE: node access is through the observer DaemonSet over the Kubernetes API.
@@ -140,6 +145,99 @@ wait_quiescent() {
         sleep 5
     done
     return 1
+}
+
+# ---- sched_ext scheduler helpers ----
+
+# scx_root — checkout holding the built sched_ext schedulers.
+scx_root() {
+    printf '%s' "${LINUX_SCHED_SCX_ROOT:-$(project_root)/../scx}"
+}
+
+# scx_binary NAME — path to a built scheduler binary, or a clear failure.
+#
+# The binaries must be built against the running kernel's BTF (see GATES.md);
+# the runner does not build them, it only stages what is there.
+scx_binary() {
+    local name="$1" path
+    path="$(scx_root)/target/release/${name}"
+    [[ -x "$path" ]] \
+        || die "missing ${path}; build ${name} against the running kernel's BTF first (see GATES.md)"
+    printf '%s' "$path"
+}
+
+# scx_state_file — local file holding the pid of the supervising kubectl exec.
+scx_state_file() { printf '%s' "${LINUX_SCHED_SCX_STATE:-/tmp/linux-sched-scx.pid}"; }
+
+# scx_reset NODE — stop any running scheduler and clear its stats socket.
+#
+# A scheduler started through `kubectl exec` dies when that exec ends, so it is
+# supervised by a long-lived local `kubectl exec` whose pid is recorded; killing
+# that ends the remote process. The stats socket is cleared by renaming its
+# directory, because root cannot unlink the socket itself.
+scx_reset() {
+    local node="$1" pod state pid
+    state="$(scx_state_file)"
+    if [[ -s "$state" ]]; then
+        pid="$(cat "$state")"
+        kill -TERM "$pid" 2>/dev/null || true
+        sleep 1
+        kill -KILL "$pid" 2>/dev/null || true
+        rm -f "$state"
+    fi
+    pod="$(observer_pod_for_node "$node")"
+    [[ -n "$pod" ]] || return 0
+    # Kill by comm, not by `pkill -f`: a -f pattern would also match this
+    # command's own command line and take the exec session down with it.
+    kexec "$pod" sh -c '
+        for p in /proc/[0-9]*; do
+            c=$(cat "$p/comm" 2>/dev/null) || continue
+            case "$c" in
+                scx_*) kill "${p#/proc/}" 2>/dev/null || true ;;
+            esac
+        done
+        if [ -d /var/run/scx ]; then
+            mv /var/run/scx "/var/run/scx.stale.$$" 2>/dev/null \
+                || rm -rf /var/run/scx 2>/dev/null || true
+        fi
+    ' >/dev/null 2>&1 || true
+}
+
+# scx_stage NODE — copy the built schedulers into that node's observer.
+scx_stage() {
+    local node="$1" pod name
+    pod="$(observer_pod_for_node "$node")"
+    [[ -n "$pod" ]] || die "no observer pod on ${node}"
+    kexec "$pod" sh -c 'mkdir -p /var/tmp/linux-sched/bin'
+    for name in scx_bpfland scx_lavd scx_mavd; do
+        kubectl_wl cp "$(scx_binary "$name")" \
+            "${OBSERVER_NAMESPACE}/${pod}:/var/tmp/linux-sched/bin/${name}" >/dev/null \
+            || die "failed to copy ${name} to ${pod}"
+    done
+    kexec "$pod" sh -c 'chmod +x /var/tmp/linux-sched/bin/*'
+}
+
+# scx_start NODE NAME — start a scheduler and verify it attached; prints the pid
+# of the supervising local `kubectl exec`.
+scx_start() {
+    local node="$1" name="$2" pod log pid
+    pod="$(observer_pod_for_node "$node")"
+    [[ -n "$pod" ]] || die "no observer pod on ${node}"
+    scx_reset "$node"
+    log="${LINUX_SCHED_SCX_LOG_DIR:-/tmp}/${name}.log"
+    # The binary is exec'd through `sh -c`: the runtime refuses to exec a
+    # hostPath binary directly ("exists but it is not executable").
+    kubectl --kubeconfig "$(workload_kubeconfig)" -n "$OBSERVER_NAMESPACE" \
+        exec "$pod" -- sh -c "exec ${REMOTE_DIR:-/var/tmp/linux-sched}/bin/${name}" \
+        > "$log" 2>&1 &
+    pid=$!
+    printf '%s' "$pid" > "$(scx_state_file)"
+    sleep "${LINUX_SCHED_SCX_ATTACH_S:-5}"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        tail -5 "$log" >&2 || true
+        die "${name} failed to attach on ${node}"
+    fi
+    printf '%s' "$pid"
 }
 
 # append_block_row FILE BLOCK WORKLOAD METRIC SCHEDULER VALUE DIRECTION

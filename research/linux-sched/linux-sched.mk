@@ -101,6 +101,9 @@ linux-sched-report: linux-sched-analyze ## Print the linux-sched analysis report
 	@echo "  summary.json — schema-versioned machine-readable verdicts"
 
 # ---- Node-native observer tooling ----
+.PHONY: linux-sched-scx-stage
+linux-sched-scx-stage: ## Stage the built sched_ext schedulers onto the research workers
+	$(LINUX_SCHED_EXPERIMENTS_DIR)/stage-scx.sh
 
 .PHONY: linux-sched-observer-check
 linux-sched-observer-check: ## Check the node image installs the native observer tooling (no cluster needed)

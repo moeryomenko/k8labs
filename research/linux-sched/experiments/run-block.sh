@@ -119,25 +119,18 @@ resolve_hosts() {
 
 # activate_arm ARM — make ARM the active scheduler on the target worker.
 #
-# Runs through the observer Pod (hostPID, so it sees host processes) rather than
-# SSH. A scheduler binary still has to be staged on the node before its arm can
-# be activated.
+# Runs through the observer Pod (hostPID, so it sees host processes). EEVDF
+# means "no sched_ext scheduler loaded"; the scx arms start the staged binary
+# and wait for it to attach before the sample begins.
 activate_arm() {
-    local arm="$1" pod
-    pod="$(observer_pod_for_node "$TARGET_NODE")"
-    [[ -n "$pod" ]] || die "no observer pod on ${TARGET_NODE}"
-
+    local arm="$1"
     case "$arm" in
         eevdf)
-            kexec "$pod" sh -c 'pkill -f "scx_" 2>/dev/null || true' \
-                || die "failed to reset sched_ext on ${TARGET_NODE}"
-            if kexec "$pod" sh -c 'test -e /sys/kernel/sched_ext/enable_seq' 2>/dev/null; then
-                log "WARN: /sys/kernel/sched_ext still present after EEVDF reset"
-            fi
+            scx_reset "$TARGET_NODE"
             ;;
         scx_bpfland|scx_lavd|scx_mavd)
-            die "activating ${arm} requires the scx binaries staged on ${TARGET_NODE}; " \
-                "build them from the scx checkout and stage them first"
+            SCX_PID="$(scx_start "$TARGET_NODE" "$arm")"
+            log "started ${arm} (pid ${SCX_PID}) on ${TARGET_NODE}"
             ;;
         *)
             die "unknown scheduler arm: ${arm}"
@@ -155,15 +148,13 @@ collect_metric() {
 # run_block SCENARIO ARM BLOCK DIR — one arm of one paired block.
 run_block() {
     local scenario="$1" arm="$2" block="$3" raw_dir="$4"
-    local pod
+    SCX_PID=""
 
     log "block ${block} arm ${arm}: resetting ${TARGET_NODE}"
     # No reboot: SSH is unavailable and the lab has no other way to restart a
     # VM, so each arm starts from a killed-observer, quiescent guest instead.
     # Recorded as a protocol deviation in GATES.md.
-    pod="$(observer_pod_for_node "$TARGET_NODE")"
-    [[ -n "$pod" ]] || die "no observer pod on ${TARGET_NODE}"
-    kexec "$pod" sh -c 'pkill -f "scx_" 2>/dev/null || true' >/dev/null 2>&1 || true
+    scx_reset "$TARGET_NODE"
 
     wait_quiescent "$TARGET_NODE" || die "guest ${TARGET_NODE} never became quiescent"
 
@@ -178,6 +169,9 @@ run_block() {
         --load-command "${LOAD_COMMAND:-}${LOAD_ARGS:+ ${LOAD_ARGS}}" \
         --raw "$load_raw" --podlog "$podlog_raw" \
         || die "capture failed for block ${block} arm ${arm}"
+
+    # Stop the scheduler so the next arm starts from a clean scheduler state.
+    scx_reset "$TARGET_NODE"
 
     # Parse only the artifact the primary metric is defined on, so a
     # concatenated log can never be mined for a stale value.
