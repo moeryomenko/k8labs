@@ -171,6 +171,33 @@ route to host`, because it checks agent health at startup.
 recovers. Worth knowing because the symptom (provider crashloop) looks like the
 endpoint bug but is a different failure.
 
+## HostAgent restart loop — two causes
+
+The agent flapped with `restart counter` in the hundreds, which also made the
+provider manager crashloop (`dial tcp 10.89.0.2:9444`). There were two causes,
+and fixing only one was not enough.
+
+1. **Buffered artifact digests (OOM).** `internal/agent/executor/executor.go`
+   hashed artifacts with `os.ReadFile` + `sha256.Sum256`, so hashing the 4.1 GiB
+   base image spiked the agent's resident set by that much. On a host with
+   2.7 GiB free the OOM killer took it out. Fixed at the source
+   (`cluster-api-hypervisor` `9633fed`): digests are streamed; the digest is
+   unchanged. **Needs a rebuilt agent image to take effect** — the running agent
+   still has the defect.
+2. **Missing host path.** The quadlet binds `/tmp/ch-capi`
+   (`scripts/host_agent.py` creates it at install), but `/tmp` had been cleaned,
+   so the container failed with `statfs /tmp/ch-capi: no such file or
+   directory`. Recreating the directory restores the agent.
+
+Contributing factor: the host was out of memory (30 GiB RAM, 2.7 GiB free,
+swap 100% full). Two stray `/usr/bin/clangd` processes held ~12.8 GiB of swap;
+stopping them freed ~5 GiB of RAM and ~10 GiB of swap and let the agent finish
+startup.
+
+Open gap: nothing recreates `/tmp/ch-capi` after a `/tmp` cleanup, so this
+recurs. A user `tmpfiles.d` entry, or moving the socket root out of `/tmp`,
+would close it.
+
 ## Transport — FIXED (logs/exec), SSH not used
 
 **Capability-scoped Pods work.** A Pod with `hostPID: true` and capabilities
