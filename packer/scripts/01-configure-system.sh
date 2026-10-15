@@ -163,8 +163,12 @@ if [ -n "${FIXTURE_DIR}" ]; then
     # Build tools plus the PostgreSQL server used to take the snapshot. The
     # server package is bake-time only; the workload runs the pinned
     # postgres image, and the observer installs the client for pgbench.
-    dnf install -y gcc make git openssl-devel curl unzip \
-        postgresql postgresql-server
+    # zlib-devel is a hard requirement of wrk2's hdr_histogram, and the build
+    # fails without it rather than degrading, so it is not optional.
+    # pgbench is in postgresql-contrib on Fedora, not in postgresql: without it
+    # the snapshot step fails while still managing to write an empty dump.
+    dnf install -y gcc make git openssl-devel zlib-devel curl unzip \
+        postgresql postgresql-contrib postgresql-server
 
     # Fedora packages wrk, which cannot hold a fixed offered rate (wrk2's -R).
     # The scenarios measure latency under a fixed rate, so the fork is built

@@ -50,9 +50,10 @@ spec:
             - -c
             - |
               set -eu
-              dnf install -y -q bpftrace perf bcc-tools libbpf-tools python3-bcc bpftool procps-ng postgresql
+              dnf install -y -q bpftrace perf bcc-tools libbpf-tools python3-bcc bpftool procps-ng postgresql postgresql-contrib openssl-libs
               # Load generators are baked on the node (see the bake's fixture
-              # section) and mounted read-only; expose them on PATH.
+              # section) and mounted read-only; expose them on PATH. wrk2 links
+              # libssl/libcrypto, hence openssl-libs above.
               for t in /opt/linux-sched/bin/*; do
                 [ -e "$t" ] && ln -sf "$t" "/usr/local/bin/$(basename "$t")"
               done

@@ -340,6 +340,11 @@ container termination message as a small (≈4 KiB) result channel.
 `runqlat`/`runqlen` are **not** on `$PATH`; they live under
 `/usr/share/bcc/tools/`.
 
+| Tool | Package | Path |
+|---|---|---|
+| `pgbench` | `postgresql-contrib` (**not** `postgresql`) | `/usr/sbin/pgbench` |
+| `wrk2` | built at bake time from `gcc`, `make`, `openssl-devel`, `zlib-devel` | `/var/lib/linux-sched/bin/wrk2` |
+
 ## Workload fixtures
 
 The workload inputs are baked onto the node image rather than shipped in a
@@ -369,6 +374,30 @@ inputs.
 - **pgbench.** Installed into the observer with dnf instead of mounted: the load
   runs inside the observer container, and a client from the container's own
   repositories matches its libpq.
+
+Both fragile steps were verified in a throwaway Fedora 44 pod using exactly the
+packages the bake installs, rather than assumed:
+
+```
+PG_SERVER=18.6      PGBENCH=/usr/sbin/pgbench      WRK2_BYTES=627048
+wrk 4.0.0 [epoll]
+DUMP_BYTES=95993179 DUMP_TABLES=4                  PROBE_OK
+```
+
+Three things that check turned up, each of which breaks the bake:
+
+- `zlib-devel` is required: `wrk2`'s `hdr_histogram.c` includes `zlib.h`, and the
+  build stops there rather than degrading.
+- `pgbench` lives in **`postgresql-contrib`** on Fedora, not in `postgresql`.
+  With only `postgresql`, the snapshot step fails *and still writes a
+  valid-looking dump* of the empty database, so the mistake survives a careless
+  check. The probe asserts the dump's table count for that reason.
+- `wrk2` links `libssl.so.3`/`libcrypto.so.3`, so the observer image needs
+  `openssl-libs`; mounting the binary alone is not enough.
+
+The snapshot is ~96 MB of plain SQL (pgbench scale 10: 1M accounts plus the
+branches, tellers and history tables) and the clip is ~65 MB, so the node image
+grows by roughly 160 MB. `pgbench_scale` in the packer variables changes that.
 
 The observer's fixture mounts are `type: Directory`, not `DirectoryOrCreate`: an
 observer without fixtures can only produce empty samples, so it should refuse to
