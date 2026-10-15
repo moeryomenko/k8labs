@@ -478,6 +478,40 @@ which the capture compares against `enabled`, so **both** variants ran
 uninstrumented and the overhead comparison measured nothing. The variants are
 `enabled`/`disabled` now.
 
+## Cluster rebuild — what it costs and what it breaks
+
+Re-baking is not a drop-in step. These were all hit while putting the fixture
+image onto the nodes, and each one is avoidable only if it is known.
+
+- **Editing `versions.lock.yaml` invalidates the artifact cache.** The lock's
+  digest keys `~/.cache/k8labs/locks/<digest>/`, and every bring-up target gates
+  on that cache. Adding a research-only section changed the digest, so
+  `host-agent-install` failed with a missing cache directory and the fix would
+  have been a full `make prepare`. The fixture pins were moved out of the lock:
+  they live in the packer variables and the digest-pinned manifests, which is
+  where they are consumed. The lock is for bring-up inputs, and its header says
+  to touch it only through the version-resolution workflow.
+- **Deleting the Cluster orphans the VMs.** The Machines carry no `providerID`,
+  so the provider cannot map a Machine to a VM and deletes nothing: the Cluster
+  went away while all four VMs kept running, one Machine sat in `Deleting` with
+  its `machine.cluster.x-k8s.io` finalizer, and the manager logged
+  `remove finalizer from HypervisorCluster … not found`. Cleanup is manual:
+  kill the `cloud-hypervisor --api-socket` processes, clear
+  `state/inventory.db*` and `state/vms/`, and remove the stuck Machine's
+  finalizer. The state directory had accumulated **109 VM disk sets / 69 GB**
+  across earlier clusters, which `vms/` never prunes on its own.
+- **The agent caches the image.** `state/images/k8labs-base.qcow2` is a copy
+  staged by `host_agent-install`, with its digest in `state/manifest.json`.
+  A re-bake is only used after that step runs; it hashes on the host in 1 MB
+  chunks, so staging is memory-safe, unlike the agent's own buffered hashing.
+- **`make provider-loopback-forward` must be re-run after a recreate.** The
+  forwarding sidecar's ports refer to the deleted cluster's VM ports.
+- **The host is the hard limit.** Four VMs (2 GiB control plane, 3 x 4 GiB
+  workers) plus the Kind management plane plus a desktop session leave the host
+  at 0-3 GB free with swap full. The fourth VM did not start at all, and the
+  bring-up stalled with three VMs up and no Node ever registering. Memory, not
+  the manifests, decides whether a rebuild converges here.
+
 ## Consequence for the design
 
 - Observer tooling is provisioned into the node image (node-native) and can also
