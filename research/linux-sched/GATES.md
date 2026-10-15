@@ -198,38 +198,41 @@ Open gap: nothing recreates `/tmp/ch-capi` after a `/tmp` cleanup, so this
 recurs. A user `tmpfiles.d` entry, or moving the socket root out of `/tmp`,
 would close it.
 
-## sched_ext arms — blocked by a kernel ABI gap
+## sched_ext arms — RESOLVED
 
-The schedulers build and run in the observer, but attaching fails with `EINVAL`
-and no verifier log. The cause is now measured, not guessed: the compiled BPF
-object's `sched_ext_ops` struct is larger than the running kernel's, so the
-struct_ops map cannot be created.
+Attaching now works. Three separate causes had to be fixed together; each one
+alone still produced `EINVAL`.
 
-| Build | `struct sched_ext_ops` |
-|---|---|
-| running kernel `7.2.10-200.fc44` (BTF) | **size=472, vlen=45** |
-| `scx` v1.1.3 (dump `v7.2-rc6`) | size=512, vlen=51 |
-| `scx` main (dump `v7.3-rc5`) | size=528, vlen=53 |
+1. **Kernel ABI gap.** The compiled object's `sched_ext_ops` must match the
+   running kernel's:
 
-Building `scx` against the running kernel's BTF fails to compile — the Rust code
-needs fields (`rescue_bandwidth_ppt`, `rescue_quantum_us`) that 7.2.10 does not
-have. So the Fedora kernel's sched_ext is **older than the sched_ext tree the
-scx releases track**: the scx dumps come from the `sched_ext` development tree,
-which carries features ahead of mainline.
+   | Build | `struct sched_ext_ops` |
+   |---|---|
+   | Fedora `7.2.10-200.fc44` | 472, vlen=45 |
+   | `scx` v1.1.3 (dump `v7.2-rc6`) | 512, vlen=51 |
+   | `scx` main (dump `v7.3-rc5`) | 528, vlen=53 |
 
-No current scx release can attach to this kernel. Two ways out:
+   The scx dumps come from the sched_ext development tree, which is ahead of
+   mainline, so Fedora 44's kernel was behind every recent scx release. Fix:
+   boot a **7.3 kernel** and **rebuild scx against that kernel's BTF** — then the
+   match is by construction (verified: object 512/51 == kernel 512/51).
+   The node image now installs `7.3.0-0.rc7…fc46` from a pinned rawhide repo.
+2. **Missing `/boot` in the observer.** libbpf resolves `kcfg` externs from the
+   kernel config; without it the load failed with `EINVAL` and the only error
+   line was `failed to open system Kconfig`. Fix: mount the host `/boot`
+   read-only.
+3. **Stale stats socket.** A socket at `/var/run/scx/root/stats` blocks the next
+   attach (`Error: deleting …stats: Permission denied`). Root cannot unlink the
+   socket, but renaming its directory works: `mv /var/run/scx /var/run/scx.stale`.
 
-1. **Run the kernel the schedulers expect.** The local `linux/` checkout is
-   **v7.3.0-rc6** and carries the fields `scx` needs
-   (`rescue_bandwidth_ppt`, `rescue_quantum_us` in
-   `kernel/sched/ext/ext.c`) alongside the cid form, so building and booting it
-   aligns the ABI with `scx` main. This is the "build one pinned kernel from
-   `linux/`" path the plan already allows.
-2. **Match an older scx** whose struct equals 472/45; none of the recent tags do
-   (v1.1.3 is 512, main is 528).
+Verified in an observer on `7.3.0-0.rc7…fc46`: `scx_bpfland` attaches, holds for
+30 s, and detaches cleanly (`EXIT: unregistered from user space`,
+`Unregister scx_bpfland scheduler`).
 
-`/sys/fs/bpf` missing in the observer was fixed and changed nothing; the
-`-95` BPF-token step is optional and skipped.
+Note the BCC situation is unrelated: `libbpf-tools` CO-RE binaries cover the
+run-queue metrics, and `kernel-devel` is deliberately not installed when the
+kernel comes from a different release's repository (it dragged that release's
+dependency set into the image).
 
 ## Transport — FIXED (logs/exec), SSH not used
 

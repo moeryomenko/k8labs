@@ -33,7 +33,6 @@ REQUIRED_PACKAGES = (
     "libbpf-tools",
     "python3-bcc",
     "bpftool",
-    "kernel-devel",
 )
 
 

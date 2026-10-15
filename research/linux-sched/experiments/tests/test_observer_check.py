@@ -32,7 +32,6 @@ def test_observer_check_required_packages() -> None:
         "libbpf-tools",
         "python3-bcc",
         "bpftool",
-        "kernel-devel",
     }
 
 

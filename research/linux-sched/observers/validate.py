@@ -20,6 +20,7 @@ DAEMONSET_FILE = OBSERVERS_DIR / "observer-daemonset.yaml"
 ALLOWED_HOST_PATHS = {
     "/sys/kernel/tracing",
     "/sys/kernel/btf",
+    "/boot",
     "/lib/modules",
     "/usr/src/kernels",
     "/var/tmp/linux-sched",

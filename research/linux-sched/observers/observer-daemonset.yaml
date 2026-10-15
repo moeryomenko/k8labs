@@ -82,6 +82,11 @@ spec:
             - name: btf
               mountPath: /sys/kernel/btf
               readOnly: true
+            # libbpf resolves `kcfg` externs from the kernel config; without it
+            # the struct_ops load fails with EINVAL.
+            - name: boot
+              mountPath: /boot
+              readOnly: true
             - name: modules
               mountPath: /lib/modules
               readOnly: true
@@ -98,6 +103,10 @@ spec:
         - name: btf
           hostPath:
             path: /sys/kernel/btf
+            type: Directory
+        - name: boot
+          hostPath:
+            path: /boot
             type: Directory
         # BCC compiles BPF at runtime against the running kernel's headers; the
         # node image installs kernel-devel for the pinned kernel, and these two
