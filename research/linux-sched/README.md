@@ -1,9 +1,12 @@
 # linux-sched — Linux CPU-scheduler research series
 
 Compares the default **EEVDF** scheduler with sched_ext implementations
-(`scx_bpfland`, `scx_lavd`, experimental `scx_mavd`) on a pinned worker VM, using
+(`scx_bpfland`, `scx_lavd`) on a pinned worker VM, using
 a randomized, seeded **paired-block** crossover and the frozen decision rule
 from the approved plan.
+
+`scx_mavd` is deferred: it needs a kernel with the arena-scalar prog flag
+(`BPF_F_ARENA_SCALAR`), which the pinned kernel does not have. See `GATES.md`.
 
 This series owns *in-guest* CPU scheduling only. Kubernetes pod placement is
 studied separately in the sibling `kube-sched` series.
@@ -90,9 +93,9 @@ The execution path refuses to run until these are satisfied (it fails loudly
 rather than reporting a fake success):
 
 1. A kernel build with the required BTF and sched_ext interfaces, used for
-   **all** arms (including EEVDF). `scx_mavd` needs the CID-form sched_ext API
-   and clang 22+.
-2. `scx_bpfland`/`scx_lavd`/`scx_mavd` binaries staged on the worker, with
+   **all** arms (including EEVDF). `scx_mavd` would additionally need a kernel
+   with `BPF_F_ARENA_SCALAR`, so it is deferred (see `GATES.md`).
+2. `scx_bpfland`/`scx_lavd` binaries staged on the worker, with
    verifier/attach/progress/detach checks passing.
 3. `bpftrace`, `perf`, and the BCC tools installed on the worker image. These
    are node-native: the image bake installs them (see `GATES.md` for the exact

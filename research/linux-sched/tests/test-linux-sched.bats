@@ -34,7 +34,7 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "$first" ]
 
-    [[ "$first" == *"arms=eevdf scx_bpfland scx_lavd scx_mavd"* ]]
+    [[ "$first" == *"arms=eevdf scx_bpfland scx_lavd"* ]]
     [[ "$first" == *"block=1"* ]]
     [[ "$first" == *"block=3"* ]]
 }
@@ -57,9 +57,11 @@ setup() {
     # arms concatenated.
     run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; split_words \"\$(seeded_permutation 20261016)\""
     [ "$status" -eq 0 ]
-    [ "${#lines[@]}" -eq 4 ]
-    for i in 0 1 2 3; do
-        [[ "${lines[$i]}" != *" "* ]]
+    expected="$(bash -c "source '${SERIES_DIR}/experiments/lib.sh'; split_words \"\${LINUX_SCHED_ARMS}\" | wc -l | tr -d ' '")"
+    [ "${#lines[@]}" -ge 3 ]
+    [ "${#lines[@]}" -eq "${expected}" ]
+    for line in "${lines[@]}"; do
+        [[ "$line" != *" "* ]]
     done
 }
 

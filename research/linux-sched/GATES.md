@@ -279,6 +279,12 @@ ordinary addresses and corrupt memory. The change that introduced this for
 So `scx_mavd` runs in this lab only under a kernel that has the flag (v7.4), or
 as the pre-`6b9fe0d69` revision built in the classic arena form.
 
+Decision: `scx_mavd` is **deferred** from the series. The series runs three arms
+(EEVDF, `scx_bpfland`, `scx_lavd`) so that every arm shares one scx revision and
+one kernel ABI; `scx_mavd` rejoins when a kernel with the flag is available. The
+runner refuses the arm with a pointer here until then, so it cannot be started by
+accident.
+
 Note the BCC situation is unrelated: `libbpf-tools` CO-RE binaries cover the
 run-queue metrics, and `kernel-devel` is deliberately not installed when the
 kernel comes from a different release's repository (it dragged that release's

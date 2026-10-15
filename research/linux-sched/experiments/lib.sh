@@ -14,8 +14,13 @@ shopt -s inherit_errexit
 IFS=$'\n\t'
 
 # Schedulers compared in every block. The first entry is the control arm.
+#
+# scx_mavd is absent on purpose: its object sets BPF_F_ARENA_SCALAR, which the
+# pinned kernel rejects, and its sources no longer build in the classic arena
+# form. It rejoins the series when a kernel with that flag is available; set
+# LINUX_SCHED_ARMS to add it back. See GATES.md.
 LINUX_SCHED_CONTROL="${LINUX_SCHED_CONTROL:-eevdf}"
-LINUX_SCHED_ARMS="${LINUX_SCHED_ARMS:-eevdf scx_bpfland scx_lavd scx_mavd}"
+LINUX_SCHED_ARMS="${LINUX_SCHED_ARMS:-eevdf scx_bpfland scx_lavd}"
 
 # Minimum samples frozen by the plan.
 LINUX_SCHED_MIN_BLOCKS="${LINUX_SCHED_MIN_BLOCKS:-5}"
@@ -204,12 +209,18 @@ scx_reset() {
 }
 
 # scx_stage NODE — copy the built schedulers into that node's observer.
+#
+# Stages exactly the sched_ext arms the run will use, so a binary that is absent
+# (or one the series has deferred) cannot break staging for the others.
 scx_stage() {
     local node="$1" pod name
+    local -a arms
     pod="$(observer_pod_for_node "$node")"
     [[ -n "$pod" ]] || die "no observer pod on ${node}"
     kexec "$pod" sh -c 'mkdir -p /var/tmp/linux-sched/bin'
-    for name in scx_bpfland scx_lavd scx_mavd; do
+    mapfile -t arms < <(split_words "$LINUX_SCHED_ARMS")
+    for name in "${arms[@]}"; do
+        case "$name" in scx_*) ;; *) continue ;; esac
         kubectl_wl cp "$(scx_binary "$name")" \
             "${OBSERVER_NAMESPACE}/${pod}:/var/tmp/linux-sched/bin/${name}" >/dev/null \
             || die "failed to copy ${name} to ${pod}"

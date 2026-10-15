@@ -1,9 +1,10 @@
 # k8labs Linux CPU-scheduler Research — linux-sched series Makefile
 #
 # Compares the default EEVDF scheduler against sched_ext implementations
-# (scx_bpfland, scx_lavd, experimental scx_mavd) on a pinned worker VM using a
+# (scx_bpfland, scx_lavd) on a pinned worker VM using a
 # randomized, seeded paired-block crossover. See README.md for the protocol and
-# the approved plan for the frozen decision rule.
+# the approved plan for the frozen decision rule. scx_mavd is deferred pending a
+# kernel with BPF_F_ARENA_SCALAR; see GATES.md.
 #
 # All targets are namespaced `linux-sched-*` and are discovered by the
 # research/ aggregator through `include $(wildcard */*.mk)`.
