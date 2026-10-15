@@ -83,6 +83,11 @@ linux-sched-overhead: ## Run the observer-overhead calibration for one scenario 
 	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name>" >&2; exit 1; fi
 	$(LINUX_SCHED_RUNNER) overhead --scenario $(SCENARIO) --configs-dir $(LINUX_SCHED_CONFIGS_DIR) --data-root $(LINUX_SCHED_DATA_ROOT)
 
+.PHONY: linux-sched-calibrate
+linux-sched-calibrate: ## Freeze a scenario's offered rate on the control arm (SCENARIO=<name>)
+	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name>" >&2; exit 1; fi
+	$(LINUX_SCHED_RUNNER) calibrate --scenario $(SCENARIO) --configs-dir $(LINUX_SCHED_CONFIGS_DIR) --data-root $(LINUX_SCHED_DATA_ROOT)
+
 # ---- Analysis ----
 
 .PHONY: linux-sched-analyze

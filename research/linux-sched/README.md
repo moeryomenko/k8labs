@@ -37,6 +37,7 @@ make linux-sched-validate                                # validate scenario con
 make linux-sched-list-scenarios                          # list scenarios
 make linux-sched-pilot        SCENARIO=http              # pilot blocks
 make linux-sched-experiment   SCENARIO=http              # confirmatory blocks
+make linux-sched-calibrate    SCENARIO=http              # freeze the offered rate (http, mixed)
 make linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
 make linux-sched-analyze                                 # decision-rule summary
 make linux-sched-observer-check                          # node-native observer tooling gate
@@ -108,7 +109,7 @@ rather than reporting a fake success):
    `kubectl logs`/`exec` work again after the `system:kube-apiserver-proxy`
    subject fix (see `GATES.md`); the capture path must be driven through the
    Kubernetes API.
-6. **Not yet met for `http` and `mixed`:** their load arguments carry an
-   `__RPS__` placeholder for an offered rate calibrated on EEVDF, and nothing
-   substitutes it or performs the calibration. Until that exists, a pilot can
-   only use `postgres`, `ffmpeg` or `stress-ng`.
+6. A frozen offered rate for `http` and `mixed`, whose load arguments carry an
+   `__RPS__` placeholder. `make linux-sched-calibrate SCENARIO=http` finds it on
+   the control arm by raising the rate until p99 crosses a target and freezing
+   the highest rate that stayed under it; `run` refuses to start without it.

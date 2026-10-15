@@ -75,3 +75,49 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"node-native observer tooling OK"* ]]
 }
+
+@test "render_load_command fills the rate and duration placeholders" {
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; LOAD_COMMAND=wrk2; LOAD_ARGS='-d __DURATION__s -R __RPS__ --latency http://x/'; render_load_command 1500 30"
+    [ "$status" -eq 0 ]
+    [ "$output" = "wrk2 -d 30s -R 1500 --latency http://x/" ]
+}
+
+@test "load_needs_rate detects only the rate placeholder" {
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; LOAD_ARGS='-R __RPS__'; load_needs_rate && echo yes || echo no"
+    [ "$output" = "yes" ]
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; LOAD_ARGS='-R 1500'; load_needs_rate && echo yes || echo no"
+    [ "$output" = "no" ]
+}
+
+@test "a missing frozen rate fails loudly instead of guessing" {
+    local tmp
+    tmp="$(mktemp -d)"
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; frozen_offered_rate '${tmp}' http"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no calibrated offered rate"* ]]
+    rm -rf "$tmp"
+}
+
+@test "a frozen rate is read back verbatim" {
+    local tmp
+    tmp="$(mktemp -d)"
+    mkdir -p "${tmp}/http"
+    printf '2000\n' > "${tmp}/http/offered-rate-rps"
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; frozen_offered_rate '${tmp}' http"
+    [ "$status" -eq 0 ]
+    [ "$output" = "2000" ]
+    rm -rf "$tmp"
+}
+
+@test "help documents the calibrate subcommand" {
+    run "${RUNNER}" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"calibrate"* ]]
+}
+
+@test "rate scenarios carry a duration placeholder for calibration probes" {
+    run grep -h "LOAD_ARGS" "${SCENARIOS}/http.conf" "${SCENARIOS}/mixed-http-ffmpeg.conf"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"__RPS__"* ]]
+    [[ "$output" == *"__DURATION__s"* ]]
+}

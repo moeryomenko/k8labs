@@ -28,6 +28,19 @@ LINUX_SCHED_PILOT_BLOCKS="${LINUX_SCHED_PILOT_BLOCKS:-3}"
 LINUX_SCHED_COOLDOWN_S="${LINUX_SCHED_COOLDOWN_S:-60}"
 LINUX_SCHED_QUIESCE_PCT="${LINUX_SCHED_QUIESCE_PCT:-10}"
 LINUX_SCHED_QUIESCE_HOLD_S="${LINUX_SCHED_QUIESCE_HOLD_S:-30}"
+
+# Offered-rate calibration (http, mixed). The rate is found on the control arm
+# by raising it until p99 crosses the target, then freezing the highest rate
+# that stayed under it. Every arm then offers that same rate, so the comparison
+# is at equal load rather than at equal achieved throughput.
+LINUX_SCHED_RATE_P99_TARGET_MS="${LINUX_SCHED_RATE_P99_TARGET_MS:-10}"
+LINUX_SCHED_RATE_SWEEP_START="${LINUX_SCHED_RATE_SWEEP_START:-500}"
+LINUX_SCHED_RATE_SWEEP_FACTOR="${LINUX_SCHED_RATE_SWEEP_FACTOR:-1.5}"
+LINUX_SCHED_RATE_SWEEP_MAX="${LINUX_SCHED_RATE_SWEEP_MAX:-65536}"
+LINUX_SCHED_RATE_PROBE_S="${LINUX_SCHED_RATE_PROBE_S:-30}"
+
+# How long to wait for a workload Pod to start serving before the load begins.
+LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S="${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S:-120}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
 
 OBSERVER_NAMESPACE="${OBSERVER_NAMESPACE:-linux-sched}"
@@ -173,6 +186,39 @@ scx_binary() {
 
 # scx_state_file — local file holding the pid of the supervising kubectl exec.
 scx_state_file() { printf '%s' "${LINUX_SCHED_SCX_STATE:-/tmp/linux-sched-scx.pid}"; }
+
+# load_needs_rate — true when the scenario's load arguments carry a rate
+# placeholder that the calibration has to fill in.
+load_needs_rate() {
+    [[ "${LOAD_ARGS:-}" == *"__RPS__"* ]]
+}
+
+# offered_rate_file DATA_ROOT SCENARIO — where the calibrated rate is frozen.
+# One file per scenario, so a run cannot pick up another scenario's rate.
+offered_rate_file() {
+    printf '%s/%s/offered-rate-rps' "$1" "$2"
+}
+
+# render_load_command RATE DURATION — fill the load template's placeholders.
+# __RPS__ is the calibrated offered rate; __DURATION__ is the window, which a
+# calibration probe shortens so it does not need a second copy of the command.
+render_load_command() {
+    local rate="$1" duration="$2"
+    local cmd="${LOAD_COMMAND:-}${LOAD_ARGS:+ ${LOAD_ARGS}}"
+    cmd="${cmd//__RPS__/${rate}}"
+    cmd="${cmd//__DURATION__/${duration}}"
+    printf '%s' "$cmd"
+}
+
+# frozen_offered_rate DATA_ROOT SCENARIO — the calibrated rate, or a clear
+# failure. A scenario that needs a rate must not run on a guessed one.
+frozen_offered_rate() {
+    local file
+    file="$(offered_rate_file "$1" "$2")"
+    [[ -s "$file" ]] \
+        || die "no calibrated offered rate in ${file}; run 'run-block.sh calibrate --scenario $2' first"
+    tr -d '[:space:]' < "$file"
+}
 
 # scx_reset NODE — stop any running scheduler and clear its stats socket.
 #

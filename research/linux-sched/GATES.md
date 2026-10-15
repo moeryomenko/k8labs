@@ -403,6 +403,42 @@ The observer's fixture mounts are `type: Directory`, not `DirectoryOrCreate`: an
 observer without fixtures can only produce empty samples, so it should refuse to
 start rather than run.
 
+## Observer processes died with their exec
+
+The capture started each observer by backgrounding it inside the Pod through
+`kubectl exec` and returning immediately. A process started that way is killed
+when the exec session ends — the same behaviour that killed the sched_ext
+schedulers — so all three observers were dead within a second and the capture
+either failed its own liveness check or copied empty artifacts. That is why
+`runqlat.txt` was always empty.
+
+Each observer is now supervised by a long-lived local `kubectl exec` that stays
+open for as long as the observer should run, and its remote pid is recorded for
+a belt-and-braces kill on cleanup. Verified against a live worker: a capture
+that previously produced nothing now yields an 8 KB runqlat histogram and a
+4.8 MB `perf.data`, with no observer processes left behind on the node.
+
+## Workload lifecycle in a capture
+
+Two lifecycle steps were missing, and both produced misleading samples rather
+than visible failures:
+
+- The load was started against a Pod that was still initialising, so a sample
+  could measure nginx coming up or PostgreSQL replaying its snapshot instead of
+  the workload. The capture now waits for the arm's workload Pod to report Ready
+  before the load begins.
+- A podlog-sourced metric (`ffmpeg`, `stress-ng`) was read from the workload log
+  right after the load, while the job was still running, so the log held only a
+  partial run. `--await-workload-completion` makes the capture wait for the Pods
+  to stop first. `run` passes it for podlog scenarios only: a load-sourced
+  scenario's nginx keeps serving after its load ends, and waiting there would
+  stall for nothing.
+
+`make linux-sched-overhead` also passed `--instrumentation instruments-enabled`,
+which the capture compares against `enabled`, so **both** variants ran
+uninstrumented and the overhead comparison measured nothing. The variants are
+`enabled`/`disabled` now.
+
 ## Consequence for the design
 
 - Observer tooling is provisioned into the node image (node-native) and can also
@@ -410,6 +446,6 @@ start rather than run.
 - `logs`/`exec` work, so the Kubernetes API is the result transport; SSH to the
   VMs is still unusable and is not used.
 - Before the first block: re-bake the image so the fixtures exist (the observer
-  will not start without them), then run a pilot to calibrate the HTTP offered
-  rate that the confirmatory blocks freeze.
+  will not start without them), then `make linux-sched-calibrate SCENARIO=http`
+  to freeze the offered rate the measured blocks then share.
 

@@ -10,10 +10,14 @@
 #   run-block.sh run        --scenario NAME --mode pilot|confirmatory \
 #                           --configs-dir DIR --data-root DIR
 #   run-block.sh overhead   --scenario NAME --configs-dir DIR --data-root DIR
+#   run-block.sh calibrate  --scenario NAME --configs-dir DIR --data-root DIR
 #
 # `plan` computes the full seeded paired-block schedule and prints it; it needs
 # no cluster. `run` performs the protocol and fails loudly on any missing
 # prerequisite rather than reporting a fake success.
+#
+# `calibrate` freezes the offered rate for a scenario whose load carries one,
+# on the control arm, before any measured block runs.
 
 set -Eeuo pipefail
 shopt -s inherit_errexit
@@ -165,13 +169,30 @@ run_block() {
 
     activate_arm "$arm"
 
+    # A scenario whose load carries a rate placeholder must run on the frozen
+    # calibration value, never on a guess.
+    local rate=""
+    if load_needs_rate; then
+        rate="$(frozen_offered_rate "$DATA_ROOT" "$SCENARIO_NAME")"
+    fi
+    local load_command
+    load_command="$(render_load_command "$rate" "$DURATION_S")"
+
+    local await_completion=()
+    if [[ "${PRIMARY_SOURCE:-load}" == "podlog" ]]; then
+        # The metric is read from the workload's own log, so the workload has
+        # to finish before the log is collected.
+        await_completion=(--await-workload-completion)
+    fi
+
     local load_raw="${raw_dir}/${arm}.txt"
     local podlog_raw="${raw_dir}/${arm}.log"
     "${SCRIPT_DIR}/../capture/capture-block.sh" \
         --target-node "$TARGET_NODE" --duration "$DURATION_S" --out-dir "$raw_dir" \
         --arm "$arm" --load-node "${LOAD_NODE:-}" \
         --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
-        --load-command "${LOAD_COMMAND:-}${LOAD_ARGS:+ ${LOAD_ARGS}}" \
+        --load-command "$load_command" \
+        "${await_completion[@]}" \
         --raw "$load_raw" --podlog "$podlog_raw" \
         || die "capture failed for block ${block} arm ${arm}"
 
@@ -212,6 +233,7 @@ cmd_run() {
     esac
 
     BLOCKS_CSV="${data_root}/blocks.csv"
+    DATA_ROOT="$data_root"
     mkdir -p "$data_root"
 
     local blocks; blocks="$(block_count "$mode")"
@@ -238,26 +260,114 @@ cmd_overhead() {
     load_scenario "$dir" "$scenario"
     require_cmd kubectl python3
     resolve_hosts
+    DATA_ROOT="$data_root"
     local out="${data_root}/${SCENARIO_NAME}/overhead"
     mkdir -p "$out"
+
+    local rate=""
+    if load_needs_rate; then
+        rate="$(frozen_offered_rate "$DATA_ROOT" "$SCENARIO_NAME")"
+    fi
+    local load_command
+    load_command="$(render_load_command "$rate" "$DURATION_S")"
+
+    local await_completion=()
+    if [[ "${PRIMARY_SOURCE:-load}" == "podlog" ]]; then
+        await_completion=(--await-workload-completion)
+    fi
+
     log "observer-overhead calibration for ${SCENARIO_NAME} on EEVDF"
     local variant
-    for variant in instruments-enabled instruments-disabled; do
+    # The capture matches `enabled`/`disabled` exactly; passing
+    # `instruments-enabled` left BOTH variants uninstrumented, which made the
+    # comparison meaningless.
+    for variant in enabled disabled; do
         "${SCRIPT_DIR}/../capture/capture-block.sh" \
             --target-node "$TARGET_NODE" --duration "$DURATION_S" --out-dir "$out" \
-            --arm "eevdf-${variant}" --load-node "${LOAD_NODE:-}" \
+            --arm "eevdf-instruments-${variant}" --load-node "${LOAD_NODE:-}" \
             --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
-            --load-command "${LOAD_COMMAND:-}${LOAD_ARGS:+ ${LOAD_ARGS}}" \
-            --raw "${out}/${variant}.txt" --podlog "${out}/${variant}.log" \
+            --load-command "$load_command" \
+            "${await_completion[@]}" \
+            --raw "${out}/instruments-${variant}.txt" \
+            --podlog "${out}/instruments-${variant}.log" \
             --instrumentation "$variant" \
             || die "overhead ${variant} capture failed"
-        local metric_source="${out}/${variant}.txt"
-        [[ "${PRIMARY_SOURCE:-load}" == "podlog" ]] && metric_source="${out}/${variant}.log"
+        local metric_source="${out}/instruments-${variant}.txt"
+        if [[ "${PRIMARY_SOURCE:-load}" == "podlog" ]]; then
+            metric_source="${out}/instruments-${variant}.log"
+        fi
         collect_metric "$metric_source" "$METRIC_COMMAND" "$DURATION_S" \
-            "${out}/${variant}.metric" \
+            "${out}/instruments-${variant}.metric" \
             || die "overhead ${variant} metric extraction failed"
     done
     log "overhead calibration complete: ${out}"
+}
+
+# cmd_calibrate SCENARIO DIR DATA_ROOT — find one scenario's offered rate and
+# freeze it.
+#
+# The rule is a latency knee on the control arm: raise the offered rate in
+# geometric steps, measure p99 at each, and freeze the highest rate whose p99
+# stayed at or under the target. Freezing on the control arm is the point — the
+# arms are then compared at equal offered load, not at equal achieved
+# throughput, which would hide the scheduler behind the load generator's own
+# back-pressure.
+cmd_calibrate() {
+    local scenario="$1" dir="$2" data_root="$3"
+    load_scenario "$dir" "$scenario"
+    load_needs_rate \
+        || die "scenario ${SCENARIO_NAME} has no __RPS__ placeholder to calibrate"
+    require_cmd kubectl python3
+    resolve_hosts
+    DATA_ROOT="$data_root"
+
+    local out="${data_root}/${SCENARIO_NAME}/calibration"
+    mkdir -p "$out"
+    local csv="${out}/rate-sweep.csv"
+    printf 'rate_rps,p99_ms\n' > "$csv"
+
+    log "calibrating ${SCENARIO_NAME}: ${LINUX_SCHED_CONTROL} control arm, " \
+        "target p99 <= ${LINUX_SCHED_RATE_P99_TARGET_MS} ms, " \
+        "${LINUX_SCHED_RATE_PROBE_S}s probes"
+    scx_reset "$TARGET_NODE"
+    activate_arm "$LINUX_SCHED_CONTROL"
+
+    local rate="$LINUX_SCHED_RATE_SWEEP_START"
+    local p99="" best="" probes=0
+    while (( rate <= LINUX_SCHED_RATE_SWEEP_MAX )); do
+        probes=$(( probes + 1 ))
+        local probe_dir="${out}/rate-${rate}"
+        mkdir -p "$probe_dir"
+        local load_command
+        load_command="$(render_load_command "$rate" "$LINUX_SCHED_RATE_PROBE_S")"
+        "${SCRIPT_DIR}/../capture/capture-block.sh" \
+            --target-node "$TARGET_NODE" --duration "$LINUX_SCHED_RATE_PROBE_S" \
+            --out-dir "$probe_dir" --arm "rate-${rate}" --load-node "${LOAD_NODE:-}" \
+            --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
+            --load-command "$load_command" \
+            --raw "${probe_dir}/load.txt" --podlog "${probe_dir}/pod.log" \
+            || die "calibration probe at ${rate} rps failed"
+        collect_metric "${probe_dir}/load.txt" "$METRIC_COMMAND" \
+            "$LINUX_SCHED_RATE_PROBE_S" "${probe_dir}/p99.metric" \
+            || die "could not read p99 at ${rate} rps"
+        p99="$(cat "${probe_dir}/p99.metric")"
+        printf '%s,%s\n' "$rate" "$p99" >> "$csv"
+        log "  ${rate} rps -> p99 ${p99} ms"
+        if awk -v a="$p99" -v b="$LINUX_SCHED_RATE_P99_TARGET_MS" \
+            'BEGIN { exit !(a <= b) }'; then
+            best="$rate"
+            rate="$(awk -v r="$rate" -v f="$LINUX_SCHED_RATE_SWEEP_FACTOR" \
+                'BEGIN { printf "%d", r * f }')"
+        else
+            break
+        fi
+    done
+
+    scx_reset "$TARGET_NODE"
+
+    [[ -n "$best" ]] || die "no rate held p99 at or under ${LINUX_SCHED_RATE_P99_TARGET_MS} ms; see ${csv}"
+    printf '%s\n' "$best" > "$(offered_rate_file "$data_root" "$SCENARIO_NAME")"
+    log "frozen offered rate ${best} rps for ${SCENARIO_NAME} after ${probes} probe(s): ${csv}"
 }
 
 # ---- argument parsing ------------------------------------------------------
@@ -273,7 +383,7 @@ main() {
             --help|-h) usage 0 ;;
             --validate) subcmd="validate"; shift ;;
             --list) subcmd="list"; shift ;;
-            plan|run|overhead) subcmd="$1"; shift ;;
+            plan|run|overhead|calibrate) subcmd="$1"; shift ;;
             --scenario) scenario="$2"; shift 2 ;;
             --mode) run_mode="$2"; shift 2 ;;
             --configs-dir) dir="$2"; shift 2 ;;
@@ -299,6 +409,11 @@ main() {
             [[ -n "$scenario" ]] || die "--scenario is required"
             [[ -n "$data_root" ]] || die "--data-root is required"
             cmd_overhead "$scenario" "$dir" "$data_root"
+            ;;
+        calibrate)
+            [[ -n "$scenario" ]] || die "--scenario is required"
+            [[ -n "$data_root" ]] || die "--data-root is required"
+            cmd_calibrate "$scenario" "$dir" "$data_root"
             ;;
         *) die "no subcommand given; see --help" ;;
     esac
