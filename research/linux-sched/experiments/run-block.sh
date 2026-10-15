@@ -204,7 +204,7 @@ cmd_plan() {
 cmd_run() {
     local scenario="$1" mode="$2" dir="$3" data_root="$4"
     load_scenario "$dir" "$scenario"
-    require_cmd kubectl python3 ssh
+    require_cmd kubectl python3
     resolve_hosts
 
     case "$data_root" in
@@ -236,7 +236,7 @@ cmd_run() {
 cmd_overhead() {
     local scenario="$1" dir="$2" data_root="$3"
     load_scenario "$dir" "$scenario"
-    require_cmd kubectl python3 ssh
+    require_cmd kubectl python3
     resolve_hosts
     local out="${data_root}/${SCENARIO_NAME}/overhead"
     mkdir -p "$out"

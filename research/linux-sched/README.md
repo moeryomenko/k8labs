@@ -108,3 +108,7 @@ rather than reporting a fake success):
    `kubectl logs`/`exec` work again after the `system:kube-apiserver-proxy`
    subject fix (see `GATES.md`); the capture path must be driven through the
    Kubernetes API.
+6. **Not yet met for `http` and `mixed`:** their load arguments carry an
+   `__RPS__` placeholder for an offered rate calibrated on EEVDF, and nothing
+   substitutes it or performs the calibration. Until that exists, a pilot can
+   only use `postgres`, `ffmpeg` or `stress-ng`.
