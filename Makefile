@@ -410,6 +410,10 @@ mgmt-up: prereq mgmt-bootstrap mgmt-check ## Create the Kind management plane an
 
 mgmt-down: kind-down ## Destructive alias for kind-down; HostAgent state is preserved
 
+.PHONY: provider-loopback-forward
+provider-loopback-forward: ## Work around the pinned provider dialing loopback (see research/linux-sched/GATES.md)
+	@python3 scripts/provider_loopback_forward.py --context "$(MGMT_CONTEXT)"
+
 .PHONY: cluster-up
 cluster-up: ## Server-side apply capi/cluster.yaml against the Kind management plane (idempotent)
 	@set -euo pipefail; \
