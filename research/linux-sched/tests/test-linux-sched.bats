@@ -68,8 +68,8 @@ setup() {
     [ "$status" -ne 0 ]
 }
 
-@test "telemetry manifests pass offline validation" {
-    run uv run python "${SERIES_DIR}/telemetry/validate.py"
+@test "node-native observer tooling gate passes" {
+    run python3 "${SERIES_DIR}/experiments/observer_check.py"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"telemetry manifests OK"* ]]
+    [[ "$output" == *"node-native observer tooling OK"* ]]
 }

@@ -36,8 +36,7 @@ make linux-sched-pilot        SCENARIO=http              # pilot blocks
 make linux-sched-experiment   SCENARIO=http              # confirmatory blocks
 make linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
 make linux-sched-analyze                                 # decision-rule summary
-make linux-sched-telemetry-test                          # offline manifest validation
-make linux-sched-telemetry-apply                         # deploy privileged observers
+make linux-sched-observer-check                          # node-native observer tooling gate
 make linux-sched-test                                    # pytest + bats
 ```
 
@@ -56,15 +55,16 @@ linux-sched/
 ├── linux-sched.mk                 # series makefile (linux-sched-* targets)
 ├── experiments/
 │   ├── run-block.sh               # paired-block driver
-│   ├── lib.sh                     # shared helpers (cluster/SSH/protocol)
+│   ├── lib.sh                     # shared helpers (cluster/transport/protocol)
 │   ├── metrics.py                 # primary-outcome parsers
+│   ├── observer_check.py          # node-native tooling gate
 │   ├── scenarios/*.conf           # workload scenarios
-│   └── tests/                     # parser tests
+│   └── tests/                     # parser + gate tests
 ├── capture/
 │   ├── capture-block.sh           # one measured sample per arm
 │   └── probes/sched-trace.bt      # sched_wakeup/switch/migrate trace
 ├── workloads/*.yaml               # pinned workload manifests
-├── telemetry/                     # privileged observer DaemonSets + validation
+├── GATES.md                       # recorded Phase 2 environment findings
 └── analysis/                      # paired analysis core + tests
 ```
 
@@ -91,7 +91,10 @@ rather than reporting a fake success):
    and clang 22+.
 2. `scx_bpfland`/`scx_lavd`/`scx_mavd` binaries staged on the worker, with
    verifier/attach/progress/detach checks passing.
-3. `bpftrace`, `perf`, and the BCC tools installed on the worker image.
+3. `bpftrace`, `perf` (kernel-tools), and the BCC tools installed on the worker
+   image. These are node-native: the image bake installs them, and the series
+   never runs a privileged observer Pod (see `GATES.md`).
 4. Pinned workload images plus the licensed FFmpeg fixture.
-5. Node label `linux-sched/research=observer` on the worker for the telemetry
-   DaemonSets to schedule.
+5. A working node transport for the runner. SSH to the worker VMs and the
+   cluster's `kubectl logs`/`exec` path are both currently broken in this lab
+   (see `GATES.md`); the runner refuses to run until one is repaired.

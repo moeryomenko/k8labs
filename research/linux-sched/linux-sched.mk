@@ -100,19 +100,12 @@ linux-sched-report: linux-sched-analyze ## Print the linux-sched analysis report
 	@echo "  summary.csv  — decision rule verdicts"
 	@echo "  summary.json — schema-versioned machine-readable verdicts"
 
-# ---- Telemetry ----
+# ---- Node-native observer tooling ----
 
-.PHONY: linux-sched-telemetry-apply
-linux-sched-telemetry-apply: ## Apply linux-sched telemetry manifests (privileged observers)
-	$(LINUX_SCHED_DIR)telemetry/apply.sh apply
-
-.PHONY: linux-sched-telemetry-delete
-linux-sched-telemetry-delete: ## Delete linux-sched telemetry manifests
-	$(LINUX_SCHED_DIR)telemetry/apply.sh delete
-
-.PHONY: linux-sched-telemetry-test
-linux-sched-telemetry-test: ## Validate linux-sched telemetry manifests locally (kubeconform/kubectl dry-run)
-	$(LINUX_SCHED_DIR)telemetry/apply.sh test
+.PHONY: linux-sched-observer-check
+linux-sched-observer-check: ## Check the node image installs the native observer tooling (no cluster needed)
+	@echo "Checking node-native observer tooling provisioning..."
+	python3 $(LINUX_SCHED_EXPERIMENTS_DIR)/observer_check.py
 
 # ---- Test / clean ----
 
@@ -120,7 +113,7 @@ linux-sched-telemetry-test: ## Validate linux-sched telemetry manifests locally 
 linux-sched-test: ## Run the linux-sched test suite (pytest + bats)
 	@set -e
 	@echo "Running linux-sched test suite..."
-	uv run pytest $(LINUX_SCHED_ANALYSIS_DIR)/tests/ $(LINUX_SCHED_EXPERIMENTS_DIR)/tests/ $(LINUX_SCHED_DIR)telemetry/tests/
+	uv run pytest $(LINUX_SCHED_ANALYSIS_DIR)/tests/ $(LINUX_SCHED_EXPERIMENTS_DIR)/tests/
 	@if command -v bats >/dev/null 2>&1; then bats $(LINUX_SCHED_TEST_DIR)/*.bats; else echo "  bats not installed; skipping shell tests"; fi
 
 .PHONY: linux-sched-clean
