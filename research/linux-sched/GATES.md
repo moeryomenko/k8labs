@@ -235,6 +235,45 @@ running it: a process started through `kubectl exec` dies with that exec, so the
 scheduler is supervised by a long-lived local `kubectl exec`; and the binary is
 exec'd through `sh -c` because the runtime refuses a hostPath binary directly.
 
+### Rebuilding the schedulers against the pinned kernel
+
+The binaries must be built against the running kernel's BTF, or the struct_ops
+match fails. Do this in a **worktree**, so the user's scx checkout stays clean
+(`<ver>` is the kernel version, `<sha12>` the first 12 hex of the kernel commit;
+on `7.3.0-0.rc7…fc46` that is `7.3.0-rc7` and `4056b3c9d3c9`):
+
+```sh
+git worktree add /tmp/scx-kern <rev> && cd /tmp/scx-kern
+
+# 1. Dump the running kernel's BTF. bpftool and the BTF mount live in the
+#    observer, so run this there and copy the result out.
+bpftool btf dump file /sys/kernel/btf/vmlinux format c > /tmp/vmlinux-<ver>.h
+
+# 2. scx needs struct cpumask's bits array at a fixed width.
+python3 scripts/fixup_vmlinux_h.py /tmp/vmlinux-<ver>.h
+
+# 3. Install it beside the vendored dumps and repoint the symlink.
+install -m 0644 /tmp/vmlinux-<ver>.h "scheds/vmlinux/arch/x86/vmlinux-v<ver>-g<sha12>.h"
+ln -sfT "vmlinux-v<ver>-g<sha12>.h" scheds/vmlinux/arch/x86/vmlinux.h
+
+# 4. Rebuild the tarball the build actually consumes, then force a FULL
+#    rebuild: the compiler BPF object is cached, and `cargo clean -p` does not
+#    remove it, so a partial clean silently keeps the old dump's object.
+tar --zstd -cf rust/scx_utils/vmlinux.tar.zst -C scheds vmlinux
+cargo clean
+cargo build --release -p scx_bpfland -p scx_lavd
+```
+
+The result is a container-side `sched_ext_ops` of 512/51 against the kernel's
+512/51. Stage the binaries with that worktree as the source:
+
+```sh
+LINUX_SCHED_SCX_ROOT=/tmp/scx-kern make -C research linux-sched-scx-stage
+```
+
+The tarball mirrors `scheds/vmlinux/` (25 members, every arch's dump), which is
+why it is rebuilt from that directory rather than assembled by hand.
+
 ## `scx_mavd` — blocked: needs a 7.4 kernel
 
 `scx_mavd` is the only arm on the **cid** path, and on this kernel it fails to
