@@ -51,16 +51,18 @@ RUN curl -fsSL -o /usr/local/bin/cloud-hypervisor \
         && chmod +x /usr/local/bin/cloud-hypervisor \
         && cloud-hypervisor --version
 
-# Build the Packer Cloud-Hypervisor plugin from source at main and install it
-# in the plugin layout Packer 1.15.x discovers under $PACKER_PLUGIN_PATH:
-#   github.com/<owner>/<name>/packer-plugin-<name>_v<version>_x<apiversion>_<os>_<arch>
-# (matches the host's working ~/.packer.d/plugins tree). The plugin is Go;
+# Build the Packer Cloud-Hypervisor plugin from its lock-pinned commit and
+# install it in the plugin layout Packer 1.15.x discovers under
+# $PACKER_PLUGIN_PATH: github.com/<owner>/<name>/packer-plugin-<name>_v<version>_x<apiversion>_<os>_<arch>.
 # Fedora's golang (1.26.x) meets the plugin's go.mod requirement.
-ARG PACKER_PLUGIN_REF=main
+ARG PACKER_PLUGIN_REF
 ARG PLUGIN_VERSION=0.0.1
-RUN git clone --depth 1 --branch "${PACKER_PLUGIN_REF}" \
-        https://github.com/moeryomenko/packer-plugin-cloud-hypervisor /tmp/ppch \
+RUN git init /tmp/ppch \
     && cd /tmp/ppch \
+    && git remote add origin https://github.com/moeryomenko/packer-plugin-cloud-hypervisor \
+    && git fetch --depth 1 origin "${PACKER_PLUGIN_REF}" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "${PACKER_PLUGIN_REF}" \
     && go build -o packer-plugin-cloud-hypervisor . \
     && mkdir -p /plugins/github.com/moeryomenko/cloud-hypervisor \
     && cp packer-plugin-cloud-hypervisor \
