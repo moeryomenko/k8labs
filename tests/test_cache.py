@@ -21,7 +21,7 @@ SPEC.loader.exec_module(cache)
 
 def base_lock() -> dict[str, object]:
     return {
-        "fedora": {"kernel": "7.2.5"},
+        "fedora": {"kernel": "7.2.10"},
         "kubernetes": {"version": "v1", "cri_o": "v1", "crun": "1"},
         "cilium": {"version": "v1"},
         "cluster_api": {"version": "v1"},

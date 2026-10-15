@@ -31,7 +31,22 @@ def test_observer_check_required_packages() -> None:
         "bcc-tools",
         "python3-bcc",
         "bpftool",
+        "kernel-devel",
     }
+
+
+def test_versioned_package_satisfies_the_gate(tmp_path: Path, monkeypatch) -> None:
+    # kernel-devel is installed as kernel-devel-<version>; the match must accept
+    # the version suffix while still rejecting substring matches.
+    provisioner = tmp_path / "provisioner.sh"
+    provisioner.write_text(
+        "dnf install -y bpftrace perf bcc-tools python3-bcc bpftool "
+        '"kernel-devel-${KERNEL_VERSION}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(observer_check, "PACKER_PROVISIONER", provisioner)
+    errors = check()
+    assert not any("does not install" in e for e in errors)
 
 
 def test_missing_package_is_reported(tmp_path: Path, monkeypatch) -> None:

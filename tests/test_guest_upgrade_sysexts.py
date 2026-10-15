@@ -84,7 +84,7 @@ def make_stage_fixture(
         binaries.mkdir(parents=True)
         extension_value = "crio" if extension == "cri-o" else extension
         (release / f"extension-release.{extension}").write_text(
-            f"ID=fedora\nVERSION_ID=44\nKERNEL_VERSION=7.2.5-200.fc44\nEXTENSION={extension_value}\n",
+            f"ID=fedora\nVERSION_ID=44\nKERNEL_VERSION=7.2.10-200.fc44\nEXTENSION={extension_value}\n",
             encoding="utf-8",
         )
         for name in binary_names:

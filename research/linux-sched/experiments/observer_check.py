@@ -26,28 +26,39 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PACKER_PROVISIONER = PROJECT_ROOT / "packer" / "scripts" / "01-configure-system.sh"
 SERIES_DIR = PROJECT_ROOT / "research" / "linux-sched"
 
-REQUIRED_PACKAGES = ("bpftrace", "perf", "bcc-tools", "python3-bcc", "bpftool")
+REQUIRED_PACKAGES = (
+    "bpftrace",
+    "perf",
+    "bcc-tools",
+    "python3-bcc",
+    "bpftool",
+    "kernel-devel",
+)
 
 
 def _dnf_install_block(text: str) -> str:
-    """Return the concatenation of every `dnf install ...` command."""
+    """Return the concatenation of every `dnf ... install ...` command.
 
-    lines = text.splitlines()
+    Matches the command wherever it appears on a line — a bare `dnf install`,
+    `dnf --refresh install ...`, or one guarded by `if ! ... ; then` — and joins
+    backslash continuations.
+    """
+
     blocks: list[str] = []
     current: list[str] = []
     collecting = False
-    for line in lines:
+    for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("dnf install"):
+        if re.search(r"\bdnf\b.*\binstall\b", stripped):
             collecting = True
             current = [stripped]
         elif collecting:
-            if stripped.endswith("\\"):
-                current.append(stripped)
-            else:
-                current.append(stripped)
-                blocks.append(" ".join(current))
-                collecting = False
+            current.append(stripped)
+        else:
+            continue
+        if not stripped.endswith("\\"):
+            blocks.append(" ".join(current))
+            collecting = False
     return "\n".join(blocks)
 
 
@@ -59,7 +70,11 @@ def check() -> list[str]:
 
     block = _dnf_install_block(PACKER_PROVISIONER.read_text(encoding="utf-8"))
     for package in REQUIRED_PACKAGES:
-        if not re.search(rf"(?<![\w-]){re.escape(package)}(?![\w-])", block):
+        # Allow a version suffix (e.g. kernel-devel-7.2.10-200.fc44 or
+        # kernel-devel-${KERNEL_VERSION}) but not a substring match (perf must
+        # not be satisfied by "performance").
+        pattern = r"(?<![\w-])" + re.escape(package) + r"(-[\w.${}-]*)?" + r"(?![\w-])"
+        if not re.search(pattern, block):
             errors.append(
                 f"node image does not install required observer package: {package}"
             )

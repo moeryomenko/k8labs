@@ -17,7 +17,16 @@ import yaml
 
 OBSERVERS_DIR = Path(__file__).resolve().parent
 DAEMONSET_FILE = OBSERVERS_DIR / "observer-daemonset.yaml"
-ALLOWED_HOST_PATHS = {"/sys/kernel/tracing", "/sys/kernel/btf", "/var/tmp/linux-sched"}
+ALLOWED_HOST_PATHS = {
+    "/sys/kernel/tracing",
+    "/sys/kernel/btf",
+    "/lib/modules",
+    "/usr/src/kernels",
+    "/var/tmp/linux-sched",
+}
+# /var/tmp/linux-sched is the artifact spool; it must be writable. Every other
+# host path is read-only input.
+WRITABLE_HOST_PATHS = {"/var/tmp/linux-sched"}
 REQUIRED_CAPABILITIES = {"BPF", "PERFMON"}
 CONTAINER_KEYS = ("containers", "initContainers", "ephemeralContainers")
 
@@ -77,6 +86,13 @@ def validate(docs: list[dict] | None = None) -> list[str]:
                     f"(allowed: {sorted(ALLOWED_HOST_PATHS)})"
                 )
 
+        # Map volume name -> host path so mounts can be classified.
+        host_volume_paths = {
+            v["name"]: v["hostPath"]["path"]
+            for v in spec.get("volumes", [])
+            if v.get("hostPath")
+        }
+
         for key in CONTAINER_KEYS:
             for container in spec.get(key, []) or []:
                 context = container.get("securityContext", {})
@@ -94,6 +110,14 @@ def validate(docs: list[dict] | None = None) -> list[str]:
                 for mount in container.get("volumeMounts", []):
                     if mount.get("mountPath") == "/":
                         errors.append(f"{origin}: {key} mounts host root")
+                    host_path = host_volume_paths.get(mount.get("name"))
+                    if host_path is None or host_path in WRITABLE_HOST_PATHS:
+                        continue
+                    if mount.get("readOnly") is not True:
+                        errors.append(
+                            f"{origin}: host mount {host_path!r} in {key} "
+                            "must be readOnly"
+                        )
 
     return errors
 

@@ -9,7 +9,7 @@ set -eux
 # images do not accidentally upgrade it. KERNEL_VERSION is passed through
 # the Packer shell provisioner environment_vars.
 # ---------------------------------------------------------------------------
-KERNEL_VERSION="${KERNEL_VERSION:-7.2.5-200.fc44}"
+KERNEL_VERSION="${KERNEL_VERSION:-7.2.10-200.fc44}"
 
 echo "==> Baking with kernel target: ${KERNEL_VERSION}"
 
@@ -26,6 +26,14 @@ if ! dnf --refresh install -y "kernel-core-${KERNEL_VERSION}" \
 fi
 
 echo "==> Kernel ${KERNEL_VERSION} installed from refreshed repositories"
+
+# kernel-devel supplies /usr/src/kernels/<ver> and the /lib/modules/<ver>/build
+# symlink. The BCC observer tools compile their BPF programs at runtime and fail
+# without headers matching the RUNNING kernel, so the image must carry the same
+# version's devel tree.
+if ! dnf --refresh install -y "kernel-devel-${KERNEL_VERSION}" kernel-headers; then
+    echo "WARN: kernel-devel-${KERNEL_VERSION} unavailable; BCC tools will not compile"
+fi
 
 # Set the exact target kernel as the default boot entry. The original Fedora
 # kernel remains installed as a recovery fallback.

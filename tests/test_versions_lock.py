@@ -29,7 +29,7 @@ def test_repository_lock_is_valid_and_canonical() -> None:
 def test_mutable_reference_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "versions.yaml"
     path.write_text(
-        "fedora:\n  kernel: 7.2.5-200.fc44\n"
+        "fedora:\n  kernel: 7.2.10-200.fc44\n"
         "kubernetes:\n  version: v1.37.0\n  cri_o: v1.37.0\n  crun: 1.29.1\n"
         "cilium:\n  version: v1.20.2\n"
         "cluster_api:\n  version: v1.14.2\n"

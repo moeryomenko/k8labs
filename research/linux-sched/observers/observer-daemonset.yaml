@@ -51,12 +51,6 @@ spec:
             - |
               set -eu
               dnf install -y -q bpftrace perf bcc-tools python3-bcc bpftool
-              # BCC tools compile BPF at runtime and need headers matching the
-              # RUNNING kernel. Best effort: the repo may only carry headers for
-              # a newer kernel than the pinned image boots.
-              dnf install -y -q "kernel-devel-$(uname -r)" kernel-headers \
-                || dnf install -y -q kernel-devel kernel-headers \
-                || echo "WARN: kernel-devel unavailable for $(uname -r)"
               touch /tmp/observer-ready
               exec sleep infinity
           securityContext:
@@ -88,6 +82,12 @@ spec:
             - name: btf
               mountPath: /sys/kernel/btf
               readOnly: true
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: src-kernels
+              mountPath: /usr/src/kernels
+              readOnly: true
             - name: work
               mountPath: /var/tmp/linux-sched
       volumes:
@@ -99,6 +99,17 @@ spec:
           hostPath:
             path: /sys/kernel/btf
             type: Directory
+        # BCC compiles BPF at runtime against the running kernel's headers; the
+        # node image installs kernel-devel for the pinned kernel, and these two
+        # mounts expose that tree read-only.
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        - name: src-kernels
+          hostPath:
+            path: /usr/src/kernels
+            type: DirectoryOrCreate
         - name: work
           hostPath:
             path: /var/tmp/linux-sched

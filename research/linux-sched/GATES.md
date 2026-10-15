@@ -84,7 +84,7 @@ taint. Any `!node-role.kubernetes.io/control-plane` selector therefore matches
 *all* nodes. Membership is expressed by the opt-in label
 `linux-sched/research=observer` instead.
 
-## Known limitation — BCC needs matching kernel headers
+## Known limitation — RESOLVED by pinning the kernel
 
 `bcc-tools` compiles its BPF programs at runtime and fails without headers for
 the running kernel:
@@ -93,14 +93,23 @@ the running kernel:
 chdir(/lib/modules/7.2.7-200.fc44.x86_64/build): No such file or directory
 ```
 
-The image boots `7.2.7-200.fc44` while the Fedora repositories now carry
-`7.2.10-200.fc44`, so a matching `kernel-devel` may be unavailable. The observer
-attempts `kernel-devel-$(uname -r)` first and falls back to unpinned
-`kernel-devel`.
+The image booted `7.2.7-200.fc44` while Fedora 44 repositories carried only
+`7.2.10-200.fc44`, so no matching `kernel-devel` existed.
 
-`bpftrace` is unaffected — it uses BTF — so run-queue latency and migration
-metrics can be derived from bpftrace if BCC cannot be made to work on this
-kernel.
+Resolution: pin the kernel to **`7.2.10-200.fc44`**, for which Fedora 44 ships a
+matching `kernel-devel`:
+
+- `versions.lock.yaml` and `extensions/manifest.yaml` now pin `7.2.10-200.fc44`.
+- `packer/scripts/01-configure-system.sh` installs that version's `kernel-devel`
+  (and `kernel-headers`) into the node image.
+- The observer mounts the host's `/lib/modules` and `/usr/src/kernels`
+  read-only, which is what BCC needs to build against the running kernel.
+
+This takes effect only after the image is rebuilt and the workload cluster
+redeployed (`make base`, `make cluster`); the currently running nodes still boot
+`7.2.7` and BCC still fails there.
+
+`bpftrace` was never affected — it uses BTF.
 
 ## Transport — FIXED (logs/exec), SSH not used
 
