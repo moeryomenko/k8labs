@@ -2,12 +2,13 @@
 #
 # capture-block.sh — capture one measured sample on a linux-sched worker.
 #
-# Runs the required observer stack (BCC runqlat/runqlen, the sched_* bpftrace
-# probe, and `perf sched record`) on the target worker while the workload and
-# its load generator run, then copies the raw artifacts back.
+# Drives the long-lived observer DaemonSet over the Kubernetes API: it starts
+# the observer stack inside the target node's observer Pod, runs the workload
+# and its load generator, then copies the raw artifacts back. SSH is not used —
+# SSH to the lab VMs never completes.
 #
-# Load-generator output and the workload pod log are written to SEPARATE files
-# so the analysis can parse only the artifact the primary metric is defined on.
+# The observer tooling is node-native (see GATES.md). Run-queue metrics use the
+# CO-RE bpf-runqlat because BCC 0.35 cannot compile against the 7.2 headers.
 #
 # Every required tool and every observer process is verified: a missing probe or
 # a dead observer aborts the sample rather than reporting a partial success.
@@ -22,40 +23,43 @@ LINUX_SCHED_DIR="$(cd -- "${CAPTURE_DIR}/.." && pwd -P)"
 source "${LINUX_SCHED_DIR}/experiments/lib.sh"
 
 PROBE="${CAPTURE_DIR}/probes/sched-trace.bt"
-REMOTE_DIR="/var/tmp/linux-sched-capture"
+REMOTE_DIR="/var/tmp/linux-sched"
 
 usage() {
     cat <<'EOF'
-Usage: capture-block.sh --target-ip IP --duration N --out-dir DIR --arm ARM
-                        [--load-ip IP] [--manifest FILE] [--load-command CMD]
+Usage: capture-block.sh --target-node NODE --duration N --out-dir DIR --arm ARM
+                        [--load-node NODE] [--manifest FILE] [--load-command CMD]
                         [--raw FILE] [--podlog FILE]
                         [--instrumentation enabled|disabled]
 
 Captures one measured sample on ARM. --raw receives the load-generator output;
---podlog receives the workload pod log. With --instrumentation disabled the
-observer stack is not started (used only for the observer-overhead
-calibration); the default is enabled.
+--podlog receives the workload pod log. Observers run inside the observer
+DaemonSet Pod on --target-node; the load generator runs on --load-node. With
+--instrumentation disabled the observer stack is not started (observer-overhead
+calibration only).
 EOF
     exit "${1:-0}"
 }
 
-require_remote_tool() {
-    local tool="$1"
-    ssh_node "$TARGET_IP" "command -v ${tool} >/dev/null 2>&1" \
-        || die "required capture tool '${tool}' not present on ${TARGET_IP}"
+# observer_pod NODE — the observer pod on that node, or a clear failure.
+observer_pod() {
+    local node="$1" pod
+    pod="$(observer_pod_for_node "$node")"
+    [[ -n "$pod" ]] || die "no observer pod on ${node}; run 'make linux-sched-observers-apply'"
+    printf '%s' "$pod"
 }
 
 main() {
-    local target_ip="" duration="" out_dir="" arm="" load_ip=""
+    local target_node="" duration="" out_dir="" arm="" load_node=""
     local manifest="" load_command="" raw="" podlog="" instrumentation="enabled"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --target-ip) target_ip="$2"; shift 2 ;;
+            --target-node) target_node="$2"; shift 2 ;;
             --duration) duration="$2"; shift 2 ;;
             --out-dir) out_dir="$2"; shift 2 ;;
             --arm) arm="$2"; shift 2 ;;
-            --load-ip) load_ip="$2"; shift 2 ;;
+            --load-node) load_node="$2"; shift 2 ;;
             --manifest) manifest="$2"; shift 2 ;;
             --load-command) load_command="$2"; shift 2 ;;
             --raw) raw="$2"; shift 2 ;;
@@ -66,60 +70,69 @@ main() {
         esac
     done
 
-    [[ -n "$target_ip" ]] || die "--target-ip is required"
+    [[ -n "$target_node" ]] || die "--target-node is required"
     [[ -n "$duration" ]] || die "--duration is required"
     [[ -n "$out_dir" ]] || die "--out-dir is required"
     [[ -n "$arm" ]] || die "--arm is required"
-    TARGET_IP="$target_ip"
 
-    require_cmd ssh python3
+    require_cmd kubectl
     mkdir -p "$out_dir"
     local load_file="${raw:-${out_dir}/${arm}.txt}"
     local podlog_file="${podlog:-${out_dir}/${arm}.log}"
+    local work="${REMOTE_DIR}/${arm}"
+
+    local target_pod
+    target_pod="$(observer_pod "$target_node")"
+    log "target observer: ${target_pod} (${target_node})"
 
     local pids=()
     cleanup() {
         local pid
         for pid in "${pids[@]}"; do
-            ssh_node "$TARGET_IP" "sudo kill ${pid} 2>/dev/null || true" 2>/dev/null || true
+            kexec "$target_pod" sh -c "kill ${pid} 2>/dev/null || true" >/dev/null 2>&1 || true
         done
     }
     trap cleanup EXIT INT TERM
 
-    local runqlat_tool=""
+    start_observer() {
+        # Runs in the CURRENT shell (no pipeline, no subshell) so `pids`
+        # survives for the trap that has to kill these processes.
+        local name="$1" cmd="$2" pid
+        pid="$(kexec "$target_pod" sh -c \
+            "mkdir -p ${work} && ${cmd} </dev/null >${work}/${name}.txt 2>&1 & echo \$!")"
+        [[ -n "$pid" ]] || die "could not start ${name} in ${target_pod}"
+        sleep 1
+        kexec "$target_pod" sh -c "kill -0 ${pid} 2>/dev/null" \
+            || die "${name} exited immediately; see ${work}/${name}.txt"
+        pids+=("$pid")
+        log "  ${name}: pid ${pid}"
+    }
+
     if [[ "$instrumentation" == "enabled" ]]; then
-        require_remote_tool bpftrace
-        require_remote_tool perf
-        runqlat_tool="$(ssh_node "$TARGET_IP" \
-            'command -v bpf-runqlat || command -v runqlat || command -v /usr/share/bcc/tools/runqlat || command -v runqlat-bpfcc' || true)"
-        [[ -n "$runqlat_tool" ]] \
-            || die "no runqlat tool present on ${TARGET_IP} (want libbpf-tools bpf-runqlat)"
-        ssh_node "$TARGET_IP" "sudo install -d -m 0755 ${REMOTE_DIR}"
-
-        log "staging observer probe on ${TARGET_IP}"
-        scp -i "$(ssh_key)" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o LogLevel=ERROR "$PROBE" "fedora@${TARGET_IP}:${REMOTE_DIR}/sched-trace.bt" \
-            || die "failed to copy the bpftrace probe to ${TARGET_IP}"
-
-        log "starting observers on ${TARGET_IP} (arm ${arm}, ${duration}s)"
-        start_remote_with_log "${runqlat_tool} 1 ${duration}" "runqlat" "runqlat.txt"
-        start_remote_with_log "bpftrace ${REMOTE_DIR}/sched-trace.bt" "bpftrace" "sched-trace.txt"
-        start_remote_with_log "perf sched record -o ${REMOTE_DIR}/perf.data -- sleep ${duration}" "perf-sched" "perf.log"
+        for tool in bpftrace perf bpf-runqlat; do
+            kexec "$target_pod" sh -c "command -v ${tool} >/dev/null 2>&1" \
+                || die "required observer tool '${tool}' missing in ${target_pod}"
+        done
+        # The CO-RE probe reads BTF, so it needs no headers; the BCC tool does.
+        start_observer runqlat "bpf-runqlat 1 ${duration}"
+        start_observer sched-trace "bpftrace -e 'tracepoint:sched:sched_switch { }'"
+        start_observer perf-sched "perf sched record -o ${work}/perf.data -- sleep ${duration}"
     fi
 
     if [[ -n "$manifest" ]]; then
         log "applying workload manifest ${manifest}"
         local rendered="${out_dir}/workload-${arm}.yaml"
-        sed -e "s|__NODE_NAME__|$(kubectl_wl get nodes --no-headers -l '!node-role.kubernetes.io/control-plane' -o custom-columns=:metadata.name | sed -n '1p')|" \
-            -e "s|__ARM__|${arm}|g" \
+        sed -e "s|__NODE_NAME__|${target_node}|g" -e "s|__ARM__|${arm}|g" \
             "$manifest" > "$rendered"
         kubectl_wl apply -f "$rendered" || die "failed to apply workload ${manifest}"
     fi
 
-    if [[ -n "$load_command" && -n "$load_ip" ]]; then
-        log "running load on ${load_ip}: ${load_command}"
-        ssh_node "$load_ip" "$load_command" > "$load_file" \
-            || die "load generator failed on ${load_ip}"
+    if [[ -n "$load_command" && -n "$load_node" ]]; then
+        local load_pod
+        load_pod="$(observer_pod "$load_node")"
+        log "running load on ${load_pod} (${load_node})"
+        kexec "$load_pod" sh -c "$load_command" > "$load_file" \
+            || die "load generator failed on ${load_node}"
     else
         : > "$load_file"
     fi
@@ -139,10 +152,9 @@ main() {
         sleep 2
         cleanup
         pids=()
-        log "fetching capture artifacts into ${out_dir}"
-        scp -i "$(ssh_key)" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o LogLevel=ERROR -r "fedora@${TARGET_IP}:${REMOTE_DIR}/." "$out_dir/" \
-            || die "failed to fetch capture artifacts from ${TARGET_IP}"
+        log "copying capture artifacts into ${out_dir}"
+        kubectl_wl cp "${OBSERVER_NAMESPACE}/${target_pod}:${work}/." "$out_dir/" \
+            || die "failed to copy capture artifacts from ${target_pod}"
 
         # A capture is complete only if the required observer outputs exist and
         # are non-empty AND no perf events were lost.
@@ -153,7 +165,7 @@ main() {
                 status="failed"
             fi
         done
-        if grep -qiE 'lost [1-9]|dropped [1-9]' "${out_dir}/perf.log" 2>/dev/null; then
+        if grep -qiE 'lost [1-9]|dropped [1-9]' "${out_dir}/perf-sched.txt" 2>/dev/null; then
             log "WARN: perf reported lost events for arm ${arm}; trace metrics invalid"
             status="incomplete"
         fi
@@ -163,20 +175,6 @@ main() {
     fi
 
     log "capture complete for arm ${arm}"
-}
-
-# start_remote_with_log CMD LABEL LOGNAME — detached start with remote logging.
-# Runs in the CURRENT shell (no pipeline, no subshell) so `pids` survives.
-start_remote_with_log() {
-    local cmd="$1" label="$2" logname="$3" pid
-    pid="$(ssh_node "$TARGET_IP" \
-        "sudo nohup ${cmd} </dev/null >${REMOTE_DIR}/${logname} 2>&1 & echo \$!")"
-    [[ -n "$pid" ]] || die "could not start ${label} on ${TARGET_IP}"
-    sleep 1
-    ssh_node "$TARGET_IP" "sudo kill -0 ${pid} 2>/dev/null" \
-        || die "${label} exited immediately on ${TARGET_IP}; see ${REMOTE_DIR}/${logname}"
-    pids+=("$pid")
-    log "  ${label}: pid ${pid}"
 }
 
 main "$@"

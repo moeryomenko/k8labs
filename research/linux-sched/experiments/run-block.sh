@@ -112,28 +112,32 @@ resolve_hosts() {
     target="$(printf '%s\n' "$workers" | sed -n '1p')"
     load="$(printf '%s\n' "$workers" | sed -n '2p')"
     TARGET_NODE="$target"
-    TARGET_IP="$(node_internal_ip "$target")"
     LOAD_NODE="$load"
-    LOAD_IP="$(node_internal_ip "$load")"
-    [[ -n "$TARGET_IP" ]] || die "could not resolve InternalIP for ${target}"
-    log "target=${TARGET_NODE} (${TARGET_IP}) load=${LOAD_NODE} (${LOAD_IP:-none})"
+    [[ -n "$TARGET_NODE" ]] || die "no observer-labelled worker found; run 'make linux-sched-observers-apply'"
+    log "target=${TARGET_NODE} load=${LOAD_NODE:-none}"
 }
 
 # activate_arm ARM — make ARM the active scheduler on the target worker.
+#
+# Runs through the observer Pod (hostPID, so it sees host processes) rather than
+# SSH. A scheduler binary still has to be staged on the node before its arm can
+# be activated.
 activate_arm() {
-    local arm="$1"
+    local arm="$1" pod
+    pod="$(observer_pod_for_node "$TARGET_NODE")"
+    [[ -n "$pod" ]] || die "no observer pod on ${TARGET_NODE}"
+
     case "$arm" in
         eevdf)
-            ssh_node "$TARGET_IP" 'sudo systemctl stop scx.service 2>/dev/null || true; \
-                sudo pkill -f "scx_" 2>/dev/null || true' \
-                || die "failed to reset sched_ext on ${TARGET_IP}"
-            if ssh_node "$TARGET_IP" 'test -e /sys/kernel/sched_ext/enable_seq'; then
+            kexec "$pod" sh -c 'pkill -f "scx_" 2>/dev/null || true' \
+                || die "failed to reset sched_ext on ${TARGET_NODE}"
+            if kexec "$pod" sh -c 'test -e /sys/kernel/sched_ext/enable_seq' 2>/dev/null; then
                 log "WARN: /sys/kernel/sched_ext still present after EEVDF reset"
             fi
             ;;
         scx_bpfland|scx_lavd|scx_mavd)
-            die "activating ${arm} requires the scx binaries staged on ${TARGET_IP}; " \
-                "complete the Phase 2 build/deploy gate (linux-sched kernel + scheduler binaries) first"
+            die "activating ${arm} requires the scx binaries staged on ${TARGET_NODE}; " \
+                "build them from the scx checkout and stage them first"
             ;;
         *)
             die "unknown scheduler arm: ${arm}"
@@ -151,26 +155,26 @@ collect_metric() {
 # run_block SCENARIO ARM BLOCK DIR — one arm of one paired block.
 run_block() {
     local scenario="$1" arm="$2" block="$3" raw_dir="$4"
-    local ip="$TARGET_IP"
+    local pod
 
-    log "block ${block} arm ${arm}: rebooting ${TARGET_NODE}"
-    ssh_node "$ip" 'sudo systemctl reboot' 2>/dev/null || true
-    sleep 5
-    local deadline=$(( $(date +%s) + 600 ))
-    until kubectl_wl get node "$TARGET_NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q True; do
-        (( $(date +%s) < deadline )) || die "node ${TARGET_NODE} did not become Ready after reboot"
-        sleep 10
-    done
+    log "block ${block} arm ${arm}: resetting ${TARGET_NODE}"
+    # No reboot: SSH is unavailable and the lab has no other way to restart a
+    # VM, so each arm starts from a killed-observer, quiescent guest instead.
+    # Recorded as a protocol deviation in GATES.md.
+    pod="$(observer_pod_for_node "$TARGET_NODE")"
+    [[ -n "$pod" ]] || die "no observer pod on ${TARGET_NODE}"
+    kexec "$pod" sh -c 'pkill -f "scx_" 2>/dev/null || true' >/dev/null 2>&1 || true
 
-    wait_quiescent "$ip" || die "guest ${TARGET_NODE} never became quiescent"
+    wait_quiescent "$TARGET_NODE" || die "guest ${TARGET_NODE} never became quiescent"
 
     activate_arm "$arm"
 
     local load_raw="${raw_dir}/${arm}.txt"
     local podlog_raw="${raw_dir}/${arm}.log"
     "${SCRIPT_DIR}/../capture/capture-block.sh" \
-        --target-ip "$ip" --duration "$DURATION_S" --out-dir "$raw_dir" --arm "$arm" \
-        --load-ip "${LOAD_IP:-}" --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
+        --target-node "$TARGET_NODE" --duration "$DURATION_S" --out-dir "$raw_dir" \
+        --arm "$arm" --load-node "${LOAD_NODE:-}" \
+        --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
         --load-command "${LOAD_COMMAND:-}${LOAD_ARGS:+ ${LOAD_ARGS}}" \
         --raw "$load_raw" --podlog "$podlog_raw" \
         || die "capture failed for block ${block} arm ${arm}"
@@ -241,8 +245,8 @@ cmd_overhead() {
     local variant
     for variant in instruments-enabled instruments-disabled; do
         "${SCRIPT_DIR}/../capture/capture-block.sh" \
-            --target-ip "$TARGET_IP" --duration "$DURATION_S" --out-dir "$out" \
-            --arm "eevdf-${variant}" --load-ip "${LOAD_IP:-}" \
+            --target-node "$TARGET_NODE" --duration "$DURATION_S" --out-dir "$out" \
+            --arm "eevdf-${variant}" --load-node "${LOAD_NODE:-}" \
             --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
             --load-command "${LOAD_COMMAND:-}${LOAD_ARGS:+ ${LOAD_ARGS}}" \
             --raw "${out}/${variant}.txt" --podlog "${out}/${variant}.log" \

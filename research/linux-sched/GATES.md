@@ -197,6 +197,13 @@ Still broken: **SSH to the VMs.** TCP connects to ports 22 on all four nodes, bu
 no SSH banner ever arrives (`Connection timed out during banner exchange`), so
 any SSH-driven transport remains unusable.
 
+**Protocol deviation — no per-arm reboot.** The frozen protocol reboots the
+worker between scheduler arms to clear state. Rebooting needs SSH (or an
+equivalent host hook) that this lab does not have, so each arm instead starts
+from a killed-observer, quiescent guest: leftover `scx_` processes are killed
+and the guest must sit below the idle threshold for the hold period before the
+arm begins. Weaker than a reboot; recorded here rather than silently changed.
+
 What works today: image pulls, `kubectl apply/get/delete/logs/exec`,
 capability-scoped and non-privileged Pods, read-only host mounts, and the
 container termination message as a small (≈4 KiB) result channel.

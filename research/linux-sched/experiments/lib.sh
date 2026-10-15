@@ -91,18 +91,19 @@ kexec() {
     kubectl_wl -n "$OBSERVER_NAMESPACE" exec "$pod" -- "$@"
 }
 
-node_internal_ip() {
-    kubectl_wl get node "$1" \
-        -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null
-}
+# NOTE: node access is through the observer DaemonSet over the Kubernetes API.
+# SSH to the lab VMs never completes (see GATES.md), so no ssh helpers exist
+# here on purpose.
 
-ssh_key() { printf '%s/build/packer-ssh-key' "$(project_root)"; }
-
-ssh_node() {
-    local ip="$1"
-    shift
-    ssh -i "$(ssh_key)" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -o ConnectTimeout=10 -o LogLevel=ERROR "fedora@${ip}" "$@"
+# observer_cpu_busy_pct NODE — guest CPU busy percentage, read from the
+# observer Pod's host /proc/stat (the observer runs with hostPID).
+guest_cpu_busy_pct() {
+    local node="$1" pod
+    pod="$(observer_pod_for_node "$node")"
+    [[ -n "$pod" ]] || { echo 100; return 0; }
+    kexec "$pod" sh -c \
+        "awk '{print 100-(\$5*100/(\$2+\$3+\$4+\$5+\$6+\$7+\$8))}' /proc/stat" \
+        2>/dev/null || echo 100
 }
 
 # seeded_permutation SEED N — print a deterministic balanced permutation of the
@@ -120,20 +121,16 @@ print(" ".join(arms))
 PY
 }
 
-# guest_cpu_busy_pct IP — instantaneous guest CPU busy percentage.
-guest_cpu_busy_pct() {
-    local ip="$1"
-    ssh_node "$ip" "awk '{print 100-(\$5*100/(\$2+\$3+\$4+\$5+\$6+\$7+\$8))}' /proc/stat" 2>/dev/null || echo 100
-}
+# guest_cpu_busy_pct — see definition above (observer-driven).
 
-# wait_quiescent IP — block until the guest is idle for the required hold time.
+# wait_quiescent NODE — block until the guest is idle for the required hold time.
 wait_quiescent() {
-    local ip="$1"
+    local node="$1"
     local deadline=$(( $(date +%s) + LINUX_SCHED_QUIESCE_TIMEOUT_S ))
     local held=0
     while (( $(date +%s) < deadline )); do
         local busy
-        busy="$(guest_cpu_busy_pct "$ip")"
+        busy="$(guest_cpu_busy_pct "$node")"
         if awk -v b="$busy" -v t="$LINUX_SCHED_QUIESCE_PCT" 'BEGIN { exit (b < t) ? 0 : 1 }'; then
             held=$(( held + 5 ))
             (( held >= LINUX_SCHED_QUIESCE_HOLD_S )) && return 0
