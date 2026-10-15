@@ -1,29 +1,9 @@
-# kind management cluster for the k8labs rootless-Podman lab.
-# The node image is digest-pinned in versions.lock.yaml. The host API port is
-# intentionally dynamically selected by kind; workload forwarding reserves 6443.
+# Management cluster only. The HostAgent remains a separately managed host service.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: k8labs-mgmt
-# kind's pinned node image includes kindnet for management-cluster networking.
-# Cilium remains a workload-cluster addon; retaining kindnet avoids requiring
-# privileged BPF mounts inside rootless Podman nodes during bootstrap.
+# The digest is locked in versions.lock.yaml. Keep Kind's default kindnet CNI:
+# Cilium is installed only in workload clusters.
 nodes:
   - role: control-plane
-    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
-    kubeadmConfigPatches:
-      - |
-        kind: InitConfiguration
-        nodeRegistration:
-          kubeletExtraArgs:
-            node-labels: "k8labs.io/agent=true"
-    extraMounts:
-      - hostPath: /dev/kvm
-        containerPath: /dev/kvm
-      - hostPath: /run/user/1000/bus
-        containerPath: /run/user/1000/bus
-      - hostPath: /run/user/1000/k8snet
-        containerPath: /run/user/1000/k8snet
-      - hostPath: /home/eryoma/.local/state/k8slab
-        containerPath: /host-state
-      - hostPath: /home/eryoma/.config/systemd/user
-        containerPath: /home/eryoma/.config/systemd/user
+    image: kindest/node:v1.37.0@sha256:1aac8018c42eb5d48fae5be507caaee789fc6d9b9b3f560359dd4157ac00d4f6
