@@ -636,6 +636,13 @@ minutes while it installs the tooling, so a capture started too soon fails with
 must be staged again with `make -C research linux-sched-scx-stage`, or the arm
 fails with `bin/scx_<name>: No such file or directory`.
 
+**Truncated trace artifacts.** Killing the supervising exec does not always take
+the whole pipeline with it, and the trace observer is a pipeline
+(`bpftrace … | gzip`). The copy therefore ran while the file was still growing:
+`tar` warned `file changed as we read it` and `gzip -t` reported
+`unexpected end of file`. The observers must be stopped by process name before
+the copy, not only by the exec that supervises them.
+
 ## Consequence for the design
 
 - Observer tooling is provisioned into the node image (node-native) and can also
