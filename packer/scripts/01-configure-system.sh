@@ -165,10 +165,7 @@ if [ -n "${FIXTURE_DIR}" ]; then
     # postgres image, and the observer installs the client for pgbench.
     # zlib-devel is a hard requirement of wrk2's hdr_histogram, and the build
     # fails without it rather than degrading, so it is not optional.
-    # pgbench is in postgresql-contrib on Fedora, not in postgresql: without it
-    # the snapshot step fails while still managing to write an empty dump.
-    dnf install -y gcc make git openssl-devel zlib-devel curl unzip \
-        postgresql postgresql-contrib postgresql-server
+    dnf install -y gcc make git openssl-devel zlib-devel curl unzip
 
     # Fedora packages wrk, which cannot hold a fixed offered rate (wrk2's -R).
     # The scenarios measure latency under a fixed rate, so the fork is built
@@ -203,56 +200,13 @@ if [ -n "${FIXTURE_DIR}" ]; then
     install -m 0644 "${clip_mp4}" "${FIXTURE_DIR}/input.mp4"
     rm -rf "${clip_tmp}"
 
-    # pgbench transaction script. The row ranges follow the snapshot's scale
-    # and are written out as literals: a script that reads :scale depends on
-    # how pgbench was invoked, and the workload must be identical for every
-    # arm. The shell leaves :aid and friends alone, so the heredoc stays
-    # unquoted only to interpolate the ranges.
-    PGBENCH_AID_MAX=$(( 100000 * PGBENCH_SCALE ))
-    PGBENCH_BID_MAX=$(( 1 * PGBENCH_SCALE ))
-    PGBENCH_TID_MAX=$(( 10 * PGBENCH_SCALE ))
-    cat > "${FIXTURE_DIR}/transactions.sql" <<SQL
-\\set aid random(1, ${PGBENCH_AID_MAX})
-\\set bid random(1, ${PGBENCH_BID_MAX})
-\\set tid random(1, ${PGBENCH_TID_MAX})
-\\set delta random(-5000, 5000)
-BEGIN;
-UPDATE pgbench_accounts SET abalance = abalance + :delta WHERE aid = :aid;
-SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
-UPDATE pgbench_tellers SET tbalance = tbalance + :delta WHERE tid = :tid;
-UPDATE pgbench_branches SET bbalance = bbalance + :delta WHERE bid = :bid;
-INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (:tid, :bid, :aid, :delta, CURRENT_TIMESTAMP);
-END;
-SQL
-
-    # PostgreSQL snapshot, taken with this image's server. The workload image
-    # is pinned to the same major version, because a dump cannot be restored
-    # into an older server. Restoring this same dump before every arm is what
-    # makes the arms comparable, so it is a plain SQL dump the image's
-    # entrypoint can replay from /docker-entrypoint-initdb.d.
-    pgsnap_data=/var/lib/pgsql/sched-snap
-    pgsnap_sock=/tmp/sched-snap
-    rm -rf "${pgsnap_data}" "${pgsnap_sock}"
-    install -d -o postgres -g postgres "${pgsnap_data}" "${pgsnap_sock}"
-    runuser -u postgres -- initdb -D "${pgsnap_data}" >/dev/null
-    runuser -u postgres -- pg_ctl -D "${pgsnap_data}" \
-        -o "-k ${pgsnap_sock} -p 55432 -c fsync=off" -w start >/dev/null
-    runuser -u postgres -- createdb -h "${pgsnap_sock}" -p 55432 bench
-    runuser -u postgres -- pgbench -h "${pgsnap_sock}" -p 55432 \
-        -i -s "${PGBENCH_SCALE}" bench >/dev/null
-    runuser -u postgres -- pg_dump -h "${pgsnap_sock}" -p 55432 bench \
-        > "${FIXTURE_DIR}/pgbench.sql"
-    runuser -u postgres -- pg_ctl -D "${pgsnap_data}" -m immediate -w stop >/dev/null
-    rm -rf "${pgsnap_data}" "${pgsnap_sock}"
-
-    # Verify the snapshot is not empty. Without postgresql-contrib the pgbench
-    # step fails while still writing a valid-looking dump of an empty database,
-    # so presence alone proves nothing; pgbench -i creates four tables.
-    pgsnap_tables=$(grep -c 'CREATE TABLE' "${FIXTURE_DIR}/pgbench.sql" || true)
-    if [ "${pgsnap_tables}" -lt 4 ]; then
-        echo "ERROR: snapshot has ${pgsnap_tables} tables, expected 4" >&2
-        exit 1
-    fi
+    # The PostgreSQL snapshot and transaction script are deliberately NOT baked.
+    # The workload initialises its own deterministic scale-2 database in the Pod
+    # (`pgbench -i -s 2` with the built-in TPC-B script): the baked scale-10
+    # snapshot was several times larger than a 5 GiB worker can hold beside the
+    # instrumentation, and an arm using it was evicted for ephemeral-storage.
+    # Basing the workload on the in-Pod initialisation removes ~96 MB from the
+    # image and one cross-version dependency (the dump had to match the server).
 
     # The observer and the workload Pods mount these paths. A freshly baked
     # path does not carry the container file type, so label it where the
@@ -264,7 +218,5 @@ SQL
         echo "clip_url=${FIXTURE_CLIP_URL}"
         echo "clip_sha256=${FIXTURE_CLIP_MP4_SHA256}"
         echo "wrk2_commit=${WRK2_COMMIT}"
-        echo "pgbench_scale=${PGBENCH_SCALE}"
-        echo "postgres_server=$(rpm -q --qf '%{VERSION}' postgresql-server)"
     } > "${FIXTURE_DIR}/BAKED"
 fi
