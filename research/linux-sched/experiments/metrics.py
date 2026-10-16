@@ -21,10 +21,22 @@ _FFMPEG_FPS = re.compile(r"fps=\s*([0-9.]+)")
 # One progress line: the frame count and the encoded position, in that order,
 # as ffmpeg prints them to stderr.
 _FFMPEG_PROGRESS = re.compile(r"frame=\s*([0-9]+).*?time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+# stress-ng's end-of-run summary is a two-line header followed by one data row
+# per stressor. The row carries the stressor name and six numbers: bogo ops,
+# real time, usr time, sys time, bogo ops/s (real time) and bogo ops/s
+# (usr+sys). The sixth column of the row is the reported outcome.
+#
+#   stress-ng: info:  [1] stressor     bogo ops real time  usr time ...
+#   stress-ng: info:  [1] cpu             79119    180.00    330.43 ...
+#
+# The earlier pattern looked for a "bogo ops/s (real time) 123.4" line, which
+# stress-ng does not produce: its figure is a table cell, not a labelled value.
 _STRESS_BOGO = re.compile(
-    r"bogo ops/s\s+\(real time\)\s*[:=]?\s*([0-9.]+)", re.IGNORECASE
+    r"stress-ng:\s*info:\s*\[\s*\d+\]\s+"
+    r"([A-Za-z0-9_\-]+)\s+"
+    r"(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*$",
+    re.MULTILINE,
 )
-_STRESS_BOGO_ALT = re.compile(r"^.*?([0-9.]+)\s+bogo ops/s.*$", re.MULTILINE)
 
 
 def _to_ms(value: str, unit: str) -> float:
@@ -100,15 +112,18 @@ def parse_ffmpeg_fps_window(
 
 
 def parse_stress_ng_bogo_ops(text: str) -> float:
-    """Bogo-ops/s (real time) from a stress-ng `--metrics-brief` run."""
+    """Bogo-ops/s (real time) from stress-ng's end-of-run summary table.
+
+    The scenario runs a single stressor, so the first (and only) data row is the
+    outcome. The last two columns are bogo ops/s; the one the scenario reports is
+    the real-time figure, not the usr+sys figure, because the measured window is
+    wall-clock time.
+    """
 
     match = _STRESS_BOGO.search(text)
     if match:
-        return float(match.group(1))
-    match = _STRESS_BOGO_ALT.search(text)
-    if match:
-        return float(match.group(1))
-    raise ValueError("no 'bogo ops/s (real time)' figure found")
+        return float(match.group(6))
+    raise ValueError("no stress-ng bogo-ops/s summary row found")
 
 
 PARSERS = {

@@ -46,8 +46,11 @@ frame= 5400 fps= 30 q=28.0 size=N/A time=00:03:00.00 bitrate=N/A speed=1.0x
 """
 
 STRESS = """
-stress-ng: info:  [123] matrixprod: 32768 bogo ops in 180.00 sec
-stress-ng: info:  [123] matrixprod:  182.04 bogo ops/s (real time)
+stress-ng: info:  [1] dispatching hogs: 2 cpu
+stress-ng: info:  [1] successful run completed in 180.00s (3 mins, 0.00 secs)
+stress-ng: info:  [1] stressor       bogo ops real time  usr time  sys time   bogo ops/s   bogo ops/s
+stress-ng: info:  [1]                           (secs)    (secs)    (secs)   (real time) (usr+sys time)
+stress-ng: info:  [1] cpu               79119    180.00    330.43      0.03       439.55       239.42
 """
 
 
@@ -78,7 +81,13 @@ def test_ffmpeg_zero_duration_rejected() -> None:
 
 
 def test_stress_ng_bogo_ops() -> None:
-    assert parse_stress_ng_bogo_ops(STRESS) == pytest.approx(182.04)
+    # The real-time column of the summary row, not the usr+sys one.
+    assert parse_stress_ng_bogo_ops(STRESS) == pytest.approx(439.55)
+
+
+def test_stress_ng_rejects_a_log_without_the_summary() -> None:
+    with pytest.raises(ValueError, match="bogo-ops/s summary row"):
+        parse_stress_ng_bogo_ops("stress-ng: info:  [1] dispatching hogs: 2 cpu\n")
 
 
 def test_extract_dispatch(tmp_path: Path) -> None:
