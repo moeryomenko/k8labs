@@ -84,9 +84,9 @@ def test_retired_capishim_contract_is_absent_from_management_lifecycle() -> None
     assert "kubeconfig" not in target("cluster-up")
 
 
-def test_full_cluster_gate_waits_for_four_ready_nodes_before_smoke() -> None:
+def test_full_cluster_gate_waits_for_all_ready_nodes_before_smoke() -> None:
     recipe = target("cluster")
     assert "wait --for=condition=Ready nodes --all" in recipe
-    assert "node_count" in recipe and "-ne 4" in recipe
+    assert "node_count" in recipe and "-ne 3" in recipe
     assert recipe.index("$(MAKE) kubeconfig") < recipe.index("node_count")
     assert recipe.index("node_count") < recipe.index("$(MAKE) smoke-test")

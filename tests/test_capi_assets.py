@@ -17,8 +17,10 @@ cluster-manifest
     object with concrete committed values (no ${VAR} markers): name k8labs,
     namespace default, ClusterClass hypervisor-cluster-template,
     control-plane replicas 1, worker machine deployment md-0 of class
-    default-worker with replicas 3 -- the literal defaults documented by
-    cluster-api-hypervisor/templates/cluster-template.yaml lines 81-85.
+    default-worker with replicas 2 -- deliberately one below the upstream
+    template default of 3 (cluster-api-hypervisor/templates/cluster-template.yaml
+    lines 81-85), because the research protocol uses exactly two workers and the
+    host could not reliably start four VMs at once.
 
 crs-selector-match
     Every ClusterResourceSet in ``capi/addons/`` carries a non-empty
@@ -147,7 +149,7 @@ EXPECTED_NAMESPACE = "default"
 EXPECTED_CLUSTERCLASS = "hypervisor-cluster-template"
 EXPECTED_CP_REPLICAS = 1
 EXPECTED_WORKER_CLASS = "default-worker"
-EXPECTED_WORKER_REPLICAS = 3
+EXPECTED_WORKER_REPLICAS = 2
 
 # Directory each CRS maps to, keyed by the token that must appear in the
 # CRS metadata.name.

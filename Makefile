@@ -489,10 +489,10 @@ cluster: mgmt-up ## Full CAPI pipeline: management bootstrap -> cluster -> addon
 	echo '==> Waiting for Cluster $(CLUSTER_NAME) to become Available...'; \
 	kubectl --context "$(MGMT_CONTEXT)" wait --for=condition=Available "cluster.cluster.x-k8s.io/$(CLUSTER_NAME)" --timeout=30m; \
 	$(MAKE) kubeconfig; \
-	echo '==> Waiting for all four workload Nodes to become Ready...'; \
+	echo '==> Waiting for all three workload Nodes to become Ready...'; \
 	kubectl --kubeconfig "$(WORKLOAD_KUBECONFIG)" wait --for=condition=Ready nodes --all --timeout=10m; \
 	node_count=$$(kubectl --kubeconfig "$(WORKLOAD_KUBECONFIG)" get nodes --no-headers | wc -l | tr -d '[:space:]'); \
-	if [ "$$node_count" -ne 4 ]; then echo "ERROR [readiness] expected 4 workload Nodes, found $$node_count" >&2; exit 1; fi; \
+	if [ "$$node_count" -ne 3 ]; then echo "ERROR [readiness] expected 3 workload Nodes, found $$node_count" >&2; exit 1; fi; \
 	$(MAKE) smoke-test; \
 	echo 'Cluster ready.'
 
@@ -546,9 +546,10 @@ MULTI_KUBECONFIG_2 := build/kubeconfig.k8labs-2
 # templates come from capi/cluster.yaml, applied by mgmt-up + the applies
 # below.
 #
-# Resource floor: the 8 concurrent workload VMs need ~16 CPU cores and
-# ~28 GiB RAM free on the host (per cluster: 1 control plane at 2 vCPU/2 GiB
-# plus 3 workers at 2 vCPU/4 GiB), on top of the Kind/k8netd management
+# Resource floor: the concurrent workload VMs need roughly 14 CPU cores and
+# ~24 GiB RAM free on the host (k8labs: 1 control plane at 2 vCPU/2 GiB plus 2
+# workers at 2 vCPU/4 GiB; the second cluster's manifest still asks for 3
+# workers), on top of the Kind/k8netd management
 # plane and host-side k8netd; budget ~20-40 minutes end to end.
 #
 # Every per-cluster kubectl lifecycle call (readiness wait, delete,

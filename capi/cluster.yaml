@@ -26,6 +26,11 @@
 # disk 40960MiB (the common worker shape; w2's extra vCPU is a per-node
 # upscale the shared MachineDeployment template cannot express).
 #
+# Two workers, not the upstream template's three: the research protocol uses
+# exactly two (w1 as the measured target, w2 as the load generator), and the
+# third VM only competed for host memory. The host could not reliably start
+# four VMs at once.
+#
 # Apply order is document order: ClusterClass first, then the referenced
 # templates, then the topology Cluster.
 ---
@@ -168,4 +173,4 @@ spec:
       machineDeployments:
         - name: md-0
           class: default-worker
-          replicas: 3
+          replicas: 2
