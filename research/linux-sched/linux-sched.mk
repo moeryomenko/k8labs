@@ -11,6 +11,9 @@
 
 SHELL := /bin/bash
 .ONESHELL:
+# See the note in ../Makefile: without -e, .ONESHELL hides every failure before
+# the last command of a recipe.
+.SHELLFLAGS := -eu -o pipefail -c
 
 PROJECT_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 

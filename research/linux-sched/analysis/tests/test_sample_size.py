@@ -119,17 +119,35 @@ def test_plan_rejects_a_pilot_without_the_control_arm() -> None:
 
 
 def test_plan_rejects_a_pilot_with_too_few_paired_blocks() -> None:
+    # One paired block has no sample standard deviation, so nothing can be sized.
     with pytest.raises(ValueError, match="paired blocks"):
         plan(
             _pilot(
                 {
                     "http": {
-                        CONTROL_SCHEDULER: [100.0, 101.0],
-                        "bpfland": [101.0, 102.0],
+                        CONTROL_SCHEDULER: [100.0],
+                        "bpfland": [101.0],
                     }
                 }
             )
         )
+
+
+def test_plan_sizes_from_a_three_block_pilot() -> None:
+    # A three-block pilot is what the protocol specifies; requiring the
+    # confirmatory verdict floor of five here would make freezing impossible.
+    record = plan(
+        _pilot(
+            {
+                "http": {
+                    CONTROL_SCHEDULER: [100.0, 101.0, 99.0],
+                    "bpfland": [103.0, 104.0, 102.0],
+                }
+            }
+        )
+    )
+    assert record["scenarios"][0]["contrasts"][0]["paired_blocks"] == 3
+    assert record["scenarios"][0]["confirmatory_blocks"] >= 5
 
 
 def test_main_writes_a_versioned_record(tmp_path: Path) -> None:

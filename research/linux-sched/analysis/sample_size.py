@@ -43,6 +43,17 @@ from sched_analysis import (  # noqa: E402
 
 BALANCE = 3
 
+# The minimum paired blocks from which a sample standard deviation can be
+# estimated at all. Deliberately not the confirmatory verdict floor: the pilot
+# exists to produce variance, not verdicts.
+MIN_PILOT_PAIRED_BLOCKS = 2
+
+# The protocol's confirmatory floor: "take the maximum for the workload, floor at
+# five, then round up to a multiple of three". It is independent of
+# `MIN_BLOCKS_FOR_VERDICT`, which is the analysis's lower sanity bound for even
+# attempting a comparison.
+CONFIRMATORY_FLOOR_BLOCKS = 5
+
 
 def round_up_to_multiple(value: int, multiple: int) -> int:
     return ((value + multiple - 1) // multiple) * multiple
@@ -71,10 +82,16 @@ def plan(observations: list) -> dict:
             if scheduler == CONTROL_SCHEDULER:
                 continue
             shared = sorted(set(control) & set(values))
-            if len(shared) < MIN_BLOCKS_FOR_VERDICT:
+            # Two paired blocks are the minimum from which a sample standard
+            # deviation exists at all. This is *not* the confirmatory floor: a
+            # three-block pilot is exactly what the protocol specifies for
+            # estimating variance, and requiring the confirmatory block floor
+            # here made it impossible to freeze any count.
+            if len(shared) < MIN_PILOT_PAIRED_BLOCKS:
                 raise ValueError(
                     f"pilot for {workload}/{scheduler} has {len(shared)} paired "
-                    f"blocks; {MIN_BLOCKS_FOR_VERDICT} are required to size a run"
+                    f"blocks; {MIN_PILOT_PAIRED_BLOCKS} are required to estimate "
+                    "variance"
                 )
             logs = [
                 _oriented_log_ratio(
@@ -98,7 +115,7 @@ def plan(observations: list) -> dict:
                 }
             )
         raw_required = max(c["required_n"] for c in contrasts)
-        floored = max(raw_required, MIN_BLOCKS_FOR_VERDICT)
+        floored = max(raw_required, CONFIRMATORY_FLOOR_BLOCKS)
         frozen = round_up_to_multiple(floored, BALANCE)
         scenarios.append(
             {
@@ -120,7 +137,7 @@ def plan(observations: list) -> dict:
         "alpha": DEFAULT_ALPHA,
         "primary_contrasts": PRIMARY_CONTRASTS,
         "alpha_per_contrast": DEFAULT_ALPHA / PRIMARY_CONTRASTS,
-        "min_blocks": MIN_BLOCKS_FOR_VERDICT,
+        "min_blocks": CONFIRMATORY_FLOOR_BLOCKS,
         "balance_multiple": BALANCE,
         "delta_log": round(math.log(1.0 + PRACTICAL_EFFECT), 6),
         "scenarios": scenarios,
@@ -141,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     for scenario in record["scenarios"]:
         print(
             f"{scenario['scenario']}: {scenario['confirmatory_blocks']} blocks "
-            f"(raw {scenario['required_n_raw']}, floor {MIN_BLOCKS_FOR_VERDICT}, "
+            f"(raw {scenario['required_n_raw']}, floor {CONFIRMATORY_FLOOR_BLOCKS}, "
             f"balanced to {BALANCE})"
         )
     print(f"wrote {args.output}")

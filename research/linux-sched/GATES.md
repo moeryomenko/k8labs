@@ -641,19 +641,23 @@ What a sample keeps is therefore bounded to fit:
 | Observer image | no longer installs the BCC packages it never uses (the run-queue metrics are libbpf-tools CO-RE binaries) |
 | Postgres workload | initialised in the Pod at a scale that fits (912 MB → 36 MB measured); `pgbench -i` is deterministic, so arms still start from identical data |
 
-**Measured sample cost.** With the bounded windows a sample's spool is about
-9 MB of compressed trace plus about 22 MB of compressed `perf.data`; the largest
-workload ephemeral use is the Postgres scale-2 database at about 36 MB. The
-spool cap (192 MiB) and the workload allowance (64 MiB) are derived from those
-figures rather than guessed, because the gate below decides whether the study can
-run at all on this hardware.
+**Measured sample cost.** With the bounded windows a sample's spool measures
+26-33 MB across all five scenarios (about 9 MB of compressed trace plus about
+22 MB of compressed `perf.data`, plus the histograms), and the largest workload
+ephemeral use is the Postgres scale-2 database at about 36 MB. The spool cap
+(128 MiB, four times the measured maximum) and the workload allowance (64 MiB)
+are derived from those figures rather than guessed, because the gate below
+decides whether the study can run at all on this hardware.
 
 **Free-space gate.** A sample refuses to start unless the target worker has at
 least the kubelet eviction threshold (789102828 B) plus the spool cap, the
-workload allowance and a 128 MiB reserve — 1,191,756,012 B in total. The gate was
-first written with a spool cap sized for the 30-second trace, and it then refused
-arms on a worker that had room; the trace window is now 10 seconds and the cap
-follows the measurement.
+workload allowance and a 64 MiB reserve — 1,057,538,284 B in total. It has been
+tightened twice against measurement, and each time for the same reason: the node
+must also hold every scenario's image, so the *gate*, not the eviction threshold,
+was deciding whether a block could run. The first version capped the spool for a
+30-second trace that the protocol had already reduced to 10 seconds; the second,
+set from that measurement, then refused two pilot blocks for being 0.5 MB and
+32 MB short.
 
 **Target selection.** The measured target is the worker with the most free space,
 chosen once per invocation and logged with the full ranking; the other worker
