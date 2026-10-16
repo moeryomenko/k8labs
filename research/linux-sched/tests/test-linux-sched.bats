@@ -146,9 +146,9 @@ setup() {
 @test "the storage gate is the documented sum of threshold, spool, workload and reserve" {
     run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; required_guest_free_bytes"
     [ "$status" -eq 0 ]
-    # 789102828 + (192 + 128 + 256) MiB: the kubelet eviction threshold plus the
+    # 789102828 + (192 + 64 + 128) MiB: the kubelet eviction threshold plus the
     # spool cap, the workload's ephemeral storage and a reserve.
-    [ "$output" = "1393082604" ]
+    [ "$output" = "1191756012" ]
 }
 
 @test "rate scenarios declare a readiness probe so the load never starts blind" {
@@ -166,4 +166,21 @@ setup() {
     run grep -h "LOAD_ARGS" "${SCENARIOS}/mixed-http-ffmpeg.conf"
     [[ "$output" == *"mixed-nginx"* ]]
     [[ "$output" != *"//nginx."* ]]
+}
+
+@test "next_block_id continues after the highest recorded block" {
+    tmp="$(mktemp -d)"
+    printf 'block_id,scheduler,workload,metric,value,direction\n' > "${tmp}/blocks.csv"
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; next_block_id '${tmp}/blocks.csv'"
+    [ "$output" = "1" ]
+    printf '1,eevdf,http,m,1,higher-is-better\n2,eevdf,http,m,1,higher-is-better\n' >> "${tmp}/blocks.csv"
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; next_block_id '${tmp}/blocks.csv'"
+    [ "$output" = "3" ]
+    rm -rf "$tmp"
+}
+
+@test "next_block_id returns 1 for a results file that does not exist yet" {
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; next_block_id '/nonexistent/blocks.csv'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
 }

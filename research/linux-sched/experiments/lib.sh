@@ -67,14 +67,22 @@ LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S="${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S:-12
 # space falls below the measured threshold. A sample needs room for the
 # observer spool, the workload's ephemeral storage and a reserve, so the gate is
 # the sum rather than any one of them.
+#
+# Every term below is measured rather than assumed, because the gate decides
+# whether the study can run at all on this hardware: the node must also hold the
+# workload images for all five scenarios (~830 MB) plus the observer image, and
+# an over-sized gate refuses arms on a node that in fact has ample room.
 LINUX_SCHED_EVICTION_THRESHOLD_B="${LINUX_SCHED_EVICTION_THRESHOLD_B:-789102828}"
-# Sized from measurement, not guessed: with the 10-second evidence windows a
-# whole sample's spool is about 9 MB of compressed trace plus roughly 15 MB of
-# compressed perf data. The cap leaves an order of magnitude of headroom and is
-# what the free-space gate above the eviction threshold is built from.
+# Measured sample spool with the 10-second evidence windows: about 9 MB of
+# compressed trace plus roughly 22 MB of compressed perf data. The cap is six
+# times that, so it still catches a runaway without refusing a healthy sample.
 LINUX_SCHED_SPOOL_CAP_MIB="${LINUX_SCHED_SPOOL_CAP_MIB:-192}"
-LINUX_SCHED_WORKLOAD_STORAGE_MIB="${LINUX_SCHED_WORKLOAD_STORAGE_MIB:-128}"
-LINUX_SCHED_DISK_RESERVE_MIB="${LINUX_SCHED_DISK_RESERVE_MIB:-256}"
+# Largest measured workload ephemeral storage is the Postgres scale-2 database
+# at about 36 MB; the compute-only scenarios use almost none. Allowance is
+# under two times the largest measured value.
+LINUX_SCHED_WORKLOAD_STORAGE_MIB="${LINUX_SCHED_WORKLOAD_STORAGE_MIB:-64}"
+# Headroom held back on top of the kubelet eviction threshold.
+LINUX_SCHED_DISK_RESERVE_MIB="${LINUX_SCHED_DISK_RESERVE_MIB:-128}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
 
 OBSERVER_NAMESPACE="${OBSERVER_NAMESPACE:-linux-sched}"
@@ -238,6 +246,18 @@ balanced_block_order() {
         out+=( "${base[$(( (i + rot) % n ))]}" )
     done
     printf '%s\n' "${out[@]}"
+}
+
+# next_block_id BLOCKS_CSV — the first unused block id in a phase's results.
+#
+# A re-run — after an interrupted block, or a storage-gate refusal — must not
+# append a second row for a block id that already has rows: that produces
+# duplicate (block, scheduler) pairs, which the analysis rejects outright rather
+# than silently choosing one. Continuing the numbering keeps blocks consistent.
+next_block_id() {
+    local csv="$1"
+    [[ -s "$csv" ]] || { echo 1; return 0; }
+    awk -F, 'NR > 1 && $1+0 > m { m = $1+0 } END { print m+1 }' "$csv"
 }
 
 # seeded_permutation SEED N — print a deterministic balanced permutation of the

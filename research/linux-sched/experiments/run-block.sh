@@ -311,9 +311,19 @@ cmd_run() {
     DATA_ROOT="$phase_root"
     mkdir -p "$phase_root"
 
+    # New blocks are numbered after any that already exist, so a re-run after an
+    # interrupted block or a gate refusal cannot duplicate a (block, scheduler)
+    # pair. The numbering continues rather than restarting.
+    local first_block
+    first_block="$(next_block_id "$BLOCKS_CSV")"
     local blocks; blocks="$(block_count "$mode")"
+    local last_block=$(( first_block + blocks - 1 ))
+    if (( first_block > 1 )); then
+        log "${SCENARIO_NAME}: blocks 1..$(( first_block - 1 )) already recorded; running ${first_block}..${last_block}"
+    fi
+
     local b arm seed
-    for (( b = 1; b <= blocks; b++ )); do
+    for (( b = first_block; b <= last_block; b++ )); do
         seed=$(( LINUX_SCHED_PLAN_SEED + b ))
         local raw_dir="${phase_root}/${SCENARIO_NAME}/block-$(printf '%02d' "$b")"
         mkdir -p "$raw_dir"
