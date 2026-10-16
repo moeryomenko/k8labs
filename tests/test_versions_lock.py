@@ -52,7 +52,7 @@ def test_lock_json_is_machine_readable() -> None:
 def test_provider_and_bootstrap_images_are_immutable() -> None:
     data = lock.load_lock(LOCK)
     provider = data["cluster_api_hypervisor"]
-    assert provider["version"] == "v0.3.15"
+    assert provider["version"] == "v0.3.17"
     assert len(provider["commit"]) == 40
     assert provider["image"]["reference"].startswith(
         "ghcr.io/moeryomenko/cluster-api-hypervisor@sha256:"

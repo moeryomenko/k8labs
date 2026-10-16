@@ -22,13 +22,13 @@ cert_manager:
     url: "https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml"
     sha256: "e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f"
 cluster_api_hypervisor:
-  version: "v0.3.15"
-  commit: "4206c463c0f550b2c40a5754f49e1ab16e336cae"
+  version: "v0.3.17"
+  commit: "9633fede2b0f6c5cec40a93f935e9ae823768a99"
   source:
-    url: "https://codeload.github.com/moeryomenko/cluster-api-hypervisor/tar.gz/refs/tags/v0.3.15"
-    sha256: "c68d3bdace532264963d4cca87ea0841e6a620c78550eecd88ac45190d86281b"
+    url: "https://codeload.github.com/moeryomenko/cluster-api-hypervisor/tar.gz/refs/tags/v0.3.17"
+    sha256: "160687cc486f37429e7f2e4aa06576fe94f819a5e8446d1735e0c6edb12091b4"
   image:
-    reference: "ghcr.io/moeryomenko/cluster-api-hypervisor@sha256:e0fc1a9ac16d4856090a07e4090cc0b81b367c571d82928374d3a513a0041abe"
+    reference: "ghcr.io/moeryomenko/cluster-api-hypervisor@sha256:1bed4cf9a104e71c26a74fe89aa152fd600b6804f7b3959cf100d0124f079a10"
     platform: "linux/amd64"
 oci_images:
   - id: "kind-node"
@@ -37,13 +37,13 @@ oci_images:
     platform: "linux/amd64"
   - id: "cluster-api-hypervisor"
     cache_path: "oci/cluster-api-hypervisor"
-    reference: "ghcr.io/moeryomenko/cluster-api-hypervisor@sha256:e0fc1a9ac16d4856090a07e4090cc0b81b367c571d82928374d3a513a0041abe"
+    reference: "ghcr.io/moeryomenko/cluster-api-hypervisor@sha256:1bed4cf9a104e71c26a74fe89aa152fd600b6804f7b3959cf100d0124f079a10"
     platform: "linux/amd64"
 artifacts:
-  - id: "cluster-api-hypervisor-v0.3.15-source"
-    cache_path: "provider/cluster-api-hypervisor-v0.3.15.tar.gz"
-    sha256: "c68d3bdace532264963d4cca87ea0841e6a620c78550eecd88ac45190d86281b"
-    url: "https://codeload.github.com/moeryomenko/cluster-api-hypervisor/tar.gz/refs/tags/v0.3.15"
+  - id: "cluster-api-hypervisor-v0.3.17-source"
+    cache_path: "provider/cluster-api-hypervisor-v0.3.17.tar.gz"
+    sha256: "160687cc486f37429e7f2e4aa06576fe94f819a5e8446d1735e0c6edb12091b4"
+    url: "https://codeload.github.com/moeryomenko/cluster-api-hypervisor/tar.gz/refs/tags/v0.3.17"
   - id: "cert-manager-v1.21.2-manifest"
     cache_path: "manifests/cert-manager-v1.21.2.yaml"
     sha256: "e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f"

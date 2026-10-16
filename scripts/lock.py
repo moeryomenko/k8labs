@@ -55,8 +55,8 @@ def load_lock(path: Path) -> dict[str, Any]:
         raise ValueError("missing lock field: cluster_api_hypervisor")
     if not isinstance(provider, dict):
         raise TypeError("cluster_api_hypervisor must be a mapping")
-    if provider.get("version") != "v0.3.15":
-        raise ValueError("cluster_api_hypervisor.version must be v0.3.15")
+    if provider.get("version") != "v0.3.17":
+        raise ValueError("cluster_api_hypervisor.version must be v0.3.17")
     commit = provider.get("commit")
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError(
