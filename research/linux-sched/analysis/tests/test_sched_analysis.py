@@ -232,3 +232,47 @@ def test_read_blocks_roundtrip(tmp_path: Path) -> None:
     rows = read_blocks(path)
     assert [r.scheduler for r in rows] == ["eevdf", "bpfland"]
     assert rows[0].direction == "higher-is-better"
+
+
+def test_zero_variance_reads_as_infinite_evidence_not_no_evidence() -> None:
+    # Every block agreeing exactly is the strongest evidence, not the weakest;
+    # the t statistic is its limit, so a deterministic effect must still decide.
+    observations = [obs(f"b{i}", CONTROL_SCHEDULER, 100.0) for i in range(3)] + [
+        obs(f"b{i}", "bpfland", 120.0) for i in range(3)
+    ]
+    assert analyse(observations).verdicts[0].decision == "improvement"
+
+
+def test_holm_correction_is_stricter_than_the_uncorrected_interval() -> None:
+    # A ~6% effect whose spread a single uncorrected interval would call an
+    # improvement, but whose t statistic does not survive correction across the
+    # predeclared family of ten. The verdict must be inconclusive, not
+    # improvement.
+    pairs = [(100.0, 106.0), (100.0, 107.2), (100.0, 104.7)]
+    observations = []
+    for index, (control, arm) in enumerate(pairs):
+        observations.append(obs(f"b{index}", CONTROL_SCHEDULER, control, workload="w1"))
+        observations.append(obs(f"b{index}", "bpfland", arm, workload="w1"))
+
+    logs = [math.log(arm / control) for control, arm in pairs]
+    mean = sum(logs) / len(logs)
+    sd = (sum((value - mean) ** 2 for value in logs) / (len(logs) - 1)) ** 0.5
+    half = _t_ppf(1.0 - 0.05 / 2.0, len(logs) - 1) * sd / len(logs) ** 0.5
+    assert _decision(mean - half, mean + half, mean) == "improvement"
+
+    verdict = analyse(observations).verdicts[0]
+    assert verdict.decision == "inconclusive"
+
+
+def test_required_n_reports_instead_of_silently_capping() -> None:
+    with pytest.raises(ValueError, match="not silently capped"):
+        required_n_paired(50.0, max_n=10)
+
+
+def test_summary_records_the_corrected_family() -> None:
+    observations = [obs(f"b{i}", CONTROL_SCHEDULER, 100.0) for i in range(3)] + [
+        obs(f"b{i}", "bpfland", 120.0) for i in range(3)
+    ]
+    payload = summary_json(analyse(observations))
+    assert '"primary_contrasts": 10' in payload
+    assert "holm" in payload

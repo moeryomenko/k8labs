@@ -34,6 +34,12 @@ DEFAULT_ALPHA = 0.05
 BOOTSTRAP_RESAMPLES = 10000
 BOOTSTRAP_SEED = 20261015
 
+# The family of confirmatory primary contrasts: two sched_ext arms against the
+# control across five workloads. Predeclared, because the multiplicity
+# correction and the sample-size calculation both need the family size before
+# any confirmatory data exists.
+PRIMARY_CONTRASTS = 10
+
 # The t-quantile approximation below is only claimed accurate for df >= 2, so
 # an interval-based verdict needs at least three paired blocks. The plan's
 # confirmatory minimum is five; this is the hard floor for reporting anything.
@@ -121,12 +127,16 @@ def required_n_paired(
     practical_effect: float = PRACTICAL_EFFECT,
     alpha: float = DEFAULT_ALPHA,
     power: float = DEFAULT_POWER,
-    max_n: int = 5000,
+    max_n: int = 100_000,
 ) -> int:
     """Required paired-block count for a two-sided paired t test.
 
     Iterates the t degrees of freedom to convergence, as the plan requires.
     Returns at least the frozen minimum so the floor is never undercut.
+
+    There is deliberately no *silent* cap: `max_n` is a runaway guard, and
+    reaching it is reported as an error by the caller rather than silently
+    returning an underpowered count.
     """
 
     if sd_log_ratio <= 0.0:
@@ -141,7 +151,10 @@ def required_n_paired(
         if n >= n_required:
             return n
         n += 1
-    return max_n
+    raise ValueError(
+        f"required paired blocks exceed {max_n}; the effect is too small for "
+        "this variance to be resolved, so the count is not silently capped"
+    )
 
 
 def read_blocks(path: Path) -> list[Observation]:
@@ -200,6 +213,11 @@ def _decision(ci_low_log: float, ci_high_log: float, point_log: float) -> str:
     log ratio and the mean log ratio itself). Mixing ratio-scale bounds with
     log-scale thresholds is the classic way to make a decision rule that can
     never return ``regression``.
+
+    This is the *uncorrected* per-contrast reading used for descriptive
+    reporting. The multiplicity-corrected confirmatory verdict is produced by
+    :func:`holm_decisions`, which additionally requires the point estimate to
+    clear the practical-effect band.
     """
 
     band = math.log(1.0 + PRACTICAL_EFFECT)
@@ -210,6 +228,79 @@ def _decision(ci_low_log: float, ci_high_log: float, point_log: float) -> str:
     if -band <= ci_low_log and ci_high_log <= band:
         return "equivalent"
     return "inconclusive"
+
+
+def _holm_step_down(
+    scores: list[float],
+    dfs: list[int],
+    alpha: float,
+    sided: int,
+    family_size: int | None = None,
+) -> list[bool]:
+    """Holm step-down rejection for t-like statistics.
+
+    `scores` are oriented so that a larger value is stronger evidence; `sided`
+    is 2 for a two-sided test and 1 for a one-sided one. Ordering by the
+    statistic is equivalent to ordering by p-value (the t CDF is monotone), so
+    the step-down can be applied without materialising p-values. Once a
+    hypothesis fails to reject, every less extreme one is retained.
+
+    `family_size` defaults to the number of scores, but the confirmatory family
+    is *predeclared*, so a run that could only evaluate part of it still divides
+    by the declared size rather than earning a weaker correction.
+    """
+
+    m = family_size if family_size is not None else len(scores)
+    order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+    rejected = [False] * len(scores)
+    for position, index in enumerate(order, start=1):
+        adjusted = alpha / (sided * (m - position + 1))
+        critical = _t_ppf(1.0 - adjusted, dfs[index])
+        if scores[index] >= critical:
+            rejected[index] = True
+        else:
+            break
+    return rejected
+
+
+def holm_decisions(comparisons: list[dict], alpha: float = DEFAULT_ALPHA) -> list[str]:
+    """Multiplicity-corrected verdicts for the predeclared contrast family.
+
+    The family is the confirmatory primary contrasts. Both the no-effect test
+    and the equivalence TOST are corrected across it. A verdict is only
+    ``improvement``/``regression`` when the corrected no-effect test rejects
+    *and* the point estimate clears the +-5% practical-effect band;
+    ``equivalent`` requires the corrected TOST to reject. Everything else is
+    ``inconclusive``.
+    """
+
+    if not comparisons:
+        return []
+    dfs = [c["df"] for c in comparisons]
+    abs_t = [abs(c["t_two"]) for c in comparisons]
+    # TOST statistic: the weaker of the two one-sided tests decides, so a
+    # contrast is only equivalent when both bounds are cleared.
+    tost = [min(c["t_lower"], -c["t_upper"]) for c in comparisons]
+
+    rejects_no_effect = _holm_step_down(
+        abs_t, dfs, alpha, sided=2, family_size=PRIMARY_CONTRASTS
+    )
+    rejects_tost = _holm_step_down(
+        tost, dfs, alpha, sided=1, family_size=PRIMARY_CONTRASTS
+    )
+
+    band = math.log(1.0 + PRACTICAL_EFFECT)
+    decisions: list[str] = []
+    for index, c in enumerate(comparisons):
+        if rejects_no_effect[index] and c["mean"] >= band:
+            decisions.append("improvement")
+        elif rejects_no_effect[index] and c["mean"] <= -band:
+            decisions.append("regression")
+        elif rejects_tost[index]:
+            decisions.append("equivalent")
+        else:
+            decisions.append("inconclusive")
+    return decisions
 
 
 def analyse(
@@ -237,6 +328,11 @@ def analyse(
             )
         per_scheduler[obs.block_id] = obs.value
 
+    # Pass 1: everything needed to state a contrast, before any verdict. The
+    # decisions come from a multiplicity correction across the whole family, so
+    # they cannot be made one contrast at a time as the loop walks the data.
+    stats: list[dict] = []
+    boot: list[tuple[float, float]] = []
     for (workload, metric, direction), by_scheduler in sorted(
         grouped.items(), key=lambda item: (item[0][0], item[0][1])
     ):
@@ -269,9 +365,27 @@ def analyse(
                 for b in shared
             ]
             n = len(logs)
+            df = n - 1
             mean = statistics.fmean(logs)
             sd = statistics.stdev(logs)
-            half = _t_ppf(1.0 - alpha / 2.0, n - 1) * sd / math.sqrt(n)
+            se = sd / math.sqrt(n)
+
+            # A perfectly consistent effect has no estimated spread: the t
+            # statistic is its limit (infinite), not zero. Reporting zero would
+            # turn "every block agreed" into "no evidence".
+            def _t(numerator: float) -> float:
+                if se > 0.0:
+                    return numerator / se
+                if numerator > 0.0:
+                    return math.inf
+                if numerator < 0.0:
+                    return -math.inf
+                return 0.0
+
+            # The two-sided no-effect test and the two one-sided bounds of the
+            # equivalence TOST, so both families can be corrected later.
+            band_low = math.log(1.0 - PRACTICAL_EFFECT)
+            band_high = math.log(1.0 + PRACTICAL_EFFECT)
 
             rng = random.Random(bootstrap_seed)
             means: list[float] = []
@@ -279,23 +393,48 @@ def analyse(
                 sample = [logs[rng.randrange(n)] for _ in range(n)]
                 means.append(statistics.fmean(sample))
             means.sort()
-            lo_idx = int(0.025 * (len(means) - 1))
-            hi_idx = int(0.975 * (len(means) - 1))
 
-            result.verdicts.append(
-                Verdict(
-                    workload=workload,
-                    metric=metric,
-                    scheduler=scheduler,
-                    blocks=n,
-                    geometric_mean_ratio=math.exp(mean),
-                    ci_low=math.exp(mean - half),
-                    ci_high=math.exp(mean + half),
-                    bootstrap_low=math.exp(means[lo_idx]),
-                    bootstrap_high=math.exp(means[hi_idx]),
-                    decision=_decision(mean - half, mean + half, mean),
+            stats.append(
+                {
+                    "workload": workload,
+                    "metric": metric,
+                    "scheduler": scheduler,
+                    "n": n,
+                    "df": df,
+                    "mean": mean,
+                    "sd": sd,
+                    "se": se,
+                    "t_two": _t(mean),
+                    "t_lower": _t(mean - band_low),
+                    "t_upper": _t(mean - band_high),
+                }
+            )
+            boot.append(
+                (
+                    math.exp(means[int(0.025 * (len(means) - 1))]),
+                    math.exp(means[int(0.975 * (len(means) - 1))]),
                 )
             )
+
+    # Pass 2: one multiplicity-corrected verdict per contrast.
+    decisions = holm_decisions(stats, alpha=alpha)
+    for entry, (boot_low, boot_high), decision in zip(stats, boot, decisions):
+        mean, se, df = entry["mean"], entry["se"], entry["df"]
+        half = _t_ppf(1.0 - alpha / 2.0, df) * se
+        result.verdicts.append(
+            Verdict(
+                workload=entry["workload"],
+                metric=entry["metric"],
+                scheduler=entry["scheduler"],
+                blocks=entry["n"],
+                geometric_mean_ratio=math.exp(mean),
+                ci_low=math.exp(mean - half),
+                ci_high=math.exp(mean + half),
+                bootstrap_low=boot_low,
+                bootstrap_high=boot_high,
+                decision=decision,
+            )
+        )
     return result
 
 
@@ -340,10 +479,12 @@ def summary_json(result: AnalysisResult) -> str:
     """Render verdicts as deterministic, schema-versioned JSON."""
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "control_scheduler": CONTROL_SCHEDULER,
         "practical_effect": PRACTICAL_EFFECT,
         "min_blocks_for_verdict": MIN_BLOCKS_FOR_VERDICT,
+        "primary_contrasts": PRIMARY_CONTRASTS,
+        "multiplicity": "holm step-down over the predeclared family",
         "lower_is_better_fallback": sorted(LOWER_IS_BETTER),
         "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
         "bootstrap_seed": BOOTSTRAP_SEED,

@@ -95,10 +95,16 @@ linux-sched-calibrate: ## Freeze a scenario's offered rate on the control arm (S
 
 # ---- Analysis ----
 
+.PHONY: linux-sched-sample-size
+linux-sched-sample-size: ## Freeze each scenario's confirmatory block count from its pilot variance
+	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/pilot/blocks.csv" ]; then echo "No pilot blocks.csv under $(LINUX_SCHED_DATA_ROOT)/pilot; run the pilots first."; exit 1; fi
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sample_size.py --pilot-blocks $(LINUX_SCHED_DATA_ROOT)/pilot/blocks.csv --output $(LINUX_SCHED_DATA_ROOT)/sample-size.json
+	@echo "  Frozen counts: $(LINUX_SCHED_DATA_ROOT)/sample-size.json"
+
 .PHONY: linux-sched-analyze
 linux-sched-analyze: ## Analyze paired blocks into summary.csv/json with the frozen decision rule
-	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/blocks.csv" ]; then echo "No blocks.csv under $(LINUX_SCHED_DATA_ROOT); run an experiment first."; exit 0; fi
-	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_analysis.py --blocks $(LINUX_SCHED_DATA_ROOT)/blocks.csv --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
+	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/confirmatory/blocks.csv" ]; then echo "No confirmatory blocks.csv under $(LINUX_SCHED_DATA_ROOT)/confirmatory; pilot data is deliberately not analysed."; exit 1; fi
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_analysis.py --blocks $(LINUX_SCHED_DATA_ROOT)/confirmatory/blocks.csv --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
 	@echo "  Summary: $(LINUX_SCHED_ANALYSIS_OUTPUT)/summary.csv"
 
 .PHONY: linux-sched-plots
