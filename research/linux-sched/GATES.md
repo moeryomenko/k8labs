@@ -546,6 +546,17 @@ probe and `perf sched`. Three parts of that did not work.
   `perf.data.gz`; a 210 s sample (30 s warmup plus the 180 s window) is on the
   order of 180 MB. **Nothing prunes the data root**, so a confirmatory run over
   several scenarios will accumulate tens of gigabytes.
+- **The observer artifacts were not per-arm.** Every arm copied `runqlat.txt`,
+  `runqlen.txt`, `sched-trace.txt`, `perf.data` and the rest into the same block
+  directory, so each arm overwrote the previous one: a block ended up holding
+  only the last arm's evidence, and two thirds of the instrumentation was
+  destroyed (measured: one `runqlat.txt` in a three-arm block). They are written
+  under `observer-<arm>/`.
+- **The Pod's spool was not per-sample.** The capture reused
+  `/var/tmp/linux-sched/<arm>` for every block, so an earlier sample's files
+  stayed behind and `perf` rotated its output to `perf.data.old` — a 1.6 GB
+  sample carried a further 600 MB of the previous one, and the copy moved both.
+  The spool is wiped before use.
 
 ## Cluster rebuild — what it costs and what it breaks
 
