@@ -238,29 +238,43 @@ exec'd through `sh -c` because the runtime refuses a hostPath binary directly.
 ### Rebuilding the schedulers against the pinned kernel
 
 The binaries must be built against the running kernel's BTF, or the struct_ops
-match fails. Do this in a **worktree**, so the user's scx checkout stays clean
-(`<ver>` is the kernel version, `<sha12>` the first 12 hex of the kernel commit;
-on `7.3.0-0.rc7…fc46` that is `7.3.0-rc7` and `4056b3c9d3c9`):
+match fails. Do this in a **worktree**, so the user's scx checkout stays clean,
+and put that worktree **outside `/tmp`**: `/tmp` is a tmpfs here and a cleanup
+wiped a previous worktree and its built binaries, which is what
+`linux-sched-scx-stage` then fails on. (`<ver>` is the kernel version, `<sha12>`
+the first 12 hex of the kernel commit; on `7.3.0-0.rc7…fc46` that is
+`7.3.0-rc7` and `4056b3c9d3c9`.)
 
 ```sh
-git worktree add /tmp/scx-kern <rev> && cd /tmp/scx-kern
+git worktree add <durable-path>/scx-kern <rev> && cd <durable-path>/scx-kern
 
 # 1. Dump the running kernel's BTF. bpftool and the BTF mount live in the
-#    observer, so run this there and copy the result out.
-bpftool btf dump file /sys/kernel/btf/vmlinux format c > /tmp/vmlinux-<ver>.h
+#    observer, so run this there and write the result outside the Pod.
+kubectl -n linux-sched exec <observer-pod> -- \
+    bpftool btf dump file /sys/kernel/btf/vmlinux format c > dump.h
 
-# 2. scx needs struct cpumask's bits array at a fixed width.
-python3 scripts/fixup_vmlinux_h.py /tmp/vmlinux-<ver>.h
+# 2. bpftool's output has no diagnostic pragmas, but scx's vendored dumps do;
+#    build the header the same way, then apply the cpumask fixup.
+{ printf '#pragma clang diagnostic push\n#pragma clang diagnostic ignored "-Wmissing-declarations"\n'; \
+  cat dump.h; \
+  printf '#pragma clang diagnostic pop\n'; } > wrapped.h
+cp wrapped.h vmlinux.h
+python3 scripts/fixup_vmlinux_h.py vmlinux.h
+
+# For the pinned kernel this must come out at exactly 3646786 bytes. A different
+# size means a different kernel or a missed step.
 
 # 3. Install it beside the vendored dumps and repoint the symlink.
-install -m 0644 /tmp/vmlinux-<ver>.h "scheds/vmlinux/arch/x86/vmlinux-v<ver>-g<sha12>.h"
+install -m 0644 vmlinux.h "scheds/vmlinux/arch/x86/vmlinux-v<ver>-g<sha12>.h"
 ln -sfT "vmlinux-v<ver>-g<sha12>.h" scheds/vmlinux/arch/x86/vmlinux.h
 
-# 4. Rebuild the tarball the build actually consumes, then force a FULL
-#    rebuild: the compiler BPF object is cached, and `cargo clean -p` does not
-#    remove it, so a partial clean silently keeps the old dump's object.
+# 4. Rebuild the tarball the build actually consumes, then build. The tarball
+#    mirrors scheds/vmlinux/ (25 members, every arch), so it is built from that
+#    directory rather than assembled by hand; a fresh worktree needs no
+#    `cargo clean`, but an existing one does, because the compiler BPF object is
+#    cached and `cargo clean -p` does not remove it — a partial clean silently
+#    rebuilds against the old dump.
 tar --zstd -cf rust/scx_utils/vmlinux.tar.zst -C scheds vmlinux
-cargo clean
 cargo build --release -p scx_bpfland -p scx_lavd
 ```
 
@@ -268,11 +282,8 @@ The result is a container-side `sched_ext_ops` of 512/51 against the kernel's
 512/51. Stage the binaries with that worktree as the source:
 
 ```sh
-LINUX_SCHED_SCX_ROOT=/tmp/scx-kern make -C research linux-sched-scx-stage
+LINUX_SCHED_SCX_ROOT=<durable-path>/scx-kern make -C research linux-sched-scx-stage
 ```
-
-The tarball mirrors `scheds/vmlinux/` (25 members, every arch's dump), which is
-why it is rebuilt from that directory rather than assembled by hand.
 
 ## `scx_mavd` — blocked: needs a 7.4 kernel
 
