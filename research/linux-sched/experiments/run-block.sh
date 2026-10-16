@@ -37,8 +37,13 @@ usage() {
 # ---- plan ------------------------------------------------------------------
 
 # block_count MODE — number of paired blocks for the run mode.
+#
+# `smoke` is a pipeline check, not an experiment: one block to prove the whole
+# path works, written to its own tree. Keeping it out of the pilot tree matters,
+# because the pilot is what the confirmatory block count is derived from.
 block_count() {
     case "$1" in
+        smoke) echo "${LINUX_SCHED_SMOKE_BLOCKS:-1}" ;;
         pilot) echo "${LINUX_SCHED_PILOT_BLOCKS}" ;;
         confirmatory) echo "${LINUX_SCHED_REQUIRED_BLOCKS:-${LINUX_SCHED_MIN_BLOCKS}}" ;;
         *) die "unknown mode: $1" ;;

@@ -73,6 +73,11 @@ linux-sched-list-scenarios: ## List linux-sched workload scenarios
 
 # ---- Experiments ----
 
+.PHONY: linux-sched-smoke
+linux-sched-smoke: ## Pipeline check for one scenario: one block into the smoke tree (SCENARIO=<name>)
+	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name> (see linux-sched-list-scenarios)" >&2; exit 1; fi
+	$(LINUX_SCHED_RUNNER) run --scenario $(SCENARIO) --mode smoke --configs-dir $(LINUX_SCHED_CONFIGS_DIR) --data-root $(LINUX_SCHED_DATA_ROOT)
+
 .PHONY: linux-sched-pilot
 linux-sched-pilot: ## Run a pilot block set for one scenario (SCENARIO=<name>)
 	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name> (see linux-sched-list-scenarios)" >&2; exit 1; fi

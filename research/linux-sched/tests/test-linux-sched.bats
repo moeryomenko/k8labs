@@ -184,3 +184,10 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "1" ]
 }
+
+@test "smoke mode plans exactly one block, kept out of the pilot tree" {
+    run "${SERIES_DIR}/experiments/run-block.sh" plan --scenario postgres --mode smoke \
+        --configs-dir "${SCENARIOS}"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"mode=smoke blocks=1"* ]]
+}
