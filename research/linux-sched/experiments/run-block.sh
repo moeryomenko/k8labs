@@ -107,18 +107,45 @@ cmd_list() {
 
 # ---- execution -------------------------------------------------------------
 
-# resolve_hosts — map TARGET_HOST/LOAD_HOST to reachable node IPs.
+# resolve_hosts — choose the measured target and the load generator.
+#
+# The target is the worker with the most free space, not simply the first by
+# name: the 5 GiB filesystem is the binding constraint, and choosing a fuller
+# node makes the storage gate fail for a reason that has nothing to do with the
+# experiment. The remaining worker becomes the load generator. The choice is
+# recorded because it must stay fixed across the study.
 resolve_hosts() {
     local workers
     workers="$(ready_workers)"
     [[ -n "$workers" ]] || die "no Ready worker nodes found"
-    local target load
-    target="$(printf '%s\n' "$workers" | sed -n '1p')"
-    load="$(printf '%s\n' "$workers" | sed -n '2p')"
-    TARGET_NODE="$target"
-    LOAD_NODE="$load"
-    [[ -n "$TARGET_NODE" ]] || die "no observer-labelled worker found; run 'make linux-sched-observers-apply'"
+
+    local node free best_node="" best_free=-1 ordered=""
+    local -a ranked=() ordered_nodes=()
+    while IFS= read -r node; do
+        [[ -n "$node" ]] || continue
+        free="$(guest_free_bytes "$node")"
+        [[ "$free" =~ ^[0-9]+$ ]] || free=0
+        ranked+=("${free} ${node}")
+    done < <(printf '%s\n' "$workers")
+
+    # Sort by free space descending; ties fall back to the node name so the
+    # result is deterministic.
+    while IFS= read -r line; do
+        ordered+="${line#* }"$'\n'
+    done < <(printf '%s\n' "${ranked[@]}" | sort -k1,1rn -k2,2)
+
+    mapfile -t ordered_nodes < <(printf '%s' "$ordered")
+    best_node="${ordered_nodes[0]:-}"
+    [[ -n "$best_node" ]] || die "no observer-labelled worker found; run 'make linux-sched-observers-apply'"
+
+    TARGET_NODE="$best_node"
+    LOAD_NODE="${ordered_nodes[1]:-}"
     log "target=${TARGET_NODE} load=${LOAD_NODE:-none}"
+    local summary=""
+    while IFS= read -r line; do
+        summary+="${line#* }=$(printf '%s' "${line%% *}")B "
+    done < <(printf '%s\n' "${ranked[@]}" | sort -k1,1rn -k2,2)
+    log "  free space by worker: ${summary}"
 }
 
 # activate_arm ARM — make ARM the active scheduler on the target worker.
