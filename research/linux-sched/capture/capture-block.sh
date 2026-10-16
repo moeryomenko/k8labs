@@ -297,6 +297,12 @@ main() {
         local rendered="${out_dir}/workload-${arm}.yaml"
         sed -e "s|__NODE_NAME__|${target_node}|g" -e "s|__ARM__|${arm}|g" \
             "$manifest" > "$rendered"
+        # Delete any leftover first. The workload Pod name is fixed per scenario
+        # and `spec.nodeName` is immutable, so a Pod left behind by an earlier
+        # run — including one pinned to a different target node — makes the
+        # apply fail before the sample can start.
+        kubectl_wl delete -f "$rendered" --ignore-not-found --wait=true --timeout=120s \
+            >/dev/null 2>&1 || true
         kubectl_wl apply -f "$rendered" || die "failed to apply workload ${manifest}"
         wait_workload_ready
         # Only workloads that expose a Service are reached over the network,
