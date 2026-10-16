@@ -62,8 +62,22 @@ spec:
               # package here is written to the node, where kubelet evicts pods
               # for ephemeral storage.
               for t in /opt/linux-sched/bin/*; do
+                case "$(basename "$t")" in wrk2) continue ;; esac
                 [ -e "$t" ] && ln -sf "$t" "/usr/local/bin/$(basename "$t")"
               done
+              # wrk2 builds each request from a Lua module it loads with
+              # `require "wrk"`. The Makefile byte-compiles that module into the
+              # binary, and on this toolchain the link reports
+              # `obj/bytecode.o: string table [3] is corrupt`, so the module is
+              # nil and every run panics with "attempt to index a nil value" —
+              # while `--version` still answers. Supply the Lua source on the
+              # module path instead: the baked copy first, then a host-writable
+              # copy, which is what lets a running node be repaired without
+              # rebaking its image.
+              printf '%s\n' '#!/bin/sh' \
+                'LUA_PATH="/opt/linux-sched/bin/?.lua;/var/tmp/linux-sched/?.lua;;" exec /opt/linux-sched/bin/wrk2 "$@"' \
+                > /usr/local/bin/wrk2
+              chmod 0755 /usr/local/bin/wrk2
               touch /tmp/observer-ready
               exec sleep infinity
           securityContext:

@@ -203,3 +203,14 @@ setup() {
     run grep -n 'RAW_DATA_ROOT="\$data_root"' "${SERIES_DIR}/experiments/run-block.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "the observer wrapper puts wrk2's Lua module on the module path" {
+    # Regression: wrk2's Lua module is corrupted at bake time, so a bare symlink
+    # to the binary panics on every run. The observer must supply wrk.lua.
+    run grep -n 'LUA_PATH=' "${SERIES_DIR}/observers/observer-daemonset.yaml"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/opt/linux-sched/bin/?.lua"* ]]
+    # wrk2 must not be symlinked directly any more.
+    run grep -c 'case "$(basename "$t")" in wrk2) continue' "${SERIES_DIR}/observers/observer-daemonset.yaml"
+    [ "$status" -eq 0 ]
+}

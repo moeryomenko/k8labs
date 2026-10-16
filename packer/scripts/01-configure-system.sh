@@ -175,14 +175,32 @@ if [ -n "${FIXTURE_DIR}" ]; then
     git -C "${wrk2_tmp}/wrk2" checkout --quiet "${WRK2_COMMIT}"
     make -C "${wrk2_tmp}/wrk2" WITH_OPENSSL=1
     install -m 0755 "${wrk2_tmp}/wrk2/wrk" "${FIXTURE_BIN_DIR}/wrk2"
+
+    # wrk2 loads its request builder with `require "wrk"`. The Makefile
+    # byte-compiles src/wrk.lua into an object and links it, but this toolchain
+    # writes an object it cannot read back:
+    #
+    #   ld.bfd: obj/bytecode.o: string table [3] is corrupt
+    #
+    # The linker still produces a binary, so the failure is silent: the module is
+    # nil and every run panics with `attempt to index a nil value`, while
+    # `--version` answers normally. Ship the Lua source beside the binary; the
+    # observer puts it on Lua's module path.
+    install -m 0644 "${wrk2_tmp}/wrk2/src/wrk.lua" "${FIXTURE_BIN_DIR}/wrk.lua"
     rm -rf "${wrk2_tmp}"
 
-    # Verify the load generator actually runs. The link emitted
-    # "ld.bfd: obj/bytecode.o: string table [3] is corrupt" once and still
-    # produced a binary; a load generator that cannot start would otherwise
-    # only surface in the middle of a block.
-    "${FIXTURE_BIN_DIR}/wrk2" --version 2>&1 | grep -q '^wrk ' \
-        || { echo "ERROR: baked wrk2 does not run" >&2; exit 1; }
+    # Verify the load generator actually *runs*. The previous check only asked
+    # for `--version`, which passes on a binary that panics on every real
+    # invocation — and that is exactly how a broken load generator was baked and
+    # then discovered in the middle of a calibration sweep.
+    #
+    # Nothing listens on port 1, so a working wrk2 reports a connection failure;
+    # only the Lua panic indicates a broken build.
+    if LUA_PATH="${FIXTURE_BIN_DIR}/?.lua;;" "${FIXTURE_BIN_DIR}/wrk2" \
+        -t1 -c1 -d1s -R10 --latency http://127.0.0.1:1/ 2>&1 | grep -q PANIC; then
+        echo "ERROR: baked wrk2 panics instead of running" >&2
+        exit 1
+    fi
 
     # The FFmpeg scenario loops a licensed clip. Both the archive and the
     # extracted file are verified, so a truncated or substituted download
