@@ -39,6 +39,12 @@ LINUX_SCHED_RATE_SWEEP_FACTOR="${LINUX_SCHED_RATE_SWEEP_FACTOR:-1.5}"
 LINUX_SCHED_RATE_SWEEP_MAX="${LINUX_SCHED_RATE_SWEEP_MAX:-65536}"
 LINUX_SCHED_RATE_PROBE_S="${LINUX_SCHED_RATE_PROBE_S:-30}"
 
+# How long `perf sched` records for. The node's root filesystem is ~4.9 GB in
+# practice (see GATES.md), and a full-window `perf.data` alone is over a
+# gigabyte, which trips kubelet's disk-pressure eviction; the record is
+# therefore bounded and its `perf sched latency` summary is what is kept.
+LINUX_SCHED_PERF_WINDOW_S="${LINUX_SCHED_PERF_WINDOW_S:-60}"
+
 # How long to wait for a workload Pod to start serving before the load begins.
 LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S="${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S:-120}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"

@@ -224,11 +224,14 @@ main() {
         # form had an empty body, so it emitted nothing: that artifact was a
         # banner, and the wakeup-to-run and migration data never existed.
         # The spool directory is created by the observer start, so make it here.
-        kexec "$target_pod" sh -c "mkdir -p ${work}" >/dev/null \
-            || die "could not create ${work} in ${target_pod}"
+        # Wipe it first: it is reused across blocks, so an earlier sample's
+        # files would otherwise stay and be copied along with this one.
+        kexec "$target_pod" sh -c "rm -rf ${work}; mkdir -p ${work}" >/dev/null \
+            || die "could not prepare ${work} in ${target_pod}"
         kubectl_wl cp "${PROBE}" \
             "${OBSERVER_NAMESPACE}/${target_pod}:${work}/sched-trace.bt" >/dev/null \
             || die "could not stage the sched-trace probe into ${target_pod}"
+        # The CO-RE tools read BTF, so they need no headers; the BCC tools do.
         # `stdbuf -oL`: both tools buffer their output when stdout is a file,
         # and the observer is killed rather than allowed to exit, so an
         # unbuffered line mode is what keeps the histogram from being lost.
@@ -236,12 +239,15 @@ main() {
         # The protocol requires run-queue length as well as latency; only
         # runqlat was ever collected.
         start_observer runqlen "stdbuf -oL bpf-runqlen 1 ${observer_window}"
-        # A raw event stream for a full window is hundreds of megabytes. The
-        # probe writes it plainly and it is compressed in the Pod before the
-        # copy; folding `gzip` into the start command would fight the
-        # supervisor's own redirections.
-        start_observer sched-trace "bpftrace ${work}/sched-trace.bt"
-        start_observer perf-sched "perf sched record -o ${work}/perf.data -- sleep ${observer_window}"
+        # The trace is compressed as it is produced. A full window is hundreds
+        # of megabytes raw and the node's filesystem is small, so it must never
+        # be written uncompressed. The `sh -c` wrapper is what keeps the pipe
+        # and its redirection from being overridden by the supervisor's own.
+        start_observer sched-trace \
+            "sh -c 'bpftrace ${work}/sched-trace.bt 2>/dev/null | gzip -1 > ${work}/sched-trace.csv.gz'"
+        # `perf sched` is deliberately NOT started here: it is bounded, so
+        # starting it now would spend its whole window before the workload was
+        # even running. It starts inside the measured period, below.
     fi
 
     if [[ -n "$manifest" ]]; then
@@ -274,8 +280,20 @@ main() {
             || die "warmup load failed on ${load_node}"
     fi
 
-    if [[ -n "$load_command" && -n "$load_node" ]]; then
-        local load_pod
+    # `perf sched` records inside the measured period, and for a bounded window:
+    # its raw output is the largest artifact by far and the node's filesystem is
+    # small, so a full-window recording trips kubelet's disk-pressure eviction.
+    # The latency summary is what is kept, plus the compressed raw stream.
+    if [[ "$instrumentation" == "enabled" ]]; then
+        local perf_window="$LINUX_SCHED_PERF_WINDOW_S"
+        if (( perf_window > duration )); then
+            perf_window="$duration"
+        fi
+        start_observer perf-sched \
+            "sh -c 'perf sched record -o ${work}/perf.data -- sleep ${perf_window} 2>&1; perf sched latency -i ${work}/perf.data > ${work}/perf-latency.txt 2>&1; test ! -s ${work}/perf.data || gzip -1 -f ${work}/perf.data'"
+    fi
+
+    if [[ -n "$load_command" && -n "$load_node" ]]; then        local load_pod
         load_pod="$(observer_pod "$load_node")"
         log "running load on ${load_pod} (${load_node})"
         # The load runs for the whole sample window, so the helper's default
@@ -306,32 +324,44 @@ main() {
     fi
 
     if [[ "$instrumentation" == "enabled" ]]; then
+        # The perf chain post-processes after its recording window ends: it runs
+        # `perf sched latency` over the trace and compresses the raw stream. Give
+        # the last supervisor time to finish rather than cutting it off, which
+        # would lose the summary and leave the raw file uncompressed.
+        if [[ "${#obs_pids[@]}" -gt 0 ]]; then
+            local last_pid="${obs_pids[${#obs_pids[@]} - 1]}"
+            local wait_deadline=$(( SECONDS + 120 ))
+            while kill -0 "$last_pid" 2>/dev/null \
+                && (( SECONDS < wait_deadline )); do
+                sleep 2
+            done
+        fi
         sleep 2
         cleanup
         obs_pids=()
-        # Compress the large artifacts in the Pod, so the copy back moves a
-        # fraction of the raw stream: the scheduler trace is hundreds of
-        # megabytes and perf.data is over a gigabyte for a full window.
-        kexec "$target_pod" sh -c \
-            "test ! -s ${work}/sched-trace.txt || gzip -f ${work}/sched-trace.txt" \
-            >/dev/null 2>&1 || true
-        kexec "$target_pod" sh -c \
-            "test ! -s ${work}/perf.data || gzip -1 -f ${work}/perf.data" \
-            >/dev/null 2>&1 || true
-        log "copying capture artifacts into ${out_dir}"
-        kubectl_wl cp "${OBSERVER_NAMESPACE}/${target_pod}:${work}/." "$out_dir/" \
+        # Observer artifacts go under an arm-scoped directory. They used to be
+        # copied into the block directory itself, so each arm overwrote the
+        # previous arm's evidence and a block kept only the last arm's.
+        local obs_dir="${out_dir}/observer-${arm}"
+        mkdir -p "$obs_dir"
+        log "copying capture artifacts into ${obs_dir}"
+        kubectl_wl cp "${OBSERVER_NAMESPACE}/${target_pod}:${work}/." "$obs_dir/" \
             || die "failed to copy capture artifacts from ${target_pod}"
+        # Free the node's disk: this filesystem is small and a sample is
+        # hundreds of megabytes, so holding it after the copy is what filled
+        # the node and got the observer evicted.
+        kexec "$target_pod" sh -c "rm -rf ${work}" >/dev/null 2>&1 || true
 
         # A capture is complete only if the required observer outputs exist and
         # are non-empty AND no perf events were lost.
         local status="complete" artifact
-        for artifact in runqlat.txt runqlen.txt sched-trace.txt.gz; do
-            if [[ ! -s "${out_dir}/${artifact}" ]]; then
+        for artifact in runqlat.txt runqlen.txt sched-trace.csv.gz perf-latency.txt; do
+            if [[ ! -s "${obs_dir}/${artifact}" ]]; then
                 log "ERROR: observer artifact ${artifact} is missing or empty for arm ${arm}"
                 status="failed"
             fi
         done
-        if grep -qiE 'lost [1-9]|dropped [1-9]' "${out_dir}/perf-sched.txt" 2>/dev/null; then
+        if grep -qiE 'lost [1-9]|dropped [1-9]' "${obs_dir}/perf-sched.txt" 2>/dev/null; then
             log "WARN: perf reported lost events for arm ${arm}; trace metrics invalid"
             status="incomplete"
         fi
