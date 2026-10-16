@@ -93,10 +93,12 @@ linux-sched/
 
 Pilot and confirmatory data are separate: pilot blocks estimate variance and must
 never enter a final verdict, and their block numbers would otherwise collide with
-confirmatory artifacts.
+confirmatory artifacts. Pipeline smokes have their own tree for the same reason:
+a smoke is one block and would leave the pilot unable to size anything.
 
 ```
 ${K8LABS_RESEARCH_DATA_ROOT:-<repo>/build}/research/linux-sched/
+├── smoke/blocks.csv               # pipeline checks, never analysed
 ├── pilot/blocks.csv               # pilot results, excluded from verdicts
 ├── confirmatory/blocks.csv        # the only file the analysis reads
 ├── sample-size.json               # frozen per-scenario confirmatory count
