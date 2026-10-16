@@ -42,13 +42,22 @@ spec:
             echo "host all all 0.0.0.0/0 trust" >> "$PGDATA/pg_hba.conf"
             echo "host all all ::/0 trust" >> "$PGDATA/pg_hba.conf"
           fi
-          gosu postgres postgres -D "$PGDATA" -c listen_addresses='*' &
+          gosu postgres postgres -D "$PGDATA" -c listen_addresses='*' \
+              -c fsync=off -c full_page_writes=off -c max_wal_size=128MB &
           server=$!
           until pg_isready -h 127.0.0.1 -q; do sleep 1; done
           if ! psql -h 127.0.0.1 -U postgres -lqt 2>/dev/null \
               | cut -d'|' -f1 | grep -qw bench; then
             createdb -h 127.0.0.1 -U postgres bench
-            psql -h 127.0.0.1 -U postgres -d bench -q -f /fixtures/pgbench.sql
+            # Initialised here rather than restored from the baked snapshot.
+            # The node's filesystem is about 5 GiB and kubelet evicts a Pod as
+            # soon as ephemeral storage runs low, and the snapshot's
+            # million-account database is several times what the Pod can afford
+            # next to the instrumentation: an attempt with it was evicted in the
+            # middle of a load. `pgbench -i` is deterministic, so every arm still
+            # starts from byte-identical data, and a smaller working set makes
+            # the scenario CPU-bound, which is what a scheduler comparison wants.
+            pgbench -h 127.0.0.1 -U postgres -i -s 2 bench >/dev/null
           fi
           touch /tmp/.bench-ready
           wait "$server"
@@ -67,15 +76,6 @@ spec:
         requests:
           cpu: "1"
         limits: {}
-      volumeMounts:
-        - name: fixtures
-          mountPath: /fixtures
-          readOnly: true
-  volumes:
-    - name: fixtures
-      hostPath:
-        path: /var/lib/linux-sched/fixtures
-        type: Directory
 ---
 apiVersion: v1
 kind: Service

@@ -249,7 +249,7 @@ main() {
         kubectl_wl cp "${PROBE}" \
             "${OBSERVER_NAMESPACE}/${target_pod}:${work}/sched-trace.bt" >/dev/null \
             || die "could not stage the sched-trace probe into ${target_pod}"
-        # The CO-RE tools read BTF, so they need no headers; the BCC tools do.
+        # The run-queue histograms cover the whole window and cost kilobytes.
         # `stdbuf -oL`: both tools buffer their output when stdout is a file,
         # and the observer is killed rather than allowed to exit, so an
         # unbuffered line mode is what keeps the histogram from being lost.
@@ -257,15 +257,9 @@ main() {
         # The protocol requires run-queue length as well as latency; only
         # runqlat was ever collected.
         start_observer runqlen "stdbuf -oL bpf-runqlen 1 ${observer_window}"
-        # The trace is compressed as it is produced. A full window is hundreds
-        # of megabytes raw and the node's filesystem is small, so it must never
-        # be written uncompressed. The `sh -c` wrapper is what keeps the pipe
-        # and its redirection from being overridden by the supervisor's own.
-        start_observer sched-trace \
-            "sh -c 'bpftrace ${work}/sched-trace.bt 2>/dev/null | gzip -1 > ${work}/sched-trace.csv.gz'"
-        # `perf sched` is deliberately NOT started here: it is bounded, so
-        # starting it now would spend its whole window before the workload was
-        # even running. It starts inside the measured period, below.
+        # The trace and `perf sched` are bounded and start inside the measured
+        # period, below: both are large, and starting them here would spend
+        # their budget before the workload was even running.
     fi
 
     if [[ -n "$manifest" ]]; then
@@ -298,17 +292,21 @@ main() {
             || die "warmup load failed on ${load_node}"
     fi
 
-    # `perf sched` records inside the measured period, and for a bounded window:
-    # its raw output is the largest artifact by far and the node's filesystem is
-    # small, so a full-window recording trips kubelet's disk-pressure eviction.
-    # The latency summary is what is kept, plus the compressed raw stream.
+    # The trace and `perf sched` run inside the measured period and for bounded
+    # windows. Both are the largest artifacts by far and the node's filesystem is
+    # small, so a full-window recording does not fit: a workload sharing the node
+    # was evicted for ephemeral storage mid-load. `timeout` ends the producer so
+    # the compressor behind it finishes its stream cleanly; the raw perf stream is
+    # summarised and then removed, leaving its latency report.
     if [[ "$instrumentation" == "enabled" ]]; then
         local perf_window="$LINUX_SCHED_PERF_WINDOW_S"
-        if (( perf_window > duration )); then
-            perf_window="$duration"
-        fi
+        local trace_window="$LINUX_SCHED_TRACE_WINDOW_S"
+        if (( perf_window > duration )); then perf_window="$duration"; fi
+        if (( trace_window > duration )); then trace_window="$duration"; fi
+        start_observer sched-trace \
+            "sh -c 'timeout ${trace_window} bpftrace ${work}/sched-trace.bt 2>/dev/null | gzip > ${work}/sched-trace.csv.gz'"
         start_observer perf-sched \
-            "sh -c 'perf sched record -o ${work}/perf.data -- sleep ${perf_window} 2>&1; perf sched latency -i ${work}/perf.data > ${work}/perf-latency.txt 2>&1; test ! -s ${work}/perf.data || gzip -1 -f ${work}/perf.data'"
+            "sh -c 'perf sched record -o ${work}/perf.data -- sleep ${perf_window} 2>&1; perf sched latency -i ${work}/perf.data > ${work}/perf-latency.txt 2>&1; rm -f ${work}/perf.data'"
     fi
 
     if [[ -n "$load_command" && -n "$load_node" ]]; then        local load_pod

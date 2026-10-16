@@ -39,11 +39,17 @@ LINUX_SCHED_RATE_SWEEP_FACTOR="${LINUX_SCHED_RATE_SWEEP_FACTOR:-1.5}"
 LINUX_SCHED_RATE_SWEEP_MAX="${LINUX_SCHED_RATE_SWEEP_MAX:-65536}"
 LINUX_SCHED_RATE_PROBE_S="${LINUX_SCHED_RATE_PROBE_S:-30}"
 
-# How long `perf sched` records for. The node's root filesystem is ~4.9 GB in
-# practice (see GATES.md), and a full-window `perf.data` alone is over a
-# gigabyte, which trips kubelet's disk-pressure eviction; the record is
-# therefore bounded and its `perf sched latency` summary is what is kept.
-LINUX_SCHED_PERF_WINDOW_S="${LINUX_SCHED_PERF_WINDOW_S:-60}"
+# How long `perf sched` records for, and how much of the window the scheduler
+# trace covers. The node's root filesystem is about 5 GiB in practice (the
+# provider ignores the machine template's disk size — see GATES.md), and kubelet
+# evicts a Pod once ephemeral storage falls below ~789 MB. With the base image,
+# the observer's tooling and the workload already on that filesystem, a
+# full-window `perf.data` or a full-window trace does not fit: a workload
+# sharing the node was evicted in the middle of a load. Both are therefore
+# bounded, and what a sample keeps is the run-queue histograms over the whole
+# window, the `perf sched latency` summary, and a compressed trace slice.
+LINUX_SCHED_PERF_WINDOW_S="${LINUX_SCHED_PERF_WINDOW_S:-10}"
+LINUX_SCHED_TRACE_WINDOW_S="${LINUX_SCHED_TRACE_WINDOW_S:-30}"
 
 # How long to wait for a workload Pod to start serving before the load begins.
 LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S="${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S:-120}"
