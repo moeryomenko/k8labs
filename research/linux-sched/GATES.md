@@ -628,11 +628,13 @@ The provider does not delete a Machine's VM (no `providerID`), so a node is
 replaced by hand: kill the `cloud-hypervisor --api-socket` process for that VM,
 remove its `state/vms/<vm>*` and `/tmp/ch-capi/<vm>`, clear the Machine's
 finalizers, delete the Machine, and let the MachineDeployment create a
-replacement. Two things follow. The replacement is **not labelled**, so
+replacement. Three things follow. The replacement is **not labelled**, so
 `make -C research linux-sched-workers-label` must run again or the observer
-DaemonSet will not schedule there. And its observer Pod is not Ready for about
-two minutes while it installs the tooling, so a capture started too early fails
-with `container not found ("observer")`.
+DaemonSet will not schedule there. Its observer Pod is not Ready for about two
+minutes while it installs the tooling, so a capture started too soon fails with
+`container not found ("observer")`. And its spool is empty, so the schedulers
+must be staged again with `make -C research linux-sched-scx-stage`, or the arm
+fails with `bin/scx_<name>: No such file or directory`.
 
 ## Consequence for the design
 
