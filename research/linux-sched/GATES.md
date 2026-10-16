@@ -643,6 +643,13 @@ the whole pipeline with it, and the trace observer is a pipeline
 `unexpected end of file`. The observers must be stopped by process name before
 the copy, not only by the exec that supervises them.
 
+Stopping them by name is not enough on its own either. Killing the **compressor**
+leaves an incomplete gzip stream, because the CRC and length footer are written
+when it reaches end of input. Stop the **producers** first, give the compressor a
+moment to finish its stream, and only then kill it: that is what makes the
+artifact a complete, testable `.gz` rather than a partial one that still has to
+be read with a data-recovery flag.
+
 ## Consequence for the design
 
 - Observer tooling is provisioned into the node image (node-native) and can also
