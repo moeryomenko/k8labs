@@ -236,7 +236,11 @@ main() {
         local load_pod
         load_pod="$(observer_pod "$load_node")"
         log "running load on ${load_pod} (${load_node})"
-        kexec "$load_pod" sh -c "$load_command" > "$load_file" \
+        # The load runs for the whole sample window, so the helper's default
+        # exec bound — there to catch a hung control call — must not cut it
+        # short. Raise it for this call only.
+        LINUX_SCHED_EXEC_TIMEOUT_S="$(( duration + 120 ))" \
+            kexec "$load_pod" sh -c "$load_command" > "$load_file" \
             || die "load generator failed on ${load_node}"
     else
         : > "$load_file"
