@@ -17,9 +17,10 @@ spec:
         - sh
         - -c
         - >-
-          ffmpeg -nostdin -hide_banner -stream_loop -1 -i /fixtures/input.mp4
-          -map 0:v:0 -an -c:v libx264 -preset medium -threads 2 -t 180
-          -f null -
+          timeout --signal=INT 180 ffmpeg -nostdin -hide_banner -stream_loop -1
+          -i /fixtures/input.mp4 -map 0:v:0 -an -c:v libx264 -preset medium
+          -threads 2 -f null -;
+          rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ] || exit "$rc"
       resources:
         requests:
           cpu: "1"

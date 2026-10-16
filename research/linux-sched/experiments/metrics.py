@@ -18,9 +18,14 @@ _WRK2_P99 = re.compile(r"^\s*99\.000%\s+([0-9.]+)(us|ms|s)\b", re.MULTILINE)
 _PGBENCH_TPS = re.compile(r"^tps\s*=\s*([0-9.]+)", re.MULTILINE)
 _FFMPEG_FRAME = re.compile(r"frame=\s*([0-9]+)")
 _FFMPEG_FPS = re.compile(r"fps=\s*([0-9.]+)")
-# One progress line: the frame count and the encoded position, in that order,
-# as ffmpeg prints them to stderr.
-_FFMPEG_PROGRESS = re.compile(r"frame=\s*([0-9]+).*?time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+# One progress line: the frame count and the wall-clock position, in that order,
+# as ffmpeg prints them to stderr. The *wall-clock* field (`elapsed=`) is used,
+# not the media position (`time=`): this encoder runs at roughly 20x real time,
+# so media time reaches the window end long before wall time does, and a
+# boundary taken from the media position would include the whole run.
+_FFMPEG_PROGRESS = re.compile(
+    r"frame=\s*([0-9]+)(?:(?!frame=).)*?elapsed=(\d+):(\d+):(\d+(?:\.\d+)?)"
+)
 # stress-ng's end-of-run summary is a two-line header followed by one data row
 # per stressor. The row carries the stressor name and six numbers: bogo ops,
 # real time, usr time, sys time, bogo ops/s (real time) and bogo ops/s
@@ -101,7 +106,7 @@ def parse_ffmpeg_fps_window(
         for frames, hours, minutes, seconds in _FFMPEG_PROGRESS.findall(text)
     ]
     if not progress:
-        raise ValueError("no ffmpeg progress lines with frame= and time= found")
+        raise ValueError("no ffmpeg progress lines with frame= and elapsed= found")
     at_warmup = [frames for frames, position in progress if position <= warmup_s]
     start_frames = at_warmup[-1] if at_warmup else 0
     end_frames = max(frames for frames, _ in progress)

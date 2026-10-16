@@ -103,26 +103,38 @@ def test_extract_unknown_command(tmp_path: Path) -> None:
         extract("nope", raw, 180.0)
 
 
-# A co-located batch job that outlives the measured window by a warmup: the
-# frame counter at the warmup boundary is what the secondary throughput must
-# subtract.
-FFMPEG_WITH_WARMUP = """
-frame=  900 fps= 30 q=28.0 size=N/A time=00:00:30.00 bitrate=N/A speed=1.0x
-frame=  930 fps= 30 q=28.0 size=N/A time=00:00:31.00 bitrate=N/A speed=1.0x
-frame= 6300 fps= 30 q=28.0 size=N/A time=00:03:30.00 bitrate=N/A speed=1.0x
-"""
+# A co-located batch job that outlives the measured window by a warmup. Note the
+# two clocks: media time runs far ahead of wall time because the encoder is much
+# faster than real time, so only `elapsed=` can locate the window boundary.
+FFMPEG_WITH_WARMUP = (
+    "frame=  354 fps=0.0 q=28.0 size=N/A time=00:00:14.66 bitrate=N/A "
+    "speed=29.3x elapsed=0:00:00.50     "
+    "frame=  639 fps=639 q=28.0 size=N/A time=00:00:26.54 bitrate=N/A "
+    "speed=26.5x elapsed=0:00:01.00     "
+    "frame= 4320 fps=528 q=-1.0 Lsize=N/A time=00:02:59.91 bitrate=N/A "
+    "speed=22x elapsed=0:00:08.18"
+)
 
 
 def test_ffmpeg_fps_window_counts_only_the_measured_interval() -> None:
-    # 6300 - 900 frames over the 180 s measured window.
-    assert parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 180.0, 30.0) == pytest.approx(
-        30.0
+    # The last sample at or before the 0.75 s warmup boundary is the 354-frame
+    # one at 0.50 s, so the window produced 4320 - 354 frames over 0.5 s.
+    assert parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 0.5, 0.75) == pytest.approx(
+        (4320 - 354) / 0.5
     )
 
 
+def test_ffmpeg_fps_window_uses_wall_clock_not_media_position() -> None:
+    # The first sample sits at media 14.66 s but wall 0.50 s. A boundary taken
+    # from media time would treat it as inside the window and count it.
+    by_wall = parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 0.5, 0.75)
+    assert by_wall == pytest.approx((4320 - 354) / 0.5)
+    assert by_wall != pytest.approx(4320 / 0.5)
+
+
 def test_ffmpeg_fps_window_without_warmup_matches_whole_run() -> None:
-    assert parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 180.0, 0.0) == pytest.approx(
-        6300 / 180.0
+    assert parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 8.18, 0.0) == pytest.approx(
+        4320 / 8.18
     )
 
 

@@ -491,6 +491,24 @@ than any image: the same thing happens on both `alpine` and Debian-based images.
   Pod never serves. The workload therefore starts PostgreSQL **once** and
   restores the snapshot itself, which removes the second bind entirely.
 
+## The batch metric has to be wall-clock bounded
+
+The FFmpeg scenario bounded its work with `-t 180`, which limits the *media*
+duration, not the wall-clock window. The encoder runs at roughly 22x real time,
+so it produced the whole 180 s of video in about 8 s and then exited: the frame
+count was always 4320 and `frames / 180` was always 24.0, for every arm — a
+constant that cannot distinguish schedules, from a scenario that looked healthy.
+
+The job is now bounded by wall clock (`timeout --signal=INT 180`) on a looping
+input, so it encodes as fast as it can for the whole window and the frame count
+is a throughput. The same applies to the FFmpeg co-tenant in the mixed scenario.
+
+Its window parser also had to change: `ffmpeg` reports both a media position
+(`time=`) and a wall-clock position (`elapsed=`), and with a faster-than-real-time
+encoder media time reaches the window end long before wall time does. Taking the
+warmup boundary from the media position would count the whole run as measured
+work. The parser uses `elapsed=`.
+
 ## Workload lifecycle in a capture
 
 Two lifecycle steps were missing, and both produced misleading samples rather
@@ -503,7 +521,10 @@ than visible failures:
   Service to actually have a ready endpoint. Pod readiness alone was not enough:
   the load runs on another node and reaches the workload through the Service, and
   a Ready Pod whose EndpointSlice had not been programmed yet still refused
-  connections, which is how the first postgres sample failed.
+  connections, which is how the first postgres sample failed. Endpoint presence
+  is still not reachability, so each load-driven scenario declares a
+  protocol-level probe (`pg_isready`, an HTTP request) which the capture runs
+  from the load node until it succeeds before any measured work starts.
 - A podlog-sourced metric (`ffmpeg`, `stress-ng`) was read from the workload log
   right after the load, while the job was still running, so the log held only a
   partial run. `--await-workload-completion` makes the capture wait for the Pods
