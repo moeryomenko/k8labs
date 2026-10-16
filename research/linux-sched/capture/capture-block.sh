@@ -177,24 +177,34 @@ main() {
         log "  ${name}: supervisor pid ${pid}"
     }
 
-    # wait_workload_ready — block until the arm's workload Pod reports Ready.
+    # wait_workload_ready — block until the Pods this capture applied report Ready.
     #
     # The load used to start against a Pod that was still initialising: nginx
     # not yet accepting connections, PostgreSQL still restoring its snapshot.
     # The sample then measured startup rather than the workload.
+    #
+    # Readiness is checked on the Pods *this* manifest created, not on every Pod
+    # carrying the arm label: arm names repeat across scenarios, so a workload
+    # left behind by another scenario answers the same label selector.
     wait_workload_ready() {
-        local deadline=$(( SECONDS + LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S )) ready
+        local deadline=$(( SECONDS + LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S ))
+        local pods; read -r -a pods <<< "$APPLIED_PODS"
+        [[ "${#pods[@]}" -gt 0 ]] || die "manifest for arm ${arm} created no Pod"
         while (( SECONDS < deadline )); do
-            ready="$(kubectl_wl get pods -l "linux-sched/run=${arm}" \
-                -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
-                2>/dev/null || true)"
-            if [[ "$ready" == *True* ]]; then
+            local all_ready=1 pod state
+            for pod in "${pods[@]}"; do
+                state="$(kubectl_wl get pod "$pod" \
+                    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' \
+                    2>/dev/null || true)"
+                [[ "$state" == "True" ]] || { all_ready=0; break; }
+            done
+            if (( all_ready )); then
                 log "workload for arm ${arm} is Ready"
                 return 0
             fi
             sleep 2
         done
-        kubectl_wl describe pods -l "linux-sched/run=${arm}" >&2 2>/dev/null || true
+        kubectl_wl describe pods "${pods[@]}" >&2 2>/dev/null || true
         die "workload for arm ${arm} never became Ready within ${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S}s"
     }
 
@@ -203,13 +213,19 @@ main() {
     # A podlog-sourced metric is read from the workload's own log, so collecting
     # that log while the job still runs records a partial run.
     wait_workload_finished() {
-        local deadline=$(( SECONDS + duration + 60 )) phase
+        local deadline=$(( SECONDS + duration + 60 ))
+        local pods; read -r -a pods <<< "$APPLIED_PODS"
         while (( SECONDS < deadline )); do
-            phase="$(kubectl_wl get pods -l "linux-sched/run=${arm}" \
-                -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' \
-                2>/dev/null || true)"
-            if [[ -z "$phase" ]] \
-                || [[ "$phase" != *Running* && "$phase" != *Pending* ]]; then
+            local all_done=1 pod phase
+            for pod in "${pods[@]}"; do
+                phase="$(kubectl_wl get pod "$pod" -o jsonpath='{.status.phase}' \
+                    2>/dev/null || true)"
+                if [[ "$phase" == "Running" || "$phase" == "Pending" ]]; then
+                    all_done=0
+                    break
+                fi
+            done
+            if (( all_done )); then
                 log "workload for arm ${arm} finished"
                 return 0
             fi
@@ -245,10 +261,15 @@ main() {
     # how the first postgres sample failed.
     wait_workload_endpoints() {
         local deadline=$(( SECONDS + LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S )) ips
+        local svcs; read -r -a svcs <<< "$APPLIED_SVCS"
         while (( SECONDS < deadline )); do
-            ips="$(kubectl_wl get endpoints -l "linux-sched/run=${arm}" \
-                -o jsonpath='{range .items[*]}{.subsets[*].addresses[*].ip}{"\n"}{end}' \
-                2>/dev/null || true)"
+            ips=""
+            local svc
+            for svc in "${svcs[@]}"; do
+                ips+="$(kubectl_wl get endpoints "$svc" \
+                    -o jsonpath='{range .subsets[*]}{.addresses[*].ip}{"\n"}{end}' \
+                    2>/dev/null || true)"
+            done
             if [[ -n "$ips" ]]; then
                 log "workload Service for arm ${arm} has a ready endpoint"
                 return 0
@@ -293,6 +314,19 @@ main() {
     fi
 
     if [[ -n "$manifest" ]]; then
+        # Clear the workload space before applying anything. Runs are serialised,
+        # so any workload Pod still present belongs to an earlier run — a failed
+        # block, or another scenario — and it is not harmless: it holds CPU
+        # inside this sample's measured window, and because arm labels repeat
+        # across scenarios it also answers this capture's selectors. A stale
+        # `linux-sched-nginx` Pod reserved a whole CPU and left the mixed
+        # workload unschedulable (`OutOfcpu`).
+        if [[ -n "$(kubectl_wl get pods,svc -l linux-sched/run -o name 2>/dev/null || true)" ]]; then
+            log "  clearing workloads left by an earlier run"
+            kubectl_wl delete pods,svc -l linux-sched/run --ignore-not-found \
+                --wait=true --timeout=120s >/dev/null 2>&1 || true
+        fi
+
         log "applying workload manifest ${manifest}"
         local rendered="${out_dir}/workload-${arm}.yaml"
         sed -e "s|__NODE_NAME__|${target_node}|g" -e "s|__ARM__|${arm}|g" \
@@ -304,11 +338,20 @@ main() {
         kubectl_wl delete -f "$rendered" --ignore-not-found --wait=true --timeout=120s \
             >/dev/null 2>&1 || true
         kubectl_wl apply -f "$rendered" || die "failed to apply workload ${manifest}"
+        # Resolve the resources this capture applied and use those from here on.
+        # Arm labels repeat across scenarios, so a workload left behind by
+        # another scenario answers the same selector — which is how a stale
+        # `linux-sched-mixed` Pod made an http probe fail while collecting *its*
+        # log, with `container "nginx" in pod "linux-sched-mixed" is not
+        # available`.
+        APPLIED_PODS="$(kubectl_wl get -f "$rendered" -o name 2>/dev/null \
+            | sed -n 's|^pod/||p' | tr '\n' ' ')"
+        APPLIED_SVCS="$(kubectl_wl get -f "$rendered" -o name 2>/dev/null \
+            | sed -n 's|^service/||p' | tr '\n' ' ')"
         wait_workload_ready
         # Only workloads that expose a Service are reached over the network,
         # and for those the Service endpoint is the real precondition.
-        if kubectl_wl get svc -l "linux-sched/run=${arm}" -o name 2>/dev/null \
-            | grep -q .; then
+        if [[ -n "$APPLIED_SVCS" ]]; then
             wait_workload_endpoints \
                 || die "workload Service for arm ${arm} never got a ready endpoint"
         fi
@@ -368,8 +411,14 @@ main() {
 
     if [[ -n "$manifest" ]]; then
         log "collecting workload log for ${arm}"
-        kubectl_wl logs -l "linux-sched/run=${arm}" --all-containers=true --tail=-1 > "$podlog_file" \
-            || die "failed to collect workload log for arm ${arm}"
+        # The Pods this capture applied, not every Pod carrying the arm label.
+        local pods; read -r -a pods <<< "$APPLIED_PODS"
+        : > "$podlog_file"
+        local pod
+        for pod in "${pods[@]}"; do
+            kubectl_wl logs "$pod" --all-containers=true --tail=-1 >> "$podlog_file" \
+                || die "failed to collect workload log from ${pod} for arm ${arm}"
+        done
         kubectl_wl delete -f "${out_dir}/workload-${arm}.yaml" \
             --ignore-not-found --wait=true --timeout=120s >/dev/null \
             || die "failed to delete workload for arm ${arm}; refusing to leave it running"
