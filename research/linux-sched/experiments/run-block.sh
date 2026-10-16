@@ -413,11 +413,13 @@ cmd_overhead() {
     log "overhead calibration complete: ${out}"
 }
 
-# calibration_probe RATE OUT_DIR CSV — one rate probe; prints the p99 it measured.
+# calibration_probe RATE OUT_DIR CSV — run one rate probe.
 #
-# The probe applies the scenario's declared warmup first: without it the knee is
-# found on a cold system and every measured arm inherits a rate chosen under
-# different conditions.
+# The probe's stdout is redirected to stderr at the call site: the capture it
+# runs writes `kubectl apply` output to stdout, so a probe that echoed its value
+# on stdout would hand the caller a value with "pod/... created" in front of it —
+# which the latency comparison then reads as a string and rejects. The measured
+# p99 is read back from the metric file the probe wrote, not from stdout.
 calibration_probe() {
     local rate="$1" out="$2" csv="$3"
     local probe_dir="${out}/rate-${rate}"
@@ -443,7 +445,6 @@ calibration_probe() {
     p99="$(cat "${probe_dir}/p99.metric")"
     printf '%s,%s\n' "$rate" "$p99" >> "$csv"
     log "  ${rate} rps -> p99 ${p99} ms"
-    printf '%s' "$p99"
 }
 
 # calibration_passes P99 — true when a probe met the frozen latency target.
@@ -487,7 +488,8 @@ cmd_calibrate() {
     # 1. Geometric sweep upward until the target is crossed.
     while (( rate <= LINUX_SCHED_RATE_SWEEP_MAX )); do
         probes=$(( probes + 1 ))
-        p99="$(calibration_probe "$rate" "$out" "$csv")"
+        calibration_probe "$rate" "$out" "$csv" >&2
+        p99="$(cat "${out}/rate-${rate}/p99.metric")"
         if calibration_passes "$p99"; then
             best="$rate"
             rate="$(awk -v r="$rate" -v f="$LINUX_SCHED_RATE_SWEEP_FACTOR" \
@@ -506,7 +508,8 @@ cmd_calibrate() {
             local mid=$(( (best + worst) / 2 ))
             (( mid > best )) || break
             probes=$(( probes + 1 ))
-            p99="$(calibration_probe "$mid" "$out" "$csv")"
+            calibration_probe "$mid" "$out" "$csv" >&2
+            p99="$(cat "${out}/rate-${mid}/p99.metric")"
             if calibration_passes "$p99"; then
                 best="$mid"
             else

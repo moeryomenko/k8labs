@@ -188,7 +188,7 @@ main() {
     # left behind by another scenario answers the same label selector.
     wait_workload_ready() {
         local deadline=$(( SECONDS + LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S ))
-        local pods; read -r -a pods <<< "$APPLIED_PODS"
+        local -a pods; mapfile -t pods < <(split_words "$APPLIED_PODS")
         [[ "${#pods[@]}" -gt 0 ]] || die "manifest for arm ${arm} created no Pod"
         while (( SECONDS < deadline )); do
             local all_ready=1 pod state
@@ -214,7 +214,7 @@ main() {
     # that log while the job still runs records a partial run.
     wait_workload_finished() {
         local deadline=$(( SECONDS + duration + 60 ))
-        local pods; read -r -a pods <<< "$APPLIED_PODS"
+        local -a pods; mapfile -t pods < <(split_words "$APPLIED_PODS")
         while (( SECONDS < deadline )); do
             local all_done=1 pod phase
             for pod in "${pods[@]}"; do
@@ -261,7 +261,7 @@ main() {
     # how the first postgres sample failed.
     wait_workload_endpoints() {
         local deadline=$(( SECONDS + LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S )) ips
-        local svcs; read -r -a svcs <<< "$APPLIED_SVCS"
+        local -a svcs; mapfile -t svcs < <(split_words "$APPLIED_SVCS")
         while (( SECONDS < deadline )); do
             ips=""
             local svc
@@ -337,7 +337,7 @@ main() {
         # apply fail before the sample can start.
         kubectl_wl delete -f "$rendered" --ignore-not-found --wait=true --timeout=120s \
             >/dev/null 2>&1 || true
-        kubectl_wl apply -f "$rendered" || die "failed to apply workload ${manifest}"
+        kubectl_wl apply -f "$rendered" >&2 || die "failed to apply workload ${manifest}"
         # Resolve the resources this capture applied and use those from here on.
         # Arm labels repeat across scenarios, so a workload left behind by
         # another scenario answers the same selector — which is how a stale
@@ -412,7 +412,7 @@ main() {
     if [[ -n "$manifest" ]]; then
         log "collecting workload log for ${arm}"
         # The Pods this capture applied, not every Pod carrying the arm label.
-        local pods; read -r -a pods <<< "$APPLIED_PODS"
+        local -a pods; mapfile -t pods < <(split_words "$APPLIED_PODS")
         : > "$podlog_file"
         local pod
         for pod in "${pods[@]}"; do

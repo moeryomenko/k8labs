@@ -214,3 +214,14 @@ setup() {
     run grep -c 'case "$(basename "$t")" in wrk2) continue' "${SERIES_DIR}/observers/observer-daemonset.yaml"
     [ "$status" -eq 0 ]
 }
+
+@test "the calibration probe never hands its caller a log as a value" {
+    # Regression: the capture writes `kubectl apply` output on stdout. Capturing
+    # the probe's stdout mixed "pod/... created" into the measured p99, which the
+    # latency comparison then read as a string and rejected, so a rate that met
+    # the target was reported as never having met it.
+    run grep -n 'calibration_probe "\$rate" "\$out" "\$csv" >&2' "${SERIES_DIR}/experiments/run-block.sh"
+    [ "$status" -eq 0 ]
+    run grep -c 'p99="$(cat "${out}/rate-${rate}/p99.metric")"' "${SERIES_DIR}/experiments/run-block.sh"
+    [ "$status" -eq 0 ]
+}
