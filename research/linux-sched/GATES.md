@@ -614,11 +614,31 @@ What a sample keeps is therefore bounded to fit:
 | Concern | Change |
 |---|---|
 | Spool accumulation | wiped before each sample, removed after the copy |
-| Trace | compressed as it is produced, never written raw, and a bounded slice (`LINUX_SCHED_TRACE_WINDOW_S`, 30 s) inside the measured period |
-| `perf.data` | a bounded window (`LINUX_SCHED_PERF_WINDOW_S`, 10 s) inside the measured period; the stream is summarised and then removed |
-| Evidence kept | run-queue histograms over the whole window, the `perf sched latency` report, and the compressed trace slice |
+| Trace | compressed as it is produced, never written raw, and a bounded slice (`LINUX_SCHED_TRACE_WINDOW_S`, 10 s) inside the measured period |
+| `perf.data` | a bounded window (`LINUX_SCHED_PERF_WINDOW_S`, 10 s) inside the measured period; the stream is summarised, then gzipped and kept alongside the compressed trace |
+| Evidence kept | run-queue histograms over the whole window, the `perf sched latency` report, and both compressed raw streams for the bounded windows |
 | Observer image | no longer installs the BCC packages it never uses (the run-queue metrics are libbpf-tools CO-RE binaries) |
 | Postgres workload | initialised in the Pod at a scale that fits (912 MB → 36 MB measured); `pgbench -i` is deterministic, so arms still start from identical data |
+
+**Measured sample cost.** With the bounded windows a sample's spool is about
+9 MB of compressed trace plus about 22 MB of compressed `perf.data`; the largest
+workload ephemeral use is the Postgres scale-2 database at about 36 MB. The
+spool cap (192 MiB) and the workload allowance (64 MiB) are derived from those
+figures rather than guessed, because the gate below decides whether the study can
+run at all on this hardware.
+
+**Free-space gate.** A sample refuses to start unless the target worker has at
+least the kubelet eviction threshold (789102828 B) plus the spool cap, the
+workload allowance and a 128 MiB reserve — 1,191,756,012 B in total. The gate was
+first written with a spool cap sized for the 30-second trace, and it then refused
+arms on a worker that had room; the trace window is now 10 seconds and the cap
+follows the measurement.
+
+**Target selection.** The measured target is the worker with the most free space,
+chosen once per invocation and logged with the full ranking; the other worker
+generates load. Both nodes sit near the gate for the whole study, because every
+scenario's image is pulled once and stays (~830 MB for the five): the *gate*, not
+the eviction threshold, is what decides whether a block can run.
 
 **These are evidence reductions, not protocol choices.** The plan asks for the
 full observer stack over each comparison sample and the provider asks for a 40
