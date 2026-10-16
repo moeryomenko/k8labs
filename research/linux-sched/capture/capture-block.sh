@@ -183,6 +183,28 @@ main() {
         die "workload for arm ${arm} still running after ${duration}s + 60s"
     }
 
+    # wait_workload_endpoints — block until the arm's Service has a ready
+    # backend, when the workload exposes one.
+    #
+    # The load runs on another node and connects through the Service, so Pod
+    # readiness is not the precondition that matters: a Ready Pod whose
+    # EndpointSlice has not been programmed still refuses connections, which is
+    # how the first postgres sample failed.
+    wait_workload_endpoints() {
+        local deadline=$(( SECONDS + LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S )) ips
+        while (( SECONDS < deadline )); do
+            ips="$(kubectl_wl get endpoints -l "linux-sched/run=${arm}" \
+                -o jsonpath='{range .items[*]}{.subsets[*].addresses[*].ip}{"\n"}{end}' \
+                2>/dev/null || true)"
+            if [[ -n "$ips" ]]; then
+                log "workload Service for arm ${arm} has a ready endpoint"
+                return 0
+            fi
+            sleep 2
+        done
+        return 1
+    }
+
     if [[ "$instrumentation" == "enabled" ]]; then
         for tool in bpftrace perf bpf-runqlat; do
             kexec "$target_pod" sh -c "command -v ${tool} >/dev/null 2>&1" \
@@ -201,6 +223,13 @@ main() {
             "$manifest" > "$rendered"
         kubectl_wl apply -f "$rendered" || die "failed to apply workload ${manifest}"
         wait_workload_ready
+        # Only workloads that expose a Service are reached over the network,
+        # and for those the Service endpoint is the real precondition.
+        if kubectl_wl get svc -l "linux-sched/run=${arm}" -o name 2>/dev/null \
+            | grep -q .; then
+            wait_workload_endpoints \
+                || die "workload Service for arm ${arm} never got a ready endpoint"
+        fi
     fi
 
     if [[ -n "$load_command" && -n "$load_node" ]]; then
