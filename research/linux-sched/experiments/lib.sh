@@ -289,17 +289,23 @@ scx_reset() {
     # rather than assumed from the kill having been issued. The scheduler
     # binaries are matched by name, because the kernel's own `scx_enable_helper`
     # thread also matches `scx_*` and exists whether or not one is attached.
-    local remaining
-    remaining="$(kexec "$pod" sh -c '
-        n=0
-        for p in /proc/[0-9]*; do
-            c=$(cat "$p/comm" 2>/dev/null) || continue
-            case "$c" in scx_bpfland|scx_lavd|scx_mavd) n=$((n + 1));; esac
-        done
-        echo "$n"
-    ' 2>/dev/null || echo 0)"
-    [[ "${remaining:-0}" -eq 0 ]] \
-        || die "sched_ext scheduler still attached on ${node} after reset (${remaining} process(es))"
+    #
+    # The wait matters: unregistering takes a moment, and checking the instant
+    # after the signal fails an arm that is actually detaching cleanly.
+    local remaining=1 deadline=$(( SECONDS + 15 ))
+    while (( SECONDS < deadline )); do
+        remaining="$(kexec "$pod" sh -c '
+            n=0
+            for p in /proc/[0-9]*; do
+                c=$(cat "$p/comm" 2>/dev/null) || continue
+                case "$c" in scx_bpfland|scx_lavd|scx_mavd) n=$((n + 1));; esac
+            done
+            echo "$n"
+        ' 2>/dev/null || echo 1)"
+        [[ "${remaining:-1}" -eq 0 ]] && return 0
+        sleep 1
+    done
+    die "sched_ext scheduler still attached on ${node} after reset (${remaining} process(es))"
 }
 
 # scx_stage NODE — copy the built schedulers into that node's observer.
