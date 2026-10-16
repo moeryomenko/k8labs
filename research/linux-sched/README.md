@@ -89,8 +89,12 @@ ${K8LABS_RESEARCH_DATA_ROOT:-<repo>/build}/research/linux-sched/
 │   ├── <arm>.txt                  # raw workload/load output
 │   ├── <arm>.warmup.txt           # discarded warmup output, kept as evidence
 │   ├── <arm>.metric               # extracted primary value
-│   └── runqlat.txt, runqlen.txt, sched-trace.txt.gz, perf-sched.txt,
-│       perf.data.gz, <arm>.capture-status
+│   ├── <arm>.log                  # workload pod log
+│   ├── <arm>.capture-status       # complete | incomplete | failed
+│   └── observer-<arm>/            # instrumentation for this arm alone
+│       ├── runqlat.txt, runqlen.txt        # run-queue histograms
+│       ├── sched-trace.csv.gz              # bpftrace probe, compressed
+│       └── perf-latency.txt, perf-sched.txt, perf.data.gz
 └── analysis/summary.{csv,json}
 ```
 
