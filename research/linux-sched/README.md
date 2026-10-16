@@ -15,19 +15,28 @@ studied separately in the sibling `kube-sched` series.
 
 - One **paired block** runs one workload scenario once per scheduler arm on the
   same `w1`, host, guest image, and kernel. A block is not an individual
-  request or trace sample.
+  request or trace sample. The measured target is the worker with the most free
+  space, chosen once and held fixed with the other worker as load generator.
 - At least five complete blocks; a pilot estimates log-scale variance and the
-  confirmatory block count is frozen before confirmatory runs.
+  confirmatory block count is frozen before confirmatory runs, rounded up to a
+  multiple of three so the arm order stays position-balanced.
 - Arms run in a pre-generated, balanced, seeded order that rotates across
-  blocks. The seed and order are recorded per block.
+  blocks, so every three-block cycle places each arm in each position once. The
+  seed and order are recorded per block.
 - The primary estimator is the geometric mean paired ratio
   (back-transformed mean log ratio) with a 95% paired-t interval plus a paired
-  block-bootstrap interval. Decisions: `improvement`, `regression`,
-  `equivalent` (whole interval inside ±5%), else `inconclusive`.
-- Every comparison sample runs the full observer stack (BCC `runqlat`/`runqlen`,
-  the `sched_*` bpftrace probe, `perf sched`). Results are reported as
-  **instrumented**; a separate EEVDF calibration quantifies observer overhead.
-- Raw data lives outside the Git worktree under a host-owned data root.
+  block-bootstrap interval. Decisions are corrected across the ten predeclared
+  primary contrasts (two sched_ext arms x five workloads) with Holm step-down:
+  `improvement`/`regression` need corrected evidence *and* a point estimate past
+  the ±5% band, `equivalent` needs the corrected equivalence test, else
+  `inconclusive`. Verdicts are per workload; there is no composite score.
+- Every comparison sample runs the full observer stack (`runqlat`/`runqlen` over
+  the whole window, the `sched_*` bpftrace probe and `perf sched` as bounded
+  slices inside it). Results are reported as **instrumented**; a separate EEVDF
+  calibration quantifies observer overhead for every scenario.
+- Raw data lives outside the Git worktree under a host-owned data root, in
+  separate pilot and confirmatory trees; a sample only starts when the target
+  worker passes the documented free-space gate.
 
 ## Commands
 
@@ -35,7 +44,8 @@ studied separately in the sibling `kube-sched` series.
 make linux-sched-setup                                   # prerequisites
 make linux-sched-validate                                # validate scenario configs (no cluster)
 make linux-sched-list-scenarios                          # list scenarios
-make linux-sched-pilot        SCENARIO=http              # pilot blocks
+make linux-sched-pilot        SCENARIO=http              # pilot blocks (never analysed)
+make linux-sched-sample-size                             # freeze confirmatory N from pilot variance
 make linux-sched-experiment   SCENARIO=http              # confirmatory blocks
 make linux-sched-calibrate    SCENARIO=http              # freeze the offered rate (http, mixed)
 make linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
@@ -81,12 +91,18 @@ linux-sched/
 
 ## Data layout (host-owned root)
 
+Pilot and confirmatory data are separate: pilot blocks estimate variance and must
+never enter a final verdict, and their block numbers would otherwise collide with
+confirmatory artifacts.
+
 ```
 ${K8LABS_RESEARCH_DATA_ROOT:-<repo>/build}/research/linux-sched/
-├── blocks.csv                     # block_id,scheduler,workload,metric,value
-├── <scenario>/block-NN/
-│   ├── metadata.json
-│   ├── <arm>.txt                  # raw workload/load output
+├── pilot/blocks.csv               # pilot results, excluded from verdicts
+├── confirmatory/blocks.csv        # the only file the analysis reads
+├── sample-size.json               # frozen per-scenario confirmatory count
+├── <phase>/<scenario>/block-NN/
+│   ├── metadata.json              # scenario, block, phase, seed, arm order
+│   ├── <arm>.txt                  # raw load output
 │   ├── <arm>.warmup.txt           # discarded warmup output, kept as evidence
 │   ├── <arm>.metric               # extracted primary value
 │   ├── <arm>.log                  # workload pod log
@@ -95,6 +111,7 @@ ${K8LABS_RESEARCH_DATA_ROOT:-<repo>/build}/research/linux-sched/
 │       ├── runqlat.txt, runqlen.txt        # histograms, whole window
 │       ├── sched-trace.csv.gz              # bpftrace probe, a bounded slice
 │       └── perf-latency.txt, perf-sched.txt
+├── <phase>/secondary-<scenario>.csv   # secondary outcomes, never in verdicts
 └── analysis/summary.{csv,json}
 ```
 
