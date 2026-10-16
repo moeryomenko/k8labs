@@ -39,7 +39,7 @@ REQUIRED_PACKAGES = (
 # loops, the PostgreSQL snapshot every arm is restored from, and wrk2, which
 # Fedora does not package. The observer and the workload Pods mount them
 # read-only, so the bake and the mounts have to agree.
-FIXTURE_MARKERS = ("FIXTURE_DIR", "input.mp4", "pgbench.sql", "wrk2")
+FIXTURE_MARKERS = ("FIXTURE_DIR", "input.mp4", "wrk2")
 OBSERVER_MOUNT_PATHS = (
     "/var/lib/linux-sched/fixtures",
     "/var/lib/linux-sched/bin",

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from metrics import (  # noqa: E402
     extract,
+    parse_ffmpeg_fps_window,
     parse_ffmpeg_frames_per_sec,
     parse_ffmpeg_reported_fps,
     parse_pgbench_tps,
@@ -91,3 +92,36 @@ def test_extract_unknown_command(tmp_path: Path) -> None:
     raw.write_text("x", encoding="utf-8")
     with pytest.raises(ValueError, match="unknown metric command"):
         extract("nope", raw, 180.0)
+
+
+# A co-located batch job that outlives the measured window by a warmup: the
+# frame counter at the warmup boundary is what the secondary throughput must
+# subtract.
+FFMPEG_WITH_WARMUP = """
+frame=  900 fps= 30 q=28.0 size=N/A time=00:00:30.00 bitrate=N/A speed=1.0x
+frame=  930 fps= 30 q=28.0 size=N/A time=00:00:31.00 bitrate=N/A speed=1.0x
+frame= 6300 fps= 30 q=28.0 size=N/A time=00:03:30.00 bitrate=N/A speed=1.0x
+"""
+
+
+def test_ffmpeg_fps_window_counts_only_the_measured_interval() -> None:
+    # 6300 - 900 frames over the 180 s measured window.
+    assert parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 180.0, 30.0) == pytest.approx(
+        30.0
+    )
+
+
+def test_ffmpeg_fps_window_without_warmup_matches_whole_run() -> None:
+    assert parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 180.0, 0.0) == pytest.approx(
+        6300 / 180.0
+    )
+
+
+def test_ffmpeg_fps_window_requires_progress_lines() -> None:
+    with pytest.raises(ValueError, match="no ffmpeg progress lines"):
+        parse_ffmpeg_fps_window("no progress here\n", 180.0, 30.0)
+
+
+def test_ffmpeg_fps_window_rejects_zero_duration() -> None:
+    with pytest.raises(ValueError, match="duration_s must be positive"):
+        parse_ffmpeg_fps_window(FFMPEG_WITH_WARMUP, 0.0, 30.0)

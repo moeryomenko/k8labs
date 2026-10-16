@@ -50,7 +50,7 @@ spec:
             - -c
             - |
               set -eu
-              dnf install -y -q bpftrace perf libbpf-tools procps-ng postgresql postgresql-contrib openssl-libs
+              dnf install -y -q bpftrace perf libbpf-tools procps-ng postgresql postgresql-contrib openssl-libs curl
               # Load generators are baked on the node (see the bake's fixture
               # section) and mounted read-only; expose them on PATH. wrk2 links
               # libssl/libcrypto, hence openssl-libs above.

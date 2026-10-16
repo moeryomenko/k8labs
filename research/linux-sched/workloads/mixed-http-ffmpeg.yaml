@@ -28,12 +28,15 @@ spec:
         limits: {}
     - name: ffmpeg
       image: docker.io/linuxserver/ffmpeg:8.0.1@sha256:c72eaf699cb104e84c5292ee9b2a65bf3110738dec113d7cfcef02d7bc21b056
+      # Runs for the scenario's warmup plus measured window (30 s + 180 s), so
+      # the batch job is still co-located for the whole measured interval; the
+      # secondary throughput is computed over that interval only.
       command:
         - sh
         - -c
         - >-
           ffmpeg -nostdin -hide_banner -stream_loop -1 -i /fixtures/input.mp4
-          -map 0:v:0 -an -c:v libx264 -preset medium -threads 2 -t 180
+          -map 0:v:0 -an -c:v libx264 -preset medium -threads 2 -t 210
           -f null -
       resources:
         requests:
