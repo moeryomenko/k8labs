@@ -84,8 +84,10 @@ ${K8LABS_RESEARCH_DATA_ROOT:-<repo>/build}/research/linux-sched/
 ├── <scenario>/block-NN/
 │   ├── metadata.json
 │   ├── <arm>.txt                  # raw workload/load output
+│   ├── <arm>.warmup.txt           # discarded warmup output, kept as evidence
 │   ├── <arm>.metric               # extracted primary value
-│   └── runqlat.txt, sched-trace.txt, perf.data, perf.log, <arm>.capture-status
+│   └── runqlat.txt, runqlen.txt, sched-trace.txt.gz, perf-sched.txt,
+│       perf.data.gz, <arm>.capture-status
 └── analysis/summary.{csv,json}
 ```
 

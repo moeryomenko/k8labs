@@ -511,17 +511,41 @@ than visible failures:
   scenario's nginx keeps serving after its load ends, and waiting there would
   stall for nothing.
 
-**Open gap — the declared warmup is not performed.** Every scenario declares
-`WARMUP_S` (30 s for `http`, `mixed` and `postgres`; 0 elsewhere), but nothing in
-the runner or the capture reads it, so the measured window starts cold at full
-load. The metric would then include the initial ramp — JIT and connection
-setup, page-cache warmup — which is the bias the declared warmup exists to
-remove.
+**The declared warmup is now performed.** Every scenario declares `WARMUP_S`
+(30 s for `http`, `mixed` and `postgres`; 0 elsewhere) and nothing read it, so
+the measured window started cold at full load and the metric carried the initial
+ramp — JIT and connection setup, page-cache warmup — that the declaration exists
+to remove. The same load now runs for that long first and its result is
+discarded. The observers cover the warmup too, because otherwise adding a warmup
+would silently truncate the collection by its length.
 
 `make linux-sched-overhead` also passed `--instrumentation instruments-enabled`,
 which the capture compares against `enabled`, so **both** variants ran
 uninstrumented and the overhead comparison measured nothing. The variants are
 `enabled`/`disabled` now.
+
+## The observer stack
+
+The protocol asks every sample for `runqlat`/`runqlen`, the `sched_*` bpftrace
+probe and `perf sched`. Three parts of that did not work.
+
+- **`runqlen` was never collected**, although the tool is in the image, and
+  **both run-queue tools buffer their output** when stdout is a file. The
+  observer is killed rather than allowed to exit, so a small histogram was lost
+  entirely — `runqlat` only survived because its output outgrew the buffer.
+  `stdbuf -oL` keeps both, and an empty `runqlen.txt` is now a capture failure
+  rather than a silent omission.
+- **The probe file was never used.** The capture ran
+  `bpftrace -e 'tracepoint:sched:sched_switch { }'` — an empty body — so the
+  artifact was a banner and the wakeup-to-run and migration data the plan
+  depends on did not exist. The capture now stages `probes/sched-trace.bt` into
+  the Pod and runs the file.
+- **The artifacts are large.** A full window is hundreds of megabytes of trace
+  and over a gigabyte of `perf.data`, so both are compressed in the Pod before
+  the copy. Probing the stack for 15 s yields a 5 MB trace and an 8 MB
+  `perf.data.gz`; a 210 s sample (30 s warmup plus the 180 s window) is on the
+  order of 180 MB. **Nothing prunes the data root**, so a confirmatory run over
+  several scenarios will accumulate tens of gigabytes.
 
 ## Cluster rebuild — what it costs and what it breaks
 
