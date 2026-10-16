@@ -103,7 +103,8 @@ linux-sched-analyze: ## Analyze paired blocks into summary.csv/json with the fro
 
 .PHONY: linux-sched-plots
 linux-sched-plots: ## Generate linux-sched plots from analyzed data
-	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_plots.py --data-root $(LINUX_SCHED_DATA_ROOT) --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)/plots
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_plots.py --data-root $(LINUX_SCHED_DATA_ROOT) --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
+	@echo "  Plots: $(LINUX_SCHED_ANALYSIS_OUTPUT)/plots"
 
 .PHONY: linux-sched-report
 linux-sched-report: linux-sched-analyze ## Print the linux-sched analysis report pointer
