@@ -106,6 +106,14 @@ linux-sched-plots: ## Generate linux-sched plots from analyzed data
 	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_plots.py --data-root $(LINUX_SCHED_DATA_ROOT) --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
 	@echo "  Plots: $(LINUX_SCHED_ANALYSIS_OUTPUT)/plots"
 
+.PHONY: linux-sched-data-usage
+linux-sched-data-usage: ## Report data-root usage and what a prune would remove
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/prune_data.py --data-root $(LINUX_SCHED_DATA_ROOT)
+
+.PHONY: linux-sched-prune
+linux-sched-prune: ## Drop large raw evidence from blocks older than KEEP_BLOCKS (default 5)
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/prune_data.py --data-root $(LINUX_SCHED_DATA_ROOT) --keep-blocks $(or $(KEEP_BLOCKS),5) --apply
+
 .PHONY: linux-sched-report
 linux-sched-report: linux-sched-analyze ## Print the linux-sched analysis report pointer
 	@echo "linux-sched analysis written to $(LINUX_SCHED_ANALYSIS_OUTPUT)"

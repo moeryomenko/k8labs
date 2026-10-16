@@ -40,6 +40,9 @@ make linux-sched-experiment   SCENARIO=http              # confirmatory blocks
 make linux-sched-calibrate    SCENARIO=http              # freeze the offered rate (http, mixed)
 make linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
 make linux-sched-analyze                                 # decision-rule summary
+make linux-sched-plots                                   # SVG figures for the data root
+make linux-sched-data-usage                              # report what the data root costs
+make linux-sched-prune       KEEP_BLOCKS=5               # drop raw evidence from older blocks
 make linux-sched-observer-check                          # node-native observer tooling gate
 make linux-sched-workers-label                           # label worker nodes for the observers
 make linux-sched-observers-apply                         # deploy the capability-scoped observers
