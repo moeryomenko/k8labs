@@ -106,7 +106,7 @@ main() {
     # open for as long as the observer should run.
     local obs_pids=()
     cleanup() {
-        local pid name remote_pid
+        local pid name remote_pid tool
         for pid in "${obs_pids[@]}"; do
             kill -TERM "$pid" 2>/dev/null || true
         done
@@ -114,10 +114,22 @@ main() {
         for pid in "${obs_pids[@]}"; do
             kill -KILL "$pid" 2>/dev/null || true
         done
-        # Ending the local exec ends the remote session; the recorded remote
-        # pids are a belt-and-braces kill for anything the runtime leaves.
-        # The trap runs after main returns, when its locals are gone, hence the
-        # globals and the empty guards.
+        # Stop the tools by name as well. Ending the supervising exec does not
+        # reliably take a pipeline with it: a leftover `bpftrace | gzip` keeps
+        # tracing, keeps its output growing — into a deleted file once the spool
+        # is wiped — and burns enough CPU to block the next arm's quiescence
+        # gate. Observed, not theoretical: it cost one arm's quiesce and left a
+        # truncated trace behind.
+        if [[ -n "${TARGET_POD:-}" ]]; then
+            kexec "$TARGET_POD" sh -c '
+                for tool in bpftrace perf gzip bpf-runqlat bpf-runqlen; do
+                    pkill -x "$tool" 2>/dev/null || true
+                done
+            ' >/dev/null 2>&1 || true
+        fi
+        # The recorded remote pids are a final sweep for anything that escaped
+        # the name match (the tools run under fixed names, so this is belt and
+        # braces rather than the primary kill).
         for name in runqlat runqlen sched-trace perf-sched; do
             [[ -n "${TARGET_POD:-}" && -n "${REMOTE_WORK:-}" ]] || continue
             remote_pid="$(kexec "$TARGET_POD" sh -c \
