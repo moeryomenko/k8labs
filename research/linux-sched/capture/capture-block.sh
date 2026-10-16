@@ -345,7 +345,7 @@ main() {
         start_observer sched-trace \
             "sh -c 'timeout ${trace_window} bpftrace ${work}/sched-trace.bt 2>/dev/null | gzip > ${work}/sched-trace.csv.gz'"
         start_observer perf-sched \
-            "sh -c 'perf sched record -o ${work}/perf.data -- sleep ${perf_window} 2>&1; perf sched latency -i ${work}/perf.data > ${work}/perf-latency.txt 2>&1; rm -f ${work}/perf.data'"
+            "sh -c 'perf sched record -o ${work}/perf.data -- sleep ${perf_window} 2>&1; perf sched latency -i ${work}/perf.data > ${work}/perf-latency.txt 2>&1; test ! -s ${work}/perf.data || gzip -1 -f ${work}/perf.data'"
     fi
 
     if [[ -n "$load_command" && -n "$load_node" ]]; then

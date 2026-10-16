@@ -68,7 +68,11 @@ LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S="${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S:-12
 # observer spool, the workload's ephemeral storage and a reserve, so the gate is
 # the sum rather than any one of them.
 LINUX_SCHED_EVICTION_THRESHOLD_B="${LINUX_SCHED_EVICTION_THRESHOLD_B:-789102828}"
-LINUX_SCHED_SPOOL_CAP_MIB="${LINUX_SCHED_SPOOL_CAP_MIB:-512}"
+# Sized from measurement, not guessed: with the 10-second evidence windows a
+# whole sample's spool is about 9 MB of compressed trace plus roughly 15 MB of
+# compressed perf data. The cap leaves an order of magnitude of headroom and is
+# what the free-space gate above the eviction threshold is built from.
+LINUX_SCHED_SPOOL_CAP_MIB="${LINUX_SCHED_SPOOL_CAP_MIB:-192}"
 LINUX_SCHED_WORKLOAD_STORAGE_MIB="${LINUX_SCHED_WORKLOAD_STORAGE_MIB:-128}"
 LINUX_SCHED_DISK_RESERVE_MIB="${LINUX_SCHED_DISK_RESERVE_MIB:-256}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
