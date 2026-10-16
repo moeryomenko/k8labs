@@ -121,10 +121,16 @@ main() {
         # gate. Observed, not theoretical: it cost one arm's quiesce and left a
         # truncated trace behind.
         if [[ -n "${TARGET_POD:-}" ]]; then
+            # Producers first. The trace observer is `bpftrace | gzip`, and
+            # killing the compressor leaves an incomplete gzip stream: the
+            # footer is written when it reaches end of input. Stop the producers,
+            # give the compressor a moment to finish, and only then kill it.
             kexec "$TARGET_POD" sh -c '
-                for tool in bpftrace perf gzip bpf-runqlat bpf-runqlen; do
+                for tool in bpftrace perf bpf-runqlat bpf-runqlen; do
                     pkill -x "$tool" 2>/dev/null || true
                 done
+                sleep 3
+                pkill -x gzip 2>/dev/null || true
             ' >/dev/null 2>&1 || true
         fi
         # The recorded remote pids are a final sweep for anything that escaped

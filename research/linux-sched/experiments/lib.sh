@@ -277,6 +277,23 @@ scx_reset() {
                 || rm -rf /var/run/scx 2>/dev/null || true
         fi
     ' >/dev/null 2>&1 || true
+
+    # Detach check. The protocol's gates require a clean detach, and a survivor
+    # would keep scheduling the arm that is about to run, so this is verified
+    # rather than assumed from the kill having been issued. The scheduler
+    # binaries are matched by name, because the kernel's own `scx_enable_helper`
+    # thread also matches `scx_*` and exists whether or not one is attached.
+    local remaining
+    remaining="$(kexec "$pod" sh -c '
+        n=0
+        for p in /proc/[0-9]*; do
+            c=$(cat "$p/comm" 2>/dev/null) || continue
+            case "$c" in scx_bpfland|scx_lavd|scx_mavd) n=$((n + 1));; esac
+        done
+        echo "$n"
+    ' 2>/dev/null || echo 0)"
+    [[ "${remaining:-0}" -eq 0 ]] \
+        || die "sched_ext scheduler still attached on ${node} after reset (${remaining} process(es))"
 }
 
 # scx_stage NODE — copy the built schedulers into that node's observer.
