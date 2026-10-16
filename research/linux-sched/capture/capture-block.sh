@@ -33,6 +33,7 @@ Usage: capture-block.sh --target-node NODE --duration N --out-dir DIR --arm ARM
                         [--instrumentation enabled|disabled]
                         [--await-workload-completion]
                         [--warmup-command CMD] [--warmup-seconds N]
+                        [--load-ready-probe CMD]
 
 Captures one measured sample on ARM. --raw receives the load-generator output;
 --podlog receives the workload pod log. Observers run inside the observer
@@ -41,7 +42,9 @@ DaemonSet Pod on --target-node; the load generator runs on --load-node. With
 calibration only). --await-workload-completion waits for the workload Pods to
 stop, which a podlog-sourced metric needs and a load-sourced one does not.
 --warmup-command runs once, for --warmup-seconds, before the measured load and
-its result is discarded; the observers still cover it.
+its result is discarded; the observers still cover it. --load-ready-probe runs on
+the load node until it succeeds, so the load never starts against an endpoint
+that exists but is not yet serving.
 EOF
     exit "${1:-0}"
 }
@@ -57,7 +60,7 @@ observer_pod() {
 main() {
     local target_node="" duration="" out_dir="" arm="" load_node=""
     local manifest="" load_command="" raw="" podlog="" instrumentation="enabled"
-    local await_completion=0 warmup_command="" warmup_seconds=0
+    local await_completion=0 warmup_command="" warmup_seconds=0 load_ready_probe=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -74,6 +77,7 @@ main() {
             --await-workload-completion) await_completion=1; shift ;;
             --warmup-command) warmup_command="$2"; shift 2 ;;
             --warmup-seconds) warmup_seconds="$2"; shift 2 ;;
+            --load-ready-probe) load_ready_probe="$2"; shift 2 ;;
             -h|--help) usage 0 ;;
             *) die "unknown argument: $1" ;;
         esac
@@ -96,6 +100,14 @@ main() {
     TARGET_POD="$target_pod"
     REMOTE_WORK="${REMOTE_DIR}/${arm}"
     log "target observer: ${target_pod} (${target_node})"
+
+    # The load node's observer is resolved once: the readiness probe and the load
+    # itself both run there.
+    local load_pod=""
+    if [[ -n "$load_node" ]]; then
+        load_pod="$(observer_pod "$load_node")"
+        [[ -n "$load_pod" ]] || die "no observer pod on load node ${load_node}"
+    fi
 
     # Observers are supervised by long-lived local `kubectl exec` calls.
     #
@@ -206,6 +218,24 @@ main() {
         die "workload for arm ${arm} still running after ${duration}s + 60s"
     }
 
+    # wait_workload_probe — block until the load node can actually reach the
+    # workload.
+    #
+    # A ready Pod and a programmed Service endpoint were not enough: a real warmup
+    # then failed with `Connection refused`, because endpoint presence says the
+    # routing entry exists, not that the server behind it accepts connections.
+    wait_workload_probe() {
+        local deadline=$(( SECONDS + LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S ))
+        while (( SECONDS < deadline )); do
+            if kexec "$load_pod" sh -c "$load_ready_probe" >/dev/null 2>&1; then
+                log "load node can reach the workload for arm ${arm}"
+                return 0
+            fi
+            sleep 2
+        done
+        die "load node cannot reach the workload for arm ${arm} (${load_ready_probe})"
+    }
+
     # wait_workload_endpoints — block until the arm's Service has a ready
     # backend, when the workload exposes one.
     #
@@ -276,6 +306,9 @@ main() {
             wait_workload_endpoints \
                 || die "workload Service for arm ${arm} never got a ready endpoint"
         fi
+        if [[ -n "$load_ready_probe" && -n "$load_pod" ]]; then
+            wait_workload_probe
+        fi
     fi
 
     # The declared warmup: run the same load for its length and discard the
@@ -309,8 +342,7 @@ main() {
             "sh -c 'perf sched record -o ${work}/perf.data -- sleep ${perf_window} 2>&1; perf sched latency -i ${work}/perf.data > ${work}/perf-latency.txt 2>&1; rm -f ${work}/perf.data'"
     fi
 
-    if [[ -n "$load_command" && -n "$load_node" ]]; then        local load_pod
-        load_pod="$(observer_pod "$load_node")"
+    if [[ -n "$load_command" && -n "$load_node" ]]; then
         log "running load on ${load_pod} (${load_node})"
         # The load runs for the whole sample window, so the helper's default
         # exec bound — there to catch a hung control call — must not cut it
@@ -360,6 +392,19 @@ main() {
         # previous arm's evidence and a block kept only the last arm's.
         local obs_dir="${out_dir}/observer-${arm}"
         mkdir -p "$obs_dir"
+
+        # Enforce the spool cap before copying. The node's filesystem is small
+        # enough that an unexpectedly large sample must fail loudly rather than
+        # fill it and get the observer evicted.
+        local spool_mib
+        spool_mib="$(kexec "$target_pod" sh -c "du -sm ${work} 2>/dev/null | cut -f1" 2>/dev/null || echo 0)"
+        log "  spool ${spool_mib} MiB (cap ${LINUX_SCHED_SPOOL_CAP_MIB} MiB)"
+        if [[ "${spool_mib:-0}" =~ ^[0-9]+$ ]] \
+            && (( spool_mib > LINUX_SCHED_SPOOL_CAP_MIB )); then
+            kexec "$target_pod" sh -c "rm -rf ${work}" >/dev/null 2>&1 || true
+            die "observer spool for arm ${arm} is ${spool_mib} MiB, over the ${LINUX_SCHED_SPOOL_CAP_MIB} MiB cap"
+        fi
+
         log "copying capture artifacts into ${obs_dir}"
         kubectl_wl cp "${OBSERVER_NAMESPACE}/${target_pod}:${work}/." "$obs_dir/" \
             || die "failed to copy capture artifacts from ${target_pod}"
@@ -367,6 +412,8 @@ main() {
         # hundreds of megabytes, so holding it after the copy is what filled
         # the node and got the observer evicted.
         kexec "$target_pod" sh -c "rm -rf ${work}" >/dev/null 2>&1 || true
+        log "  ${target_node}: $(kexec "$target_pod" sh -c \
+            'df -B1 --output=avail /var/tmp | tail -1' 2>/dev/null | tr -d '[:space:]' || echo '?') B free after the sample"
 
         # A capture is complete only if the required observer outputs exist and
         # are non-empty AND no perf events were lost.

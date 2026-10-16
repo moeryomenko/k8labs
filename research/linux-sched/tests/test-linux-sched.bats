@@ -121,3 +121,47 @@ setup() {
     [[ "$output" == *"__RPS__"* ]]
     [[ "$output" == *"__DURATION__s"* ]]
 }
+
+@test "balanced_block_order places each arm in each position once per cycle" {
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'
+        for b in 1 2 3; do balanced_block_order \"\$b\" | tr '\n' ' '; echo; done"
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 3 ]
+    # Distinct arms in the first, second and third position across the cycle.
+    for position in 1 2 3; do
+        distinct="$(printf '%s\n' "${lines[@]}" | awk -v p="$position" '{print $p}' | sort -u | wc -l)"
+        [ "$distinct" -eq 3 ]
+    done
+}
+
+@test "balanced_block_order is deterministic and keeps every arm" {
+    first="$(bash -c "source '${SERIES_DIR}/experiments/lib.sh'; balanced_block_order 2")"
+    second="$(bash -c "source '${SERIES_DIR}/experiments/lib.sh'; balanced_block_order 2")"
+    [ "$first" = "$second" ]
+    for arm in eevdf scx_bpfland scx_lavd; do
+        [[ "$first" == *"$arm"* ]]
+    done
+}
+
+@test "the storage gate is the documented sum of threshold, spool, workload and reserve" {
+    run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; required_guest_free_bytes"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1728626924" ]
+}
+
+@test "rate scenarios declare a readiness probe so the load never starts blind" {
+    run grep -h "LOAD_READY_PROBE" \
+        "${SCENARIOS}/http.conf" "${SCENARIOS}/postgres.conf" \
+        "${SCENARIOS}/mixed-http-ffmpeg.conf"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"curl -fsS"* ]]
+    [[ "$output" == *"pg_isready"* ]]
+}
+
+@test "the mixed scenario loads its own Service, not the http scenario's" {
+    run grep -h "mixed-nginx" "${SCENARIOS}/mixed-http-ffmpeg.conf"
+    [ "$status" -eq 0 ]
+    run grep -h "LOAD_ARGS" "${SCENARIOS}/mixed-http-ffmpeg.conf"
+    [[ "$output" == *"mixed-nginx"* ]]
+    [[ "$output" != *"//nginx."* ]]
+}

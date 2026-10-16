@@ -56,7 +56,7 @@ print_plan() {
     for (( b = 1; b <= blocks; b++ )); do
         seed=$(( LINUX_SCHED_PLAN_SEED + b ))
         printf '  block=%s seed=%s order=%s\n' \
-            "$b" "$seed" "$(seeded_permutation "$seed")"
+            "$b" "$seed" "$(balanced_block_order "$b" | tr '\n' ' ')"
     done
 }
 
@@ -151,7 +151,33 @@ activate_arm() {
 collect_metric() {
     local raw="$1" metric_command="$2" duration="$3" out="$4"
     python3 "${SCRIPT_DIR}/metrics.py" \
-        --metric-command "$metric_command" --raw "$raw" --duration-s "$duration" > "$out"
+        --metric-command "$metric_command" --raw "$raw" --duration-s "$duration" \
+        --warmup-s "${WARMUP_S:-0}" > "$out"
+}
+
+# collect_secondary SCENARIO ARM RAW_DIR — extract a scenario's secondary
+# outcome, if it declares one, into a CSV the frozen analysis never reads.
+#
+# The mixed scenario is the only user: its batch throughput is reported beside
+# the primary verdict, not as part of it, so it lives in its own file rather
+# than in blocks.csv where the decision rule would pick it up as a contrast.
+collect_secondary() {
+    local scenario="$1" arm="$2" raw_dir="$3" block="$4"
+    [[ -n "${SECONDARY_METRIC_COMMAND:-}" ]] || return 0
+    local source="${raw_dir}/${arm}.log"
+    [[ "${SECONDARY_SOURCE:-podlog}" == "load" ]] && source="${raw_dir}/${arm}.txt"
+    local csv="${DATA_ROOT}/secondary-${scenario}.csv"
+    if [[ ! -s "$csv" ]]; then
+        printf 'block_id,scheduler,workload,metric,value,direction\n' > "$csv"
+    fi
+    local value
+    value="$(python3 "${SCRIPT_DIR}/metrics.py" \
+        --metric-command "$SECONDARY_METRIC_COMMAND" --raw "$source" \
+        --duration-s "$DURATION_S" --warmup-s "${WARMUP_S:-0}")" \
+        || die "could not extract secondary metric for block ${block} arm ${arm}"
+    printf '%s,%s,%s,%s,%s,%s\n' \
+        "$block" "$arm" "$scenario" "$SECONDARY_METRIC_COMMAND" "$value" \
+        "${SECONDARY_DIRECTION:-higher-is-better}" >> "$csv"
 }
 
 # run_block SCENARIO ARM BLOCK DIR — one arm of one paired block.
@@ -164,6 +190,12 @@ run_block() {
     # VM, so each arm starts from a killed-observer, quiescent guest instead.
     # Recorded as a protocol deviation in GATES.md.
     scx_reset "$TARGET_NODE"
+
+    # Refuse to start a sample the worker cannot hold: the measured failure was a
+    # workload Pod evicted for ephemeral-storage mid-load.
+    local free_bytes
+    free_bytes="$(require_guest_disk "$TARGET_NODE")"
+    log "  ${TARGET_NODE}: ${free_bytes} B free (gate $(required_guest_free_bytes) B)"
 
     wait_quiescent "$TARGET_NODE" || die "guest ${TARGET_NODE} never became quiescent"
 
@@ -201,6 +233,7 @@ run_block() {
         --load-command "$load_command" \
         "${await_completion[@]}" \
         "${warmup_args[@]}" \
+        --load-ready-probe "${LOAD_READY_PROBE:-}" \
         --raw "$load_raw" --podlog "$podlog_raw" \
         || die "capture failed for block ${block} arm ${arm}"
 
@@ -222,6 +255,8 @@ run_block() {
 
     append_block_row "$BLOCKS_CSV" "$block" "$SCENARIO_NAME" "$PRIMARY_METRIC" \
         "$arm" "$(cat "${raw_dir}/${arm}.metric")" "$PRIMARY_DIRECTION"
+
+    collect_secondary "$SCENARIO_NAME" "$arm" "$raw_dir" "$block"
 }
 
 cmd_plan() {
@@ -240,20 +275,26 @@ cmd_run() {
         "$(project_root)"/*) die "data root must live outside the Git worktree: ${data_root}" ;;
     esac
 
-    BLOCKS_CSV="${data_root}/blocks.csv"
-    DATA_ROOT="$data_root"
-    mkdir -p "$data_root"
+    # Pilot and confirmatory data are separate trees and separate CSVs: pilot
+    # blocks estimate variance and must never enter a final verdict, and their
+    # block numbers would otherwise collide with (or overwrite) confirmatory
+    # artifacts.
+    local phase_root="${data_root}/${mode}"
+    BLOCKS_CSV="${phase_root}/blocks.csv"
+    DATA_ROOT="$phase_root"
+    mkdir -p "$phase_root"
 
     local blocks; blocks="$(block_count "$mode")"
     local b arm seed
     for (( b = 1; b <= blocks; b++ )); do
         seed=$(( LINUX_SCHED_PLAN_SEED + b ))
-        local raw_dir="${data_root}/${SCENARIO_NAME}/block-$(printf '%02d' "$b")"
+        local raw_dir="${phase_root}/${SCENARIO_NAME}/block-$(printf '%02d' "$b")"
         mkdir -p "$raw_dir"
-        printf '{"scenario":"%s","block":%s,"seed":%s,"mode":"%s"}\n' \
-            "$SCENARIO_NAME" "$b" "$seed" "$mode" > "${raw_dir}/metadata.json"
+        printf '{"scenario":"%s","block":%s,"phase":"%s","seed":%s,"order":"%s"}\n' \
+            "$SCENARIO_NAME" "$b" "$mode" "$seed" \
+            "$(balanced_block_order "$b" | tr '\n' ' ')" > "${raw_dir}/metadata.json"
         # IFS excludes the space, so the arm order must be split explicitly.
-        mapfile -t arms < <(split_words "$(seeded_permutation "$seed")")
+        mapfile -t arms < <(balanced_block_order "$b")
         for arm in "${arms[@]}"; do
             run_block "$SCENARIO_NAME" "$arm" "$b" "$raw_dir"
         done
@@ -279,10 +320,20 @@ cmd_overhead() {
     local load_command
     load_command="$(render_load_command "$rate" "$DURATION_S")"
 
+    # The overhead pair must use the same workload *and* the same warmup as the
+    # comparisons, or it measures a different condition.
+    local warmup_args=()
+    if [[ "${WARMUP_S:-0}" -gt 0 ]]; then
+        warmup_args=(--warmup-command "$(render_load_command "$rate" "$WARMUP_S")"
+                     --warmup-seconds "$WARMUP_S")
+    fi
+
     local await_completion=()
     if [[ "${PRIMARY_SOURCE:-load}" == "podlog" ]]; then
         await_completion=(--await-workload-completion)
     fi
+
+    require_guest_disk "$TARGET_NODE" >/dev/null
 
     log "observer-overhead calibration for ${SCENARIO_NAME} on EEVDF"
     local variant
@@ -296,6 +347,8 @@ cmd_overhead() {
             --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
             --load-command "$load_command" \
             "${await_completion[@]}" \
+            "${warmup_args[@]}" \
+            --load-ready-probe "${LOAD_READY_PROBE:-}" \
             --raw "${out}/instruments-${variant}.txt" \
             --podlog "${out}/instruments-${variant}.log" \
             --instrumentation "$variant" \
@@ -311,15 +364,54 @@ cmd_overhead() {
     log "overhead calibration complete: ${out}"
 }
 
+# calibration_probe RATE OUT_DIR CSV — one rate probe; prints the p99 it measured.
+#
+# The probe applies the scenario's declared warmup first: without it the knee is
+# found on a cold system and every measured arm inherits a rate chosen under
+# different conditions.
+calibration_probe() {
+    local rate="$1" out="$2" csv="$3"
+    local probe_dir="${out}/rate-${rate}"
+    mkdir -p "$probe_dir"
+    local warm_args=()
+    if [[ "${WARMUP_S:-0}" -gt 0 ]]; then
+        warm_args=(--warmup-command "$(render_load_command "$rate" "$WARMUP_S")"
+                   --warmup-seconds "$WARMUP_S")
+    fi
+    "${SCRIPT_DIR}/../capture/capture-block.sh" \
+        --target-node "$TARGET_NODE" --duration "$LINUX_SCHED_RATE_PROBE_S" \
+        --out-dir "$probe_dir" --arm "rate-${rate}" --load-node "${LOAD_NODE:-}" \
+        --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
+        --load-command "$(render_load_command "$rate" "$LINUX_SCHED_RATE_PROBE_S")" \
+        "${warm_args[@]}" \
+        --load-ready-probe "${LOAD_READY_PROBE:-}" \
+        --raw "${probe_dir}/load.txt" --podlog "${probe_dir}/pod.log" \
+        || die "calibration probe at ${rate} rps failed"
+    collect_metric "${probe_dir}/load.txt" "$METRIC_COMMAND" \
+        "$LINUX_SCHED_RATE_PROBE_S" "${probe_dir}/p99.metric" \
+        || die "could not read p99 at ${rate} rps"
+    local p99
+    p99="$(cat "${probe_dir}/p99.metric")"
+    printf '%s,%s\n' "$rate" "$p99" >> "$csv"
+    log "  ${rate} rps -> p99 ${p99} ms"
+    printf '%s' "$p99"
+}
+
+# calibration_passes P99 — true when a probe met the frozen latency target.
+calibration_passes() {
+    awk -v a="$1" -v b="$LINUX_SCHED_RATE_P99_TARGET_MS" 'BEGIN { exit !(a <= b) }'
+}
+
 # cmd_calibrate SCENARIO DIR DATA_ROOT — find one scenario's offered rate and
 # freeze it.
 #
-# The rule is a latency knee on the control arm: raise the offered rate in
-# geometric steps, measure p99 at each, and freeze the highest rate whose p99
-# stayed at or under the target. Freezing on the control arm is the point — the
-# arms are then compared at equal offered load, not at equal achieved
-# throughput, which would hide the scheduler behind the load generator's own
-# back-pressure.
+# The rule is a latency knee on the control arm: find the bracket where the rate
+# passes and the next step fails, then refine that bracket until it is within
+# `LINUX_SCHED_RATE_REFINE_PCT` of the passing rate, so the frozen value is not
+# simply the last coarse step that happened to fit. Freezing on the control arm
+# is the point — the arms are then compared at equal offered load, not at equal
+# achieved throughput, which would hide the scheduler behind the load
+# generator's own back-pressure.
 cmd_calibrate() {
     local scenario="$1" dir="$2" data_root="$3"
     load_scenario "$dir" "$scenario"
@@ -336,40 +428,43 @@ cmd_calibrate() {
 
     log "calibrating ${SCENARIO_NAME}: ${LINUX_SCHED_CONTROL} control arm, " \
         "target p99 <= ${LINUX_SCHED_RATE_P99_TARGET_MS} ms, " \
-        "${LINUX_SCHED_RATE_PROBE_S}s probes"
+        "${LINUX_SCHED_RATE_PROBE_S}s probes, refine to ${LINUX_SCHED_RATE_REFINE_PCT}%"
     scx_reset "$TARGET_NODE"
     activate_arm "$LINUX_SCHED_CONTROL"
 
     local rate="$LINUX_SCHED_RATE_SWEEP_START"
-    local p99="" best="" probes=0
+    local p99="" best="" worst="" probes=0
+
+    # 1. Geometric sweep upward until the target is crossed.
     while (( rate <= LINUX_SCHED_RATE_SWEEP_MAX )); do
         probes=$(( probes + 1 ))
-        local probe_dir="${out}/rate-${rate}"
-        mkdir -p "$probe_dir"
-        local load_command
-        load_command="$(render_load_command "$rate" "$LINUX_SCHED_RATE_PROBE_S")"
-        "${SCRIPT_DIR}/../capture/capture-block.sh" \
-            --target-node "$TARGET_NODE" --duration "$LINUX_SCHED_RATE_PROBE_S" \
-            --out-dir "$probe_dir" --arm "rate-${rate}" --load-node "${LOAD_NODE:-}" \
-            --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
-            --load-command "$load_command" \
-            --raw "${probe_dir}/load.txt" --podlog "${probe_dir}/pod.log" \
-            || die "calibration probe at ${rate} rps failed"
-        collect_metric "${probe_dir}/load.txt" "$METRIC_COMMAND" \
-            "$LINUX_SCHED_RATE_PROBE_S" "${probe_dir}/p99.metric" \
-            || die "could not read p99 at ${rate} rps"
-        p99="$(cat "${probe_dir}/p99.metric")"
-        printf '%s,%s\n' "$rate" "$p99" >> "$csv"
-        log "  ${rate} rps -> p99 ${p99} ms"
-        if awk -v a="$p99" -v b="$LINUX_SCHED_RATE_P99_TARGET_MS" \
-            'BEGIN { exit !(a <= b) }'; then
+        p99="$(calibration_probe "$rate" "$out" "$csv")"
+        if calibration_passes "$p99"; then
             best="$rate"
             rate="$(awk -v r="$rate" -v f="$LINUX_SCHED_RATE_SWEEP_FACTOR" \
                 'BEGIN { printf "%d", r * f }')"
         else
+            worst="$rate"
             break
         fi
     done
+
+    # 2. Refine the bracket until it is tight, so the frozen rate is close to
+    #    the real knee rather than one coarse step below it.
+    if [[ -n "$best" && -n "$worst" ]]; then
+        while awk -v b="$best" -v w="$worst" -v pct="$LINUX_SCHED_RATE_REFINE_PCT" \
+            'BEGIN { exit !((w - b) > (b * pct / 100)) }'; do
+            local mid=$(( (best + worst) / 2 ))
+            (( mid > best )) || break
+            probes=$(( probes + 1 ))
+            p99="$(calibration_probe "$mid" "$out" "$csv")"
+            if calibration_passes "$p99"; then
+                best="$mid"
+            else
+                worst="$mid"
+            fi
+        done
+    fi
 
     scx_reset "$TARGET_NODE"
 

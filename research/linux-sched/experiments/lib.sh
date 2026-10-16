@@ -14,13 +14,17 @@ shopt -s inherit_errexit
 IFS=$'\n\t'
 
 # Schedulers compared in every block. The first entry is the control arm.
-#
 # scx_mavd is absent on purpose: its object sets BPF_F_ARENA_SCALAR, which the
 # pinned kernel rejects, and its sources no longer build in the classic arena
 # form. It rejoins the series when a kernel with that flag is available; set
 # LINUX_SCHED_ARMS to add it back. See GATES.md.
 LINUX_SCHED_CONTROL="${LINUX_SCHED_CONTROL:-eevdf}"
 LINUX_SCHED_ARMS="${LINUX_SCHED_ARMS:-eevdf scx_bpfland scx_lavd}"
+
+# Seed for the deterministic, position-balanced block schedule. It lives here
+# rather than in the runner because the schedule helpers are one of the things
+# tests source directly.
+LINUX_SCHED_PLAN_SEED="${LINUX_SCHED_PLAN_SEED:-20261015}"
 
 # Minimum samples frozen by the plan.
 LINUX_SCHED_MIN_BLOCKS="${LINUX_SCHED_MIN_BLOCKS:-5}"
@@ -38,6 +42,10 @@ LINUX_SCHED_RATE_SWEEP_START="${LINUX_SCHED_RATE_SWEEP_START:-500}"
 LINUX_SCHED_RATE_SWEEP_FACTOR="${LINUX_SCHED_RATE_SWEEP_FACTOR:-1.5}"
 LINUX_SCHED_RATE_SWEEP_MAX="${LINUX_SCHED_RATE_SWEEP_MAX:-65536}"
 LINUX_SCHED_RATE_PROBE_S="${LINUX_SCHED_RATE_PROBE_S:-30}"
+# The knee is refined until the passing/failing bracket is this close to the
+# passing rate, so the frozen value is not one coarse sweep step below the real
+# knee.
+LINUX_SCHED_RATE_REFINE_PCT="${LINUX_SCHED_RATE_REFINE_PCT:-5}"
 
 # How long `perf sched` records for, and how much of the window the scheduler
 # trace covers. The node's root filesystem is about 5 GiB in practice (the
@@ -49,10 +57,20 @@ LINUX_SCHED_RATE_PROBE_S="${LINUX_SCHED_RATE_PROBE_S:-30}"
 # bounded, and what a sample keeps is the run-queue histograms over the whole
 # window, the `perf sched latency` summary, and a compressed trace slice.
 LINUX_SCHED_PERF_WINDOW_S="${LINUX_SCHED_PERF_WINDOW_S:-10}"
-LINUX_SCHED_TRACE_WINDOW_S="${LINUX_SCHED_TRACE_WINDOW_S:-30}"
+LINUX_SCHED_TRACE_WINDOW_S="${LINUX_SCHED_TRACE_WINDOW_S:-10}"
 
 # How long to wait for a workload Pod to start serving before the load begins.
 LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S="${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S:-120}"
+
+# ---- Storage budget (see GATES.md) ----
+# The worker root filesystem is about 5 GiB and kubelet evicts a Pod once free
+# space falls below the measured threshold. A sample needs room for the
+# observer spool, the workload's ephemeral storage and a reserve, so the gate is
+# the sum rather than any one of them.
+LINUX_SCHED_EVICTION_THRESHOLD_B="${LINUX_SCHED_EVICTION_THRESHOLD_B:-789102828}"
+LINUX_SCHED_SPOOL_CAP_MIB="${LINUX_SCHED_SPOOL_CAP_MIB:-512}"
+LINUX_SCHED_WORKLOAD_STORAGE_MIB="${LINUX_SCHED_WORKLOAD_STORAGE_MIB:-128}"
+LINUX_SCHED_DISK_RESERVE_MIB="${LINUX_SCHED_DISK_RESERVE_MIB:-256}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
 
 OBSERVER_NAMESPACE="${OBSERVER_NAMESPACE:-linux-sched}"
@@ -158,6 +176,64 @@ guest_cpu_busy_pct() {
             echo 0
         fi
     ' 2>/dev/null || echo 100
+}
+
+# ---- Storage budget helpers ----
+# guest_free_bytes NODE — free bytes on the node's root filesystem, read through
+# the observer's host mount (the spool and the workload both live there).
+guest_free_bytes() {
+    local node="$1" pod
+    pod="$(observer_pod_for_node "$node")"
+    [[ -n "$pod" ]] || { echo 0; return 0; }
+    kexec "$pod" sh -c "df -B1 --output=avail /var/tmp | tail -1" 2>/dev/null \
+        | tr -d '[:space:]' || echo 0
+}
+
+# required_guest_free_bytes — the free space a worker needs before a sample.
+required_guest_free_bytes() {
+    local mib=$(( LINUX_SCHED_SPOOL_CAP_MIB
+        + LINUX_SCHED_WORKLOAD_STORAGE_MIB
+        + LINUX_SCHED_DISK_RESERVE_MIB ))
+    echo $(( LINUX_SCHED_EVICTION_THRESHOLD_B + mib * 1048576 ))
+}
+
+# require_guest_disk NODE — refuse to start a sample the worker cannot hold.
+#
+# The measured failure this prevents: a workload Pod evicted for
+# ephemeral-storage in the middle of a load, which surfaces as the database
+# backend dying rather than as a disk error.
+require_guest_disk() {
+    local node="$1" free required
+    required="$(required_guest_free_bytes)"
+    free="$(guest_free_bytes "$node")"
+    [[ "$free" =~ ^[0-9]+$ ]] || die "could not read free space on ${node}"
+    if (( free < required )); then
+        die "worker ${node} has ${free} B free but a sample needs ${required} B; refusing to run"
+    fi
+    printf '%s' "$free"
+}
+
+# balanced_block_order BLOCK — the arm order for a block, position-balanced.
+#
+# A seeded base permutation rotated by the block index, so that over every
+# three-block cycle each arm occupies each position exactly once. Rotating is
+# what makes position balance hold for any block count that is a multiple of
+# three, which is why the confirmatory count is rounded up to one.
+balanced_block_order() {
+    local block="$1"
+    local -a base out
+    local n rot i
+    # seeded_permutation prints the arms space-joined on one line, so the words
+    # have to be split explicitly before they can be indexed.
+    mapfile -t base < <(split_words "$(seeded_permutation "$LINUX_SCHED_PLAN_SEED")")
+    n="${#base[@]}"
+    (( n > 0 )) || die "no scheduler arms configured"
+    rot=$(( (block - 1) % n ))
+    out=()
+    for (( i = 0; i < n; i++ )); do
+        out+=( "${base[$(( (i + rot) % n ))]}" )
+    done
+    printf '%s\n' "${out[@]}"
 }
 
 # seeded_permutation SEED N — print a deterministic balanced permutation of the
