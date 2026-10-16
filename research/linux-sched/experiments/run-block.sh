@@ -384,7 +384,13 @@ cmd_overhead() {
 
     require_guest_disk "$TARGET_NODE" >/dev/null
 
-    log "observer-overhead calibration for ${SCENARIO_NAME} on EEVDF"
+    # EEVDF is the baseline for this calibration, and it means "no sched_ext
+    # scheduler attached". Without this the pair would be measured under whatever
+    # arm the previous run happened to finish on — the overhead of the observer
+    # under scx_bpfland, labelled as the control arm's overhead.
+    scx_reset "$TARGET_NODE"
+
+    log "observer-overhead calibration for ${SCENARIO_NAME} on ${LINUX_SCHED_CONTROL}"
     local variant
     # The capture matches `enabled`/`disabled` exactly; passing
     # `instruments-enabled` left BOTH variants uninstrumented, which made the

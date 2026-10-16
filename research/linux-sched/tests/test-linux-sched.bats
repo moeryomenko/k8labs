@@ -238,3 +238,11 @@ setup() {
         [ "$status" -eq 0 ]
     done
 }
+
+@test "the overhead calibration detaches the previous arm first" {
+    # Regression: the pair is an EEVDF measurement, but nothing reset the
+    # scheduler, so it inherited whichever arm the previous run left attached.
+    run awk '/^cmd_overhead\(\)/,/^}/' "${SERIES_DIR}/experiments/run-block.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"scx_reset"* ]]
+}
