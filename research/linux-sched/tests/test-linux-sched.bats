@@ -225,3 +225,16 @@ setup() {
     run grep -c 'p99="$(cat "${out}/rate-${rate}/p99.metric")"' "${SERIES_DIR}/experiments/run-block.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "the makefiles fail a recipe when an earlier command fails" {
+    # Regression: .ONESHELL without -e takes the target's status from the last
+    # command only, so a failed sample-size step reported success and the run
+    # continued to the next phase with no frozen counts.
+    for makefile in "${SERIES_DIR}/../Makefile" "${SERIES_DIR}/linux-sched.mk"; do
+        run grep -n '^\.SHELLFLAGS' "$makefile"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"-e"* ]]
+        run grep -n '^\.ONESHELL' "$makefile"
+        [ "$status" -eq 0 ]
+    done
+}
