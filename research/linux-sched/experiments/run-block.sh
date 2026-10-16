@@ -175,8 +175,15 @@ run_block() {
     if load_needs_rate; then
         rate="$(frozen_offered_rate "$DATA_ROOT" "$SCENARIO_NAME")"
     fi
-    local load_command
+    local load_command warmup_args=()
     load_command="$(render_load_command "$rate" "$DURATION_S")"
+    # The scenarios declare a warmup; without it the measured window carries the
+    # cold start. The same load runs for WARMUP_S first and its result is thrown
+    # away, so the metric describes a warmed system.
+    if [[ "${WARMUP_S:-0}" -gt 0 ]]; then
+        warmup_args=(--warmup-command "$(render_load_command "$rate" "$WARMUP_S")"
+                     --warmup-seconds "$WARMUP_S")
+    fi
 
     local await_completion=()
     if [[ "${PRIMARY_SOURCE:-load}" == "podlog" ]]; then
@@ -193,6 +200,7 @@ run_block() {
         --manifest "${SCRIPT_DIR}/../${WORKLOAD_MANIFEST}" \
         --load-command "$load_command" \
         "${await_completion[@]}" \
+        "${warmup_args[@]}" \
         --raw "$load_raw" --podlog "$podlog_raw" \
         || die "capture failed for block ${block} arm ${arm}"
 

@@ -32,6 +32,7 @@ Usage: capture-block.sh --target-node NODE --duration N --out-dir DIR --arm ARM
                         [--raw FILE] [--podlog FILE]
                         [--instrumentation enabled|disabled]
                         [--await-workload-completion]
+                        [--warmup-command CMD] [--warmup-seconds N]
 
 Captures one measured sample on ARM. --raw receives the load-generator output;
 --podlog receives the workload pod log. Observers run inside the observer
@@ -39,6 +40,8 @@ DaemonSet Pod on --target-node; the load generator runs on --load-node. With
 --instrumentation disabled the observer stack is not started (observer-overhead
 calibration only). --await-workload-completion waits for the workload Pods to
 stop, which a podlog-sourced metric needs and a load-sourced one does not.
+--warmup-command runs once, for --warmup-seconds, before the measured load and
+its result is discarded; the observers still cover it.
 EOF
     exit "${1:-0}"
 }
@@ -54,7 +57,7 @@ observer_pod() {
 main() {
     local target_node="" duration="" out_dir="" arm="" load_node=""
     local manifest="" load_command="" raw="" podlog="" instrumentation="enabled"
-    local await_completion=0
+    local await_completion=0 warmup_command="" warmup_seconds=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -69,6 +72,8 @@ main() {
             --podlog) podlog="$2"; shift 2 ;;
             --instrumentation) instrumentation="$2"; shift 2 ;;
             --await-workload-completion) await_completion=1; shift ;;
+            --warmup-command) warmup_command="$2"; shift 2 ;;
+            --warmup-seconds) warmup_seconds="$2"; shift 2 ;;
             -h|--help) usage 0 ;;
             *) die "unknown argument: $1" ;;
         esac
@@ -113,7 +118,7 @@ main() {
         # pids are a belt-and-braces kill for anything the runtime leaves.
         # The trap runs after main returns, when its locals are gone, hence the
         # globals and the empty guards.
-        for name in runqlat sched-trace perf-sched; do
+        for name in runqlat runqlen sched-trace perf-sched; do
             [[ -n "${TARGET_POD:-}" && -n "${REMOTE_WORK:-}" ]] || continue
             remote_pid="$(kexec "$TARGET_POD" sh -c \
                 "cat ${REMOTE_WORK}/${name}.pid 2>/dev/null" 2>/dev/null || true)"
@@ -205,15 +210,38 @@ main() {
         return 1
     }
 
+    # Observers cover the warmup as well as the measured window. If they only
+    # covered the measurement, adding a warmup would silently truncate the
+    # collection by its length.
+    local observer_window=$(( duration + warmup_seconds ))
+
     if [[ "$instrumentation" == "enabled" ]]; then
-        for tool in bpftrace perf bpf-runqlat; do
+        for tool in bpftrace perf bpf-runqlat bpf-runqlen; do
             kexec "$target_pod" sh -c "command -v ${tool} >/dev/null 2>&1" \
                 || die "required observer tool '${tool}' missing in ${target_pod}"
         done
-        # The CO-RE probe reads BTF, so it needs no headers; the BCC tool does.
-        start_observer runqlat "bpf-runqlat 1 ${duration}"
-        start_observer sched-trace "bpftrace -e 'tracepoint:sched:sched_switch { }'"
-        start_observer perf-sched "perf sched record -o ${work}/perf.data -- sleep ${duration}"
+        # Stage the scheduler-trace probe and run the file. The previous inline
+        # form had an empty body, so it emitted nothing: that artifact was a
+        # banner, and the wakeup-to-run and migration data never existed.
+        # The spool directory is created by the observer start, so make it here.
+        kexec "$target_pod" sh -c "mkdir -p ${work}" >/dev/null \
+            || die "could not create ${work} in ${target_pod}"
+        kubectl_wl cp "${PROBE}" \
+            "${OBSERVER_NAMESPACE}/${target_pod}:${work}/sched-trace.bt" >/dev/null \
+            || die "could not stage the sched-trace probe into ${target_pod}"
+        # `stdbuf -oL`: both tools buffer their output when stdout is a file,
+        # and the observer is killed rather than allowed to exit, so an
+        # unbuffered line mode is what keeps the histogram from being lost.
+        start_observer runqlat "stdbuf -oL bpf-runqlat 1 ${observer_window}"
+        # The protocol requires run-queue length as well as latency; only
+        # runqlat was ever collected.
+        start_observer runqlen "stdbuf -oL bpf-runqlen 1 ${observer_window}"
+        # A raw event stream for a full window is hundreds of megabytes. The
+        # probe writes it plainly and it is compressed in the Pod before the
+        # copy; folding `gzip` into the start command would fight the
+        # supervisor's own redirections.
+        start_observer sched-trace "bpftrace ${work}/sched-trace.bt"
+        start_observer perf-sched "perf sched record -o ${work}/perf.data -- sleep ${observer_window}"
     fi
 
     if [[ -n "$manifest" ]]; then
@@ -230,6 +258,20 @@ main() {
             wait_workload_endpoints \
                 || die "workload Service for arm ${arm} never got a ready endpoint"
         fi
+    fi
+
+    # The declared warmup: run the same load for its length and discard the
+    # result, so the measured window does not carry the cold start (JIT and
+    # connection setup, page-cache warmup) that the scenarios declare a warmup
+    # to remove.
+    if [[ -n "$warmup_command" && -n "$load_node" ]]; then
+        local warm_pod
+        warm_pod="$(observer_pod "$load_node")"
+        log "warming up on ${warm_pod} for ${warmup_seconds}s (result discarded)"
+        LINUX_SCHED_EXEC_TIMEOUT_S="$(( warmup_seconds + 120 ))" \
+            kexec "$warm_pod" sh -c "$warmup_command" \
+            > "${out_dir}/${arm}.warmup.txt" \
+            || die "warmup load failed on ${load_node}"
     fi
 
     if [[ -n "$load_command" && -n "$load_node" ]]; then
@@ -254,7 +296,7 @@ main() {
 
     if [[ -n "$manifest" ]]; then
         log "collecting workload log for ${arm}"
-        kubectl_wl logs -l "linux-sched/run=${arm}" --tail=-1 > "$podlog_file" \
+        kubectl_wl logs -l "linux-sched/run=${arm}" --all-containers=true --tail=-1 > "$podlog_file" \
             || die "failed to collect workload log for arm ${arm}"
         kubectl_wl delete -f "${out_dir}/workload-${arm}.yaml" \
             --ignore-not-found --wait=true --timeout=120s >/dev/null \
@@ -267,6 +309,15 @@ main() {
         sleep 2
         cleanup
         obs_pids=()
+        # Compress the large artifacts in the Pod, so the copy back moves a
+        # fraction of the raw stream: the scheduler trace is hundreds of
+        # megabytes and perf.data is over a gigabyte for a full window.
+        kexec "$target_pod" sh -c \
+            "test ! -s ${work}/sched-trace.txt || gzip -f ${work}/sched-trace.txt" \
+            >/dev/null 2>&1 || true
+        kexec "$target_pod" sh -c \
+            "test ! -s ${work}/perf.data || gzip -1 -f ${work}/perf.data" \
+            >/dev/null 2>&1 || true
         log "copying capture artifacts into ${out_dir}"
         kubectl_wl cp "${OBSERVER_NAMESPACE}/${target_pod}:${work}/." "$out_dir/" \
             || die "failed to copy capture artifacts from ${target_pod}"
@@ -274,7 +325,7 @@ main() {
         # A capture is complete only if the required observer outputs exist and
         # are non-empty AND no perf events were lost.
         local status="complete" artifact
-        for artifact in runqlat.txt sched-trace.txt; do
+        for artifact in runqlat.txt runqlen.txt sched-trace.txt.gz; do
             if [[ ! -s "${out_dir}/${artifact}" ]]; then
                 log "ERROR: observer artifact ${artifact} is missing or empty for arm ${arm}"
                 status="failed"
