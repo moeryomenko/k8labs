@@ -124,15 +124,34 @@ kexec() {
 # SSH to the lab VMs never completes (see GATES.md), so no ssh helpers exist
 # here on purpose.
 
-# observer_cpu_busy_pct NODE — guest CPU busy percentage, read from the
+# guest_cpu_busy_pct NODE — guest CPU busy percentage, read from the
 # observer Pod's host /proc/stat (the observer runs with hostPID).
+#
+# Two samples one second apart, because the running totals in /proc/stat are an
+# average since boot: a node that ran anything heavy hours ago still reports a
+# high average, so the cumulative figure cannot answer "is it quiet now". Only
+# the aggregate `cpu` line is read; the per-CPU and interrupt lines have
+# different field layouts and made the arithmetic meaningless.
 guest_cpu_busy_pct() {
     local node="$1" pod
     pod="$(observer_pod_for_node "$node")"
     [[ -n "$pod" ]] || { echo 100; return 0; }
-    kexec "$pod" sh -c \
-        "awk '{print 100-(\$5*100/(\$2+\$3+\$4+\$5+\$6+\$7+\$8))}' /proc/stat" \
-        2>/dev/null || echo 100
+    kexec "$pod" sh -c '
+        read_cpu() {
+            awk "/^cpu /{print \$2+\$3+\$4, \$5; exit}" /proc/stat
+        }
+        set -- $(read_cpu); busy1=$1; idle1=$2
+        sleep 1
+        set -- $(read_cpu); busy2=$1; idle2=$2
+        busy=$((busy2 - busy1))
+        idle=$((idle2 - idle1))
+        total=$((busy + idle))
+        if [ "$total" -gt 0 ]; then
+            echo $((busy * 100 / total))
+        else
+            echo 0
+        fi
+    ' 2>/dev/null || echo 100
 }
 
 # seeded_permutation SEED N — print a deterministic balanced permutation of the
