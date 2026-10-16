@@ -592,6 +592,48 @@ image onto the nodes, and each one is avoidable only if it is known.
   bring-up stalled with three VMs up and no Node ever registering. Memory, not
   the manifests, decides whether a rebuild converges here.
 
+## The worker disk is the binding constraint
+
+The worker machine template asks for a 40 GiB disk, but the running nodes have a
+**4.9 GB** root filesystem (`/dev/vda3`, which carries `/`, `/boot` and the baked
+fixtures). kubelet evicts on disk pressure at roughly 10% free, so a sample has
+only about 1.3 GB of room to work in.
+
+That is what ended the first postgres pilot: one sample wrote a 1.4 GB
+`perf.data` and a 560 MB raw trace into `/var/tmp/linux-sched/<arm>`, the spool
+was never cleaned between arms or blocks, and the accumulated evidence tripped
+`DiskPressure`. The observer was evicted, the DaemonSet recreated it into the
+same pressure, and the arm failed because the observer Pod was gone. Recovery
+needed the node replaced, because the only shell into it was that Pod.
+
+The capture now stays inside the budget:
+
+| Concern | Change |
+|---|---|
+| Spool accumulation | wiped before each sample, removed after the copy |
+| Trace size | compressed as it is produced, never written raw |
+| `perf.data` size | recorded for `LINUX_SCHED_PERF_WINDOW_S` (60 s) inside the measured period, then compressed |
+| Evidence kept | `perf sched latency` report plus the compressed raw stream |
+
+A 25 s probe of the whole stack costs about 85 MB on the node, so a full 210 s
+sample should stay near 300 MB and leave the node comfortable.
+
+This is still a workaround for a provisioning defect: the plan's evidence, and
+especially `perf sched` over the full window, is now bounded by the disk rather
+than by the protocol.
+
+## Replacing a worker node
+
+The provider does not delete a Machine's VM (no `providerID`), so a node is
+replaced by hand: kill the `cloud-hypervisor --api-socket` process for that VM,
+remove its `state/vms/<vm>*` and `/tmp/ch-capi/<vm>`, clear the Machine's
+finalizers, delete the Machine, and let the MachineDeployment create a
+replacement. Two things follow. The replacement is **not labelled**, so
+`make -C research linux-sched-workers-label` must run again or the observer
+DaemonSet will not schedule there. And its observer Pod is not Ready for about
+two minutes while it installs the tooling, so a capture started too early fails
+with `container not found ("observer")`.
+
 ## Consequence for the design
 
 - Observer tooling is provisioned into the node image (node-native) and can also
