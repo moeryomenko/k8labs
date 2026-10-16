@@ -499,13 +499,24 @@ than visible failures:
 - The load was started against a Pod that was still initialising, so a sample
   could measure nginx coming up or PostgreSQL replaying its snapshot instead of
   the workload. The capture now waits for the arm's workload Pod to report Ready
-  before the load begins.
+  before the load begins, and — for the workloads that expose a Service — for the
+  Service to actually have a ready endpoint. Pod readiness alone was not enough:
+  the load runs on another node and reaches the workload through the Service, and
+  a Ready Pod whose EndpointSlice had not been programmed yet still refused
+  connections, which is how the first postgres sample failed.
 - A podlog-sourced metric (`ffmpeg`, `stress-ng`) was read from the workload log
   right after the load, while the job was still running, so the log held only a
   partial run. `--await-workload-completion` makes the capture wait for the Pods
   to stop first. `run` passes it for podlog scenarios only: a load-sourced
   scenario's nginx keeps serving after its load ends, and waiting there would
   stall for nothing.
+
+**Open gap — the declared warmup is not performed.** Every scenario declares
+`WARMUP_S` (30 s for `http`, `mixed` and `postgres`; 0 elsewhere), but nothing in
+the runner or the capture reads it, so the measured window starts cold at full
+load. The metric would then include the initial ramp — JIT and connection
+setup, page-cache warmup — which is the bias the declared warmup exists to
+remove.
 
 `make linux-sched-overhead` also passed `--instrumentation instruments-enabled`,
 which the capture compares against `enabled`, so **both** variants ran
