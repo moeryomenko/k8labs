@@ -246,3 +246,15 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"scx_reset"* ]]
 }
+
+@test "analysis and plots read the confirmatory phase, not the raw root" {
+    # Regression: both tools were pointed at the raw root, which holds no
+    # blocks.csv after the phases were separated, so the analysis refused to run
+    # and the plots failed outright.
+    run grep -n 'sched_analysis.py --blocks $(LINUX_SCHED_CONFIRMATORY_DIR)/blocks.csv' \
+        "${SERIES_DIR}/linux-sched.mk"
+    [ "$status" -eq 0 ]
+    run grep -n 'sched_plots.py --data-root $(LINUX_SCHED_CONFIRMATORY_DIR)' \
+        "${SERIES_DIR}/linux-sched.mk"
+    [ "$status" -eq 0 ]
+}

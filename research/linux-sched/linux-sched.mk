@@ -30,6 +30,11 @@ LINUX_SCHED_TEST_DIR := $(LINUX_SCHED_DIR)tests
 # K8LABS_RESEARCH_DATA_ROOT to relocate every series' experiment data.
 LINUX_SCHED_DATA_ROOT ?= $(if $(K8LABS_RESEARCH_DATA_ROOT),$(K8LABS_RESEARCH_DATA_ROOT)/linux-sched,$(PROJECT_ROOT)/build/research/linux-sched)
 LINUX_SCHED_ANALYSIS_OUTPUT ?= $(LINUX_SCHED_DATA_ROOT)/analysis
+# Analysis and plots are built from confirmatory results only. Pilot and smoke
+# data must never reach a verdict, and after the phases were separated those live
+# in their own trees — pointing either tool at the raw root finds no blocks.csv
+# there and fails.
+LINUX_SCHED_CONFIRMATORY_DIR ?= $(LINUX_SCHED_DATA_ROOT)/confirmatory
 
 # Worker nodes are named after the cluster's MachineDeployment. The nodes carry
 # no role labels on this lab, so `!node-role.kubernetes.io/control-plane` matches
@@ -111,13 +116,13 @@ linux-sched-sample-size: ## Freeze each scenario's confirmatory block count from
 
 .PHONY: linux-sched-analyze
 linux-sched-analyze: ## Analyze paired blocks into summary.csv/json with the frozen decision rule
-	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/confirmatory/blocks.csv" ]; then echo "No confirmatory blocks.csv under $(LINUX_SCHED_DATA_ROOT)/confirmatory; pilot data is deliberately not analysed."; exit 1; fi
-	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_analysis.py --blocks $(LINUX_SCHED_DATA_ROOT)/confirmatory/blocks.csv --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
+	@if [ ! -f "$(LINUX_SCHED_CONFIRMATORY_DIR)/blocks.csv" ]; then echo "No confirmatory blocks.csv under $(LINUX_SCHED_CONFIRMATORY_DIR); pilot data is deliberately not analysed."; exit 1; fi
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_analysis.py --blocks $(LINUX_SCHED_CONFIRMATORY_DIR)/blocks.csv --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
 	@echo "  Summary: $(LINUX_SCHED_ANALYSIS_OUTPUT)/summary.csv"
 
 .PHONY: linux-sched-plots
 linux-sched-plots: ## Generate linux-sched plots from analyzed data
-	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_plots.py --data-root $(LINUX_SCHED_DATA_ROOT) --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/sched_plots.py --data-root $(LINUX_SCHED_CONFIRMATORY_DIR) --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
 	@echo "  Plots: $(LINUX_SCHED_ANALYSIS_OUTPUT)/plots"
 
 .PHONY: linux-sched-data-usage
