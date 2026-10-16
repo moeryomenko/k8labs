@@ -594,29 +594,37 @@ image onto the nodes, and each one is avoidable only if it is known.
 
 ## The worker disk is the binding constraint
 
-The worker machine template asks for a 40 GiB disk, but the running nodes have a
-**4.9 GB** root filesystem (`/dev/vda3`, which carries `/`, `/boot` and the baked
-fixtures). kubelet evicts on disk pressure at roughly 10% free, so a sample has
-only about 1.3 GB of room to work in.
+The worker machine template asks for a 40 GiB disk and the provider **ignores
+it**: the root device is 5,368,709,120 bytes — exactly the base image's size, 5
+GiB — with `/`, `/boot` and the baked fixtures on `/dev/vda3`. Measured kubelet
+eviction threshold: it evicted a Pod with `Threshold quantity: 789102828,
+available: 767304Ki`.
 
-That is what ended the first postgres pilot: one sample wrote a 1.4 GB
-`perf.data` and a 560 MB raw trace into `/var/tmp/linux-sched/<arm>`, the spool
-was never cleaned between arms or blocks, and the accumulated evidence tripped
-`DiskPressure`. The observer was evicted, the DaemonSet recreated it into the
-same pressure, and the arm failed because the observer Pod was gone. Recovery
-needed the node replaced, because the only shell into it was that Pod.
+With the base image, the observer's tooling and the workload already on that
+filesystem, a sample had roughly 200 MB to work in. Two evictions followed from
+that: the observer, in a loop, leaving an arm with no host to measure on (and no
+shell into the node, because the only shell *was* that Pod — recovery needed the
+node replaced); and later the **workload**, killed in the middle of a load with
+`Container postgres was using 912260Ki … larger consumption of
+ephemeral-storage`, which surfaced to pgbench as `perhaps the backend died while
+processing`.
 
-The capture now stays inside the budget:
+What a sample keeps is therefore bounded to fit:
 
 | Concern | Change |
 |---|---|
 | Spool accumulation | wiped before each sample, removed after the copy |
-| Trace size | compressed as it is produced, never written raw |
-| `perf.data` size | recorded for `LINUX_SCHED_PERF_WINDOW_S` (60 s) inside the measured period, then compressed |
-| Evidence kept | `perf sched latency` report plus the compressed raw stream |
+| Trace | compressed as it is produced, never written raw, and a bounded slice (`LINUX_SCHED_TRACE_WINDOW_S`, 30 s) inside the measured period |
+| `perf.data` | a bounded window (`LINUX_SCHED_PERF_WINDOW_S`, 10 s) inside the measured period; the stream is summarised and then removed |
+| Evidence kept | run-queue histograms over the whole window, the `perf sched latency` report, and the compressed trace slice |
+| Observer image | no longer installs the BCC packages it never uses (the run-queue metrics are libbpf-tools CO-RE binaries) |
+| Postgres workload | initialised in the Pod at a scale that fits (912 MB → 36 MB measured); `pgbench -i` is deterministic, so arms still start from identical data |
 
-A 25 s probe of the whole stack costs about 85 MB on the node, so a full 210 s
-sample should stay near 300 MB and leave the node comfortable.
+**These are evidence reductions, not protocol choices.** The plan asks for the
+full observer stack over each comparison sample and the provider asks for a 40
+GiB disk; both fit that disk, and the running nodes have 5 GiB. The fix is the
+provider honouring `disk`, or a kubelet eviction threshold sized for the
+filesystem that actually exists — not a smaller sample.
 
 This is still a workaround for a provisioning defect: the plan's evidence, and
 especially `perf sched` over the full window, is now bounded by the disk rather

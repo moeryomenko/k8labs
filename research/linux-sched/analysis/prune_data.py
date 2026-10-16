@@ -25,8 +25,10 @@ import sys
 from pathlib import Path
 
 # Large, reproducible-from-the-probe evidence. The run-queue histograms are not
-# here on purpose: they are kilobytes and the plots read them.
-BULK_PATTERNS = ("perf.data*", "sched-trace.txt*")
+# here on purpose: they are kilobytes and the plots read them. The trace is
+# named for what the capture writes today, with the older spelling kept so data
+# from before the rename is still prunable.
+BULK_PATTERNS = ("perf.data*", "sched-trace.csv.gz", "sched-trace.txt*")
 NEVER_REMOVE = ("blocks.csv", "analysis")
 
 

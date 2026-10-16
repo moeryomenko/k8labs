@@ -21,7 +21,7 @@ def _block(data_root: Path, scenario: str, number: int, *, big: bool = True) -> 
     (arm_dir / "runqlat.txt").write_text("0 -> 1 : 5\n", encoding="utf-8")
     if big:
         (block / "perf.data.gz").write_bytes(b"x" * 2048)
-        (arm_dir / "sched-trace.txt.gz").write_bytes(b"y" * 1024)
+        (arm_dir / "sched-trace.csv.gz").write_bytes(b"y" * 1024)
     return block
 
 
@@ -34,7 +34,7 @@ def test_keeps_the_newest_blocks_and_the_primary_records(tmp_path: Path) -> None
     removable_names = {p.name for p in removable}
 
     # Only the oldest block's bulk evidence is prunable.
-    assert removable_names == {"perf.data.gz", "sched-trace.txt.gz"}
+    assert removable_names == {"perf.data.gz", "sched-trace.csv.gz"}
     assert all("block-01" in str(p) for p in removable)
     assert removable_bytes > 0 and kept_bytes > 0
 

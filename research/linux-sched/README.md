@@ -92,10 +92,15 @@ ${K8LABS_RESEARCH_DATA_ROOT:-<repo>/build}/research/linux-sched/
 │   ├── <arm>.log                  # workload pod log
 │   ├── <arm>.capture-status       # complete | incomplete | failed
 │   └── observer-<arm>/            # instrumentation for this arm alone
-│       ├── runqlat.txt, runqlen.txt        # run-queue histograms
-│       ├── sched-trace.csv.gz              # bpftrace probe, compressed
-│       └── perf-latency.txt, perf-sched.txt, perf.data.gz
+│       ├── runqlat.txt, runqlen.txt        # histograms, whole window
+│       ├── sched-trace.csv.gz              # bpftrace probe, a bounded slice
+│       └── perf-latency.txt, perf-sched.txt
 └── analysis/summary.{csv,json}
+```
+
+The run-queue histograms cover the whole measured window. The trace and
+`perf sched` are bounded slices inside it, because the worker filesystem cannot
+hold a full-window recording; `GATES.md` records why, and the windows used.
 ```
 
 ## Pre-implementation gates
