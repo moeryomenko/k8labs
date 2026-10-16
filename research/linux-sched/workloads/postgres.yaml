@@ -14,14 +14,55 @@ spec:
     - name: postgres
       # Pinned to the Fedora 44 major version (18.6) that produced the baked
       # snapshot: a dump cannot be restored into an older server.
-      image: docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+      image: docker.io/library/postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
       env:
         - name: POSTGRES_PASSWORD
           value: linux-sched
         - name: POSTGRES_DB
           value: bench
+      # One start only. The image's entrypoint runs a temporary server to
+      # execute /docker-entrypoint-initdb.d and then starts a second one; on this
+      # lab a container cannot unlink a socket file, so the temporary server's
+      # socket survives its own shutdown and the second start dies with
+      # "could not bind Unix address ... Address in use" — the Pod then never
+      # serves. Starting once and restoring the snapshot ourselves removes the
+      # second bind entirely. `-A trust` is acceptable for an isolated bench
+      # host and keeps the load generator free of credentials.
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -e
+          PGDATA=/var/lib/postgresql/data
+          if [ ! -s "$PGDATA/PG_VERSION" ]; then
+            install -d -o postgres -g postgres "$PGDATA" /var/run/postgresql
+            gosu postgres initdb -D "$PGDATA" -A trust >/dev/null
+            # initdb trusts only 127.0.0.1; the load runs in the observer on the
+            # load node and arrives from the pod network, so it needs a rule.
+            # Wide open on purpose: this is an isolated bench host.
+            echo "host all all 0.0.0.0/0 trust" >> "$PGDATA/pg_hba.conf"
+            echo "host all all ::/0 trust" >> "$PGDATA/pg_hba.conf"
+          fi
+          gosu postgres postgres -D "$PGDATA" -c listen_addresses='*' &
+          server=$!
+          until pg_isready -h 127.0.0.1 -q; do sleep 1; done
+          if ! psql -h 127.0.0.1 -U postgres -lqt 2>/dev/null \
+              | cut -d'|' -f1 | grep -qw bench; then
+            createdb -h 127.0.0.1 -U postgres bench
+            psql -h 127.0.0.1 -U postgres -d bench -q -f /fixtures/pgbench.sql
+          fi
+          touch /tmp/.bench-ready
+          wait "$server"
       ports:
         - containerPort: 5432
+      readinessProbe:
+        # Readiness means "restored and serving", not "process started": the
+        # capture waits for this before it runs the load, and a Pod that is
+        # Ready while the snapshot replays would measure a half-built database.
+        exec:
+          command: ["test", "-f", "/tmp/.bench-ready"]
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 60
       resources:
         requests:
           cpu: "1"
@@ -29,13 +70,6 @@ spec:
       volumeMounts:
         - name: fixtures
           mountPath: /fixtures
-          readOnly: true
-        # The entrypoint replays this on every start. The Pod keeps no state,
-        # so each arm initialises a fresh cluster from the same baked snapshot
-        # rather than inheriting the previous arm's writes.
-        - name: fixtures
-          mountPath: /docker-entrypoint-initdb.d/01-pgbench.sql
-          subPath: pgbench.sql
           readOnly: true
   volumes:
     - name: fixtures

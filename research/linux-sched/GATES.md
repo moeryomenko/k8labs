@@ -468,6 +468,29 @@ a belt-and-braces kill on cleanup. Verified against a live worker: a capture
 that previously produced nothing now yields an 8 KB runqlat histogram and a
 4.8 MB `perf.data`, with no observer processes left behind on the node.
 
+## Containers cannot unlink socket files
+
+A container on this lab cannot remove a socket file, even as root:
+
+```
+$ python3 -c "import socket; socket.socket(socket.AF_UNIX).bind('/tmp/x.sock')"
+$ rm -f /tmp/x.sock
+rm: cannot remove '/tmp/x.sock': Permission denied
+$ mv /tmp/x.sock.d /tmp/x.sock.old     # renaming the directory does work
+```
+
+Two separate failures trace back to this, and it is the host's policy rather
+than any image: the same thing happens on both `alpine` and Debian-based images.
+
+- The sched_ext stats socket at `/var/run/scx/root/stats` blocked the next
+  scheduler start, which is why `scx_reset` renames its directory.
+- The PostgreSQL image's entrypoint runs a temporary server to execute
+  `/docker-entrypoint-initdb.d`, stops it, and then starts the real server. The
+  temporary server's socket survives its own shutdown, so the second start dies
+  with `could not bind Unix address "…/.s.PGSQL.5432": Address in use` and the
+  Pod never serves. The workload therefore starts PostgreSQL **once** and
+  restores the snapshot itself, which removes the second bind entirely.
+
 ## Workload lifecycle in a capture
 
 Two lifecycle steps were missing, and both produced misleading samples rather
