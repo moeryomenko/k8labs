@@ -32,6 +32,35 @@ BULK_PATTERNS = ("perf.data*", "sched-trace.csv.gz", "sched-trace.txt*")
 NEVER_REMOVE = ("blocks.csv", "analysis")
 
 
+def scenario_dirs(data_root: Path) -> list[Path]:
+    """Every directory that holds ``block-*`` results, in either layout.
+
+    Results live under a phase directory (``smoke/``, ``pilot/``,
+    ``confirmatory/``) after the phases were separated, and any earlier data sits
+    directly under the root. Walking only one of those shapes found no blocks at
+    all, which reads as "nothing to prune" rather than "the policy is not being
+    applied" — so both are walked, and the count is reported.
+    """
+
+    found: list[Path] = []
+    for child in sorted(p for p in data_root.iterdir() if p.is_dir()):
+        if child.name in NEVER_REMOVE:
+            continue
+        if _has_blocks(child):
+            found.append(child)
+            continue
+        for grandchild in sorted(p for p in child.iterdir() if p.is_dir()):
+            if grandchild.name in NEVER_REMOVE:
+                continue
+            if _has_blocks(grandchild):
+                found.append(grandchild)
+    return found
+
+
+def _has_blocks(directory: Path) -> bool:
+    return any(p.is_dir() for p in directory.glob("block-*"))
+
+
 def block_sort_key(path: Path) -> tuple[int, str]:
     suffix = path.name.removeprefix("block-")
     try:
@@ -49,8 +78,15 @@ def bulk_files(block_dir: Path) -> list[Path]:
     return found
 
 
-def plan_pruning(data_root: Path, keep_blocks: int) -> tuple[list[Path], int, int]:
-    """Return (files to remove, bytes removable, bytes retained-in-blocks)."""
+def plan_pruning(
+    data_root: Path, keep_blocks: int
+) -> tuple[list[Path], int, int, list[Path]]:
+    """Return (files to remove, bytes removable, bytes kept, scenarios walked).
+
+    The scenario list is returned so the report can distinguish "nothing to
+    prune" from "the policy never looked at anything" — walking the wrong shape
+    silently produced the second while reading as the first.
+    """
 
     removable: list[Path] = []
     removable_bytes = 0
@@ -58,9 +94,8 @@ def plan_pruning(data_root: Path, keep_blocks: int) -> tuple[list[Path], int, in
     if not data_root.is_dir():
         raise FileNotFoundError(f"no data root at {data_root}")
 
-    for scenario_dir in sorted(p for p in data_root.iterdir() if p.is_dir()):
-        if scenario_dir.name in NEVER_REMOVE:
-            continue
+    scenarios = scenario_dirs(data_root)
+    for scenario_dir in scenarios:
         blocks = sorted(
             (p for p in scenario_dir.glob("block-*") if p.is_dir()),
             key=block_sort_key,
@@ -77,7 +112,7 @@ def plan_pruning(data_root: Path, keep_blocks: int) -> tuple[list[Path], int, in
                     removable_bytes += path.stat().st_size
                 else:
                     kept_bytes += path.stat().st_size
-    return removable, removable_bytes, kept_bytes
+    return removable, removable_bytes, kept_bytes, scenarios
 
 
 def human(count: int) -> str:
@@ -103,16 +138,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    removable, removable_bytes, kept_bytes = plan_pruning(
+    removable, removable_bytes, kept_bytes, scenarios = plan_pruning(
         args.data_root, args.keep_blocks
     )
     total = removable_bytes + kept_bytes
     print(
         f"data root: {args.data_root}\n"
+        f"  scenarios walked {len(scenarios)}\n"
         f"  total            {human(total)}\n"
         f"  retained in blocks {human(kept_bytes)}\n"
         f"  prunable (bulk)  {human(removable_bytes)} in {len(removable)} file(s)"
     )
+    if not scenarios:
+        print(
+            "warning: no block directories found; the layout is <root>/<phase>/"
+            "<scenario>/block-NN (or <root>/<scenario>/block-NN)",
+            file=sys.stderr,
+        )
     if not args.apply:
         print("report only; pass --apply to remove the prunable files")
         return 0

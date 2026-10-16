@@ -30,7 +30,7 @@ def test_keeps_the_newest_blocks_and_the_primary_records(tmp_path: Path) -> None
     for number in (1, 2, 3):
         _block(data_root, "postgres", number)
 
-    removable, removable_bytes, kept_bytes = plan_pruning(data_root, keep_blocks=2)
+    removable, removable_bytes, kept_bytes, _ = plan_pruning(data_root, keep_blocks=2)
     removable_names = {p.name for p in removable}
 
     # Only the oldest block's bulk evidence is prunable.
@@ -53,7 +53,7 @@ def test_never_prunes_blocks_csv_or_analysis(tmp_path: Path) -> None:
     analysis.mkdir()
     (analysis / "summary.json").write_text("{}\n", encoding="utf-8")
 
-    removable, _, _ = plan_pruning(data_root, keep_blocks=0)
+    removable, _, _, _ = plan_pruning(data_root, keep_blocks=0)
     assert not any(p.name == "blocks.csv" for p in removable)
     assert not any("analysis" in p.parts for p in removable)
 
@@ -62,7 +62,7 @@ def test_keep_blocks_zero_prunes_every_block(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
     for number in (1, 2):
         _block(data_root, "postgres", number)
-    removable, _, _ = plan_pruning(data_root, keep_blocks=0)
+    removable, _, _, _ = plan_pruning(data_root, keep_blocks=0)
     assert len(removable) == 4
 
 
@@ -88,3 +88,55 @@ def test_human_reads_in_units() -> None:
     assert human(512).endswith("B")
     assert human(2048).endswith("KiB")
     assert human(5 * 1024**2).endswith("MiB")
+
+
+def _phase_block(root: Path, phase: str, scenario: str, number: int) -> Path:
+    return _block(root / phase, scenario, number)
+
+
+def _block_names(paths: list[Path]) -> set[str]:
+    """The block directory each pruned file belongs to."""
+
+    return {
+        part
+        for path in paths
+        for part in path.parts
+        if part.startswith("block-")
+    }
+
+
+def test_finds_blocks_under_a_phase_directory(tmp_path: Path) -> None:
+    # The layout after pilot and confirmatory were separated, which the walker
+    # used to miss entirely: it reported nothing prunable against gigabytes.
+    root = tmp_path / "data"
+    for number in (1, 2, 3):
+        _phase_block(root, "pilot", "http", number)
+    removable, removable_bytes, kept, scenarios = plan_pruning(root, keep_blocks=2)
+    assert [(p.parent.name, p.name) for p in scenarios] == [("pilot", "http")]
+    # The oldest of three blocks loses its bulk evidence; the newest two keep it.
+    # The two files sit in different subdirectories of the same block.
+    assert _block_names(removable) == {"block-01"}
+    assert len(removable) == 2  # perf.data.gz and sched-trace.csv.gz
+    assert removable_bytes > 0
+    assert kept > 0
+
+
+def test_keeps_the_newest_blocks_per_scenario_within_a_phase(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    for scenario in ("http", "postgres"):
+        for number in (1, 2, 3):
+            _phase_block(root, "pilot", scenario, number)
+    removable, _, _, scenarios = plan_pruning(root, keep_blocks=2)
+    assert sorted(p.name for p in scenarios) == ["http", "postgres"]
+    # Each scenario keeps its own newest two blocks, so exactly one block per
+    # scenario is pruned — not two blocks across the phase.
+    assert _block_names(removable) == {"block-01"}
+    assert len(removable) == 4  # two files in each scenario's block-01
+
+
+def test_finds_a_flat_layout_that_predates_the_phases(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    for number in (1, 2, 3):
+        _block(root, "http", number)
+    _, _, _, scenarios = plan_pruning(root, keep_blocks=2)
+    assert [p.name for p in scenarios] == ["http"]
