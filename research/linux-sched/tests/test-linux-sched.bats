@@ -191,3 +191,15 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"mode=smoke blocks=1"* ]]
 }
+
+@test "the frozen rate is read from the raw root, not the phase root" {
+    # Regression: splitting pilot and confirmatory into phase trees left the
+    # writer putting the calibrated rate under the raw root while the reader
+    # looked under the phase root, so a rate-driven scenario could never find
+    # the rate it had just frozen.
+    run grep -n 'frozen_offered_rate "\$RAW_DATA_ROOT" "\$SCENARIO_NAME"' \
+        "${SERIES_DIR}/experiments/run-block.sh"
+    [ "$status" -eq 0 ]
+    run grep -n 'RAW_DATA_ROOT="\$data_root"' "${SERIES_DIR}/experiments/run-block.sh"
+    [ "$status" -eq 0 ]
+}

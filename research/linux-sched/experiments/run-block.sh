@@ -234,10 +234,12 @@ run_block() {
     activate_arm "$arm"
 
     # A scenario whose load carries a rate placeholder must run on the frozen
-    # calibration value, never on a guess.
+    # calibration value, never on a guess. The calibration is a property of the
+    # scenario, not of a phase, so it is read from the raw data root while the
+    # phase root holds this phase's results.
     local rate=""
     if load_needs_rate; then
-        rate="$(frozen_offered_rate "$DATA_ROOT" "$SCENARIO_NAME")"
+        rate="$(frozen_offered_rate "$RAW_DATA_ROOT" "$SCENARIO_NAME")"
     fi
     local load_command warmup_args=()
     load_command="$(render_load_command "$rate" "$DURATION_S")"
@@ -313,6 +315,10 @@ cmd_run() {
     # artifacts.
     local phase_root="${data_root}/${mode}"
     BLOCKS_CSV="${phase_root}/blocks.csv"
+    # RAW_DATA_ROOT holds scenario-level calibration artifacts (the frozen
+    # offered rate), which belong to no single phase; DATA_ROOT is this phase's
+    # results tree.
+    RAW_DATA_ROOT="$data_root"
     DATA_ROOT="$phase_root"
     mkdir -p "$phase_root"
 
@@ -351,6 +357,7 @@ cmd_overhead() {
     load_scenario "$dir" "$scenario"
     require_cmd kubectl python3
     resolve_hosts
+    RAW_DATA_ROOT="$data_root"
     DATA_ROOT="$data_root"
     local out="${data_root}/${SCENARIO_NAME}/overhead"
     mkdir -p "$out"
