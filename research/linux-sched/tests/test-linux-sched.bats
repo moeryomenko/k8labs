@@ -146,9 +146,9 @@ setup() {
 @test "the storage gate is the documented sum of threshold, spool, workload and reserve" {
     run bash -c "source '${SERIES_DIR}/experiments/lib.sh'; required_guest_free_bytes"
     [ "$status" -eq 0 ]
-    # 789102828 + (128 + 64 + 64) MiB: the kubelet eviction threshold plus the
-    # spool cap, the workload's ephemeral storage and a reserve.
-    [ "$output" = "1057538284" ]
+    # 789102828 + (64 + 64) MiB: the kubelet eviction threshold plus twice the
+    # measured spool and the measured workload ephemeral storage.
+    [ "$output" = "923320556" ]
 }
 
 @test "rate scenarios declare a readiness probe so the load never starts blind" {

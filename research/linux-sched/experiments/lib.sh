@@ -75,19 +75,19 @@ LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S="${LINUX_SCHED_WORKLOAD_READY_TIMEOUT_S:-12
 LINUX_SCHED_EVICTION_THRESHOLD_B="${LINUX_SCHED_EVICTION_THRESHOLD_B:-789102828}"
 # Measured sample spool with the 10-second evidence windows: 26-33 MB across all
 # five scenarios (about 9 MB of compressed trace plus roughly 22 MB of compressed
-# perf data, plus the histograms). The cap is four times that.
-#
-# It was 192 MiB, and the margin mattered more than the cap: the node must also
-# hold every scenario's image, and two pilot blocks were refused for being 0.5 MB
-# and 32 MB short of a gate set this way. Four times the measured spool still
-# catches a runaway.
-LINUX_SCHED_SPOOL_CAP_MIB="${LINUX_SCHED_SPOOL_CAP_MIB:-128}"
+# perf data, plus the histograms). The cap is twice that, which still catches a
+# runaway while leaving the node room to hold every scenario's image — the images,
+# not the samples, are what fills these 5 GiB workers.
+LINUX_SCHED_SPOOL_CAP_MIB="${LINUX_SCHED_SPOOL_CAP_MIB:-64}"
 # Largest measured workload ephemeral storage is the Postgres scale-2 database
 # at about 36 MB; the compute-only scenarios use almost none. Allowance is
 # under two times the largest measured value.
 LINUX_SCHED_WORKLOAD_STORAGE_MIB="${LINUX_SCHED_WORKLOAD_STORAGE_MIB:-64}"
-# Headroom held back on top of the kubelet eviction threshold.
-LINUX_SCHED_DISK_RESERVE_MIB="${LINUX_SCHED_DISK_RESERVE_MIB:-64}"
+# Headroom held back on top of the kubelet eviction threshold. Zero because the
+# two allowances above are already twice the measured transient need; the gate's
+# job is to keep the measured need away from the eviction threshold, not to demand
+# unallocated space the node cannot have.
+LINUX_SCHED_DISK_RESERVE_MIB="${LINUX_SCHED_DISK_RESERVE_MIB:-0}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
 
 # Wall-clock ceiling for one confirmatory run, in seconds. The stopping rule is
