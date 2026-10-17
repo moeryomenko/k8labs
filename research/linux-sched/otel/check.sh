@@ -19,6 +19,8 @@ IFS=$'\n\t'
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 LINUX_SCHED_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+# shellcheck source=../experiments/lib.sh
+source "${LINUX_SCHED_DIR}/experiments/lib.sh"
 
 PROFILE_VOLUME="${PROFILE_VOLUME:?set PROFILE_VOLUME to the host-owned profile directory}"
 PYROSCOPE_URL="${PYROSCOPE_URL:-http://127.0.0.1:4040}"
@@ -32,8 +34,11 @@ BUDGET_BYTES="${OTEL_BUDGET_BYTES:-10200547328}"   # 9.5 GiB usable floor
 STOP_BYTES="${OTEL_STOP_BYTES:-9663676416}"        # 9 GiB
 EXPECTED_SESSIONS="${OTEL_EXPECTED_SESSIONS:-15}"
 
-DATA_ROOT="${K8LABS_RESEARCH_DATA_ROOT:+${K8LABS_RESEARCH_DATA_ROOT}/linux-sched}"
-DATA_ROOT="${DATA_ROOT:-$(project_root)/build/research/linux-sched}"
+# Same versioned root the measured campaign uses: a protocol revision must not
+# silently read another protocol's frozen rate or write beside its records.
+LINUX_SCHED_DATA_DIR="${LINUX_SCHED_DATA_DIR:-linux-sched}"
+DATA_ROOT="${K8LABS_RESEARCH_DATA_ROOT:+${K8LABS_RESEARCH_DATA_ROOT}/${LINUX_SCHED_DATA_DIR}}"
+DATA_ROOT="${DATA_ROOT:-$(project_root)/build/research/${LINUX_SCHED_DATA_DIR}}"
 RECORD="${DATA_ROOT}/sessions.json"
 
 failures=0
@@ -84,13 +89,13 @@ PY
 )
 
 # 2. Alloy health and profile counters, read live.
-pod="$(kubectl -n linux-sched get pods -l app.kubernetes.io/name=linux-sched-otel-alloy \
+pod="$(kubectl_wl -n linux-sched get pods -l app.kubernetes.io/name=linux-sched-otel-alloy \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 if [[ -z "$pod" ]]; then
     fail "no Alloy pod is running"
 else
     port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
-    kubectl -n linux-sched port-forward "pod/${pod}" "${port}:12345" >/dev/null 2>&1 &
+    kubectl_wl -n linux-sched port-forward "pod/${pod}" "${port}:12345" >/dev/null 2>&1 &
     forward=$!
     deadline=$(( SECONDS + 60 ))
     healthy=""

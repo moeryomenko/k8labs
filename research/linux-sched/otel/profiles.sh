@@ -37,8 +37,11 @@ STOP_BYTES="${OTEL_STOP_BYTES:-9663676416}"   # 9 GiB
 ALLOY_TIMEOUT_S="${OTEL_ALLOY_TIMEOUT_S:-300}"
 SCENARIOS="${OTEL_SCENARIOS:-http postgres ffmpeg stress-ng mixed-http-ffmpeg}"
 
-DATA_ROOT="${K8LABS_RESEARCH_DATA_ROOT:+${K8LABS_RESEARCH_DATA_ROOT}/linux-sched}"
-DATA_ROOT="${DATA_ROOT:-$(project_root)/build/research/linux-sched}"
+# Same versioned root the measured campaign uses: a protocol revision must not
+# silently read another protocol's frozen rate or write beside its records.
+LINUX_SCHED_DATA_DIR="${LINUX_SCHED_DATA_DIR:-linux-sched}"
+DATA_ROOT="${K8LABS_RESEARCH_DATA_ROOT:+${K8LABS_RESEARCH_DATA_ROOT}/${LINUX_SCHED_DATA_DIR}}"
+DATA_ROOT="${DATA_ROOT:-$(project_root)/build/research/${LINUX_SCHED_DATA_DIR}}"
 RECORD="${DATA_ROOT}/sessions.json"
 PROFILE_TMP="$(mktemp -d)"
 trap 'rm -rf "${PROFILE_TMP}"' EXIT
@@ -94,7 +97,13 @@ activate_arm() {
 }
 
 worker_kernel() {
-    kubectl get node "$1" -o jsonpath='{.status.nodeInfo.kernelVersion}'
+    # Through the same explicit-kubeconfig wrapper the measured campaign uses:
+    # bare kubectl here pointed at a different cluster, and the failure was
+    # swallowed by the command substitution that read its output.
+    local kernel
+    kernel="$(kubectl_wl get node "$1" -o jsonpath='{.status.nodeInfo.kernelVersion}' 2>/dev/null || true)"
+    [[ -n "$kernel" ]] || die "could not read the kernel version of ${1}"
+    printf '%s' "$kernel"
 }
 
 # workload_image SCENARIO — the first image in the scenario's workload manifest
@@ -117,12 +126,12 @@ profile_bytes() { du -sb "$PROFILE_VOLUME" 2>/dev/null | awk '{print $1}'; }
 
 start_forward() {
     local pod port
-    pod="$(kubectl -n "$OBSERVER_NAMESPACE" get pods \
+    pod="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
         -l app.kubernetes.io/name=linux-sched-otel-alloy \
         -o jsonpath='{.items[0].metadata.name}')"
     [[ -n "$pod" ]] || die "no Alloy pod; run 'make linux-sched-otel-apply' first"
     port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
-    kubectl -n "$OBSERVER_NAMESPACE" port-forward "pod/${pod}" "${port}:12345" \
+    kubectl_wl -n "$OBSERVER_NAMESPACE" port-forward "pod/${pod}" "${port}:12345" \
         >"${PROFILE_TMP}/forward.log" 2>&1 &
     FORWARD_PID=$!
     local deadline=$(( SECONDS + 90 ))
@@ -163,21 +172,21 @@ render_alloy() {
         -e "s|__IMAGE__|${image}|g" -e "s|__RUN_ID__|${run_id}|g" \
         -e "s|__PYROSCOPE_URL__|${PYROSCOPE_URL}|g" \
         "${SCRIPT_DIR}/k8s/alloy-config.alloy.tmpl" > "$rendered"
-    kubectl -n "$OBSERVER_NAMESPACE" create configmap linux-sched-otel-alloy \
+    kubectl_wl -n "$OBSERVER_NAMESPACE" create configmap linux-sched-otel-alloy \
         --from-file=config.alloy="$rendered" --dry-run=client -o yaml \
-        | kubectl -n "$OBSERVER_NAMESPACE" apply -f - >/dev/null
+        | kubectl_wl -n "$OBSERVER_NAMESPACE" apply -f - >/dev/null
 
     # The DaemonSet is pinned to this session's node, so no other worker profiles
     # under this session's labels.
     local daemonset="${PROFILE_TMP}/alloy-daemonset.yaml"
     sed -e "s|__TARGET_NODE__|${node}|g" \
         "${SCRIPT_DIR}/k8s/alloy-daemonset.yaml" > "$daemonset"
-    kubectl -n "$OBSERVER_NAMESPACE" apply -f "$daemonset" >/dev/null \
+    kubectl_wl -n "$OBSERVER_NAMESPACE" apply -f "$daemonset" >/dev/null \
         || die "could not pin the profiling DaemonSet to ${node}"
-    kubectl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
+    kubectl_wl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
         --timeout="${ALLOY_TIMEOUT_S}s" >/dev/null \
         || die "Alloy did not become ready on ${node}"
-    kubectl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
+    kubectl_wl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
         --timeout="${ALLOY_TIMEOUT_S}s" >/dev/null \
         || die "Alloy did not roll out with the session's labels"
 }
