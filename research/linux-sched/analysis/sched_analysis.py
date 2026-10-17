@@ -577,6 +577,8 @@ def summary_csv(result: AnalysisResult) -> str:
                 f"{v.bootstrap_low:.6f}",
                 f"{v.bootstrap_high:.6f}",
                 v.decision,
+                f"{v.effect:.2f}",
+                "yes" if v.descriptive else "no",
             ]
         )
     return buffer.getvalue()

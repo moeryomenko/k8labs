@@ -336,3 +336,16 @@ def test_summary_records_the_corrected_family() -> None:
     payload = summary_json(analyse(observations))
     assert '"primary_contrasts": 10' in payload
     assert "holm" in payload
+
+
+def test_summary_csv_rows_match_their_header() -> None:
+    # The header gained the band and the descriptive flag; a row shorter than the
+    # header is a report that silently loses two of its columns.
+    observations = [obs(f"b{i}", CONTROL_SCHEDULER, 100.0) for i in range(3)] + [
+        obs(f"b{i}", "bpfland", 120.0) for i in range(3)
+    ]
+    text = summary_csv(analyse(observations))
+    header, row = text.strip().splitlines()[:2]
+    assert len(header.split(",")) == len(row.split(","))
+    assert header.split(",")[-2:] == ["effect", "descriptive"]
+    assert row.split(",")[-2:] == ["0.05", "no"]
