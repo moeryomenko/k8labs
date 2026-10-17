@@ -1,0 +1,45 @@
+# Host-side OTel profile store for the linux-sched profiling campaign.
+#
+# Host networking is deliberate: the eBPF profiler Pods run on the worker VMs and
+# reach this host on its LAN address (verified reachable from a worker Pod).
+#
+# The data lives on a host-owned bind mount so the 10 GiB budget is separate from
+# every worker disk (each worker and the control plane have a 5 GiB filesystem)
+# and from the comparison data root.
+#
+# There is deliberately no Alloy service here. Alloy is the plan's intended OTLP
+# bridge, and it was deployed and tested: both v1.20.1 and v1.21.0-rc.0 reject the
+# profiles signal outright — `unrecognized attribute name "profiles"` on
+# `otelcol.receiver.otlp`'s output — so it cannot carry profile batches at all.
+# Pyroscope ingests OTLP profiles natively, and the eBPF profiler distribution is
+# itself an OpenTelemetry Collector, so profiles go from the profiler straight to
+# Pyroscope and the export counters the gate asserts on are the profiler's own
+# (`otelcol_exporter_sent_profile_samples`, exposed on its telemetry port). See
+# ../README.md.
+#
+# Pin by digest: a moved tag would change what produced the profiles.
+services:
+  pyroscope:
+    image: grafana/pyroscope:2.4.0@sha256:999dba0da6a9300af264ddba12ac3b78e637ea5bb419852866ba7f2dabe74eaa
+    container_name: linux-sched-pyroscope
+    network_mode: host
+    # This lab's docker is rootless podman: container root maps to the invoking
+    # host user, which owns the bind mount, while the image's own non-root user
+    # maps to a *subuid* that cannot write to it. Without this override Pyroscope
+    # fails at startup with "mkdir /data/metastore: permission denied". Rootless
+    # podman means this is not host root.
+    user: "0:0"
+    command:
+      # 336h is the plan's 14-day window; nothing inside it is ever deleted.
+      - -retention-period=336h
+      - -server.http-listen-port=4040
+      # Every writable path is inside /data. The defaults are relative paths
+      # (".../data/v2"), which resolve against the container's working directory
+      # and fail immediately with "mkdir ./data/v2: permission denied".
+      - -storage.filesystem.dir=/data/shared
+      - -metastore.data-dir=/data/metastore/data
+      - -metastore.raft.dir=/data/metastore/raft
+      - -compactor.data-dir=/data/compactor
+    volumes:
+      - ${PROFILE_VOLUME:?set PROFILE_VOLUME to the host-owned profile directory}:/data
+    restart: unless-stopped

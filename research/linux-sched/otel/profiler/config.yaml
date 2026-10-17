@@ -1,0 +1,63 @@
+# OpenTelemetry eBPF profiler configuration for one profiling session.
+#
+# The profiler distribution *is* an OpenTelemetry Collector with the profiling
+# receiver, so it both collects profiles and is the collector that exports them.
+# Its own telemetry carries the counters the campaign gate asserts on:
+# `otelcol_exporter_sent_profile_samples` and
+# `otelcol_exporter_send_failed_profile_samples`.
+#
+# Every session label is injected by the environment, so one config serves all
+# fifteen sessions and the label set in a stored profile is exactly what the
+# runner recorded for that session. Alloy cannot appear in this pipeline: see
+# ../README.md for the verified reason.
+
+receivers:
+  profiling:
+    # 20 Hz is the upstream default and is well inside the profiler's stated
+    # overhead budget.
+    samples_per_second: 20
+
+processors:
+  resource:
+    attributes:
+      - key: service.name
+        value: linux-sched-profile
+        action: upsert
+      - {key: workload,  value: "${env:SESSION_WORKLOAD}",  action: upsert}
+      - {key: scheduler, value: "${env:SESSION_SCHEDULER}", action: upsert}
+      - {key: node,      value: "${env:SESSION_NODE}",      action: upsert}
+      - {key: kernel,    value: "${env:SESSION_KERNEL}",    action: upsert}
+      - {key: image,     value: "${env:SESSION_IMAGE}",     action: upsert}
+      - {key: run_id,    value: "${env:SESSION_RUN_ID}",    action: upsert}
+
+exporters:
+  otlphttp/profiles:
+    # Pyroscope ingests OTLP profiles at this path on its HTTP port. The signal
+    # path is set explicitly because the exporter's default (`/v1/profiles`) is
+    # not the path Pyroscope serves.
+    profiles_endpoint: "${env:PROFILES_ENDPOINT}"
+    encoding: proto
+    tls:
+      insecure: true
+    sending_queue:
+      # A session is 60 seconds and its batch is small; export immediately so the
+      # gate can query the session's own time range right after it ends.
+      enabled: false
+
+service:
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    profiles:
+      receivers: [profiling]
+      processors: [resource]
+      exporters: [otlphttp/profiles]

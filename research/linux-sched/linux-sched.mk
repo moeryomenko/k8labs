@@ -179,13 +179,56 @@ linux-sched-observers-delete: ## Delete the observer DaemonSet
 linux-sched-observers-test: ## Validate the observer DaemonSet manifests offline
 	$(LINUX_SCHED_DIR)observers/apply.sh test
 
+# ---- OTel profiling campaign ----
+#
+# A separate campaign: it profiles all five workloads under all three arms to
+# explain the comparison's results, and it must never overlap a comparison block.
+# Pyroscope and its 10 GiB store are host-owned because no cluster node has room
+# for them; the profiling DaemonSet runs on the workers because that is where the
+# workloads are. See otel/README.md.
+
+LINUX_SCHED_OTEL_DIR := $(LINUX_SCHED_DIR)otel
+PROFILE_VOLUME ?= $(PROJECT_ROOT)/../profile-data/pyroscope
+PYROSCOPE_URL ?= http://127.0.0.1:4040
+
+.PHONY: linux-sched-otel-up
+linux-sched-otel-up: ## Start the host-side Pyroscope profile store
+	cd $(LINUX_SCHED_OTEL_DIR)/host && PROFILE_VOLUME=$(PROFILE_VOLUME) docker compose up -d
+	@echo "  Pyroscope: $(PYROSCOPE_URL) (volume $(PROFILE_VOLUME))"
+
+.PHONY: linux-sched-otel-apply
+linux-sched-otel-apply: ## Deploy the Alloy profiling DaemonSet on the research workers
+	kubectl apply -f $(LINUX_SCHED_OTEL_DIR)/k8s/alloy-daemonset.yaml
+	kubectl -n linux-sched rollout status daemonset/linux-sched-otel-alloy --timeout=300s
+
+.PHONY: linux-sched-otel-profiles
+linux-sched-otel-profiles: ## Run the fifteen labelled profiling sessions (never beside a comparison block)
+	PROFILE_VOLUME=$(PROFILE_VOLUME) PYROSCOPE_URL=$(PYROSCOPE_URL) \
+		K8LABS_RESEARCH_DATA_ROOT=$(K8LABS_RESEARCH_DATA_ROOT) \
+		$(LINUX_SCHED_OTEL_DIR)/profiles.sh
+
+.PHONY: linux-sched-otel-check
+linux-sched-otel-check: ## Verify the OTel campaign: queries, health, counters, volume, retention, stop threshold
+	PROFILE_VOLUME=$(PROFILE_VOLUME) PYROSCOPE_URL=$(PYROSCOPE_URL) \
+		K8LABS_RESEARCH_DATA_ROOT=$(K8LABS_RESEARCH_DATA_ROOT) \
+		$(LINUX_SCHED_OTEL_DIR)/check.sh
+
+.PHONY: linux-sched-otel-down
+linux-sched-otel-down: ## Remove the profiling DaemonSet and stop the host-side store
+	-kubectl -n linux-sched delete -f $(LINUX_SCHED_OTEL_DIR)/k8s/alloy-daemonset.yaml --ignore-not-found
+	-cd $(LINUX_SCHED_OTEL_DIR)/host && PROFILE_VOLUME=$(PROFILE_VOLUME) docker compose down
+
+.PHONY: linux-sched-otel-validate
+linux-sched-otel-validate: ## Validate the OTel manifests and configs offline
+	python3 $(LINUX_SCHED_DIR)otel/validate_campaign.py
+
 # ---- Test / clean ----
 
 .PHONY: linux-sched-test
 linux-sched-test: ## Run the linux-sched test suite (pytest + bats)
 	@set -e
 	@echo "Running linux-sched test suite..."
-	uv run pytest $(LINUX_SCHED_ANALYSIS_DIR)/tests/ $(LINUX_SCHED_EXPERIMENTS_DIR)/tests/ $(LINUX_SCHED_DIR)observers/tests/
+	uv run pytest $(LINUX_SCHED_ANALYSIS_DIR)/tests/ $(LINUX_SCHED_EXPERIMENTS_DIR)/tests/ $(LINUX_SCHED_DIR)observers/tests/ $(LINUX_SCHED_DIR)tests/ $(LINUX_SCHED_DIR)otel/tests/
 	@if command -v bats >/dev/null 2>&1; then bats $(LINUX_SCHED_TEST_DIR)/*.bats; else echo "  bats not installed; skipping shell tests"; fi
 
 .PHONY: linux-sched-clean

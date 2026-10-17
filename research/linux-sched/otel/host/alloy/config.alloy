@@ -1,0 +1,87 @@
+// Alloy: the OTel eBPF profiler and the Pyroscope writer, for one session.
+//
+// `pyroscope.ebpf` embeds grafana/opentelemetry-ebpf-profiler, a fork of
+// open-telemetry/opentelemetry-ebpf-profiler — the same OTel eBPF profiler the
+// campaign plan names — and writes profiles to Pyroscope in Pyroscope's own
+// format.
+//
+// Why not OTLP profiles through Alloy's OTLP receiver: it cannot carry them. Both
+// v1.20.1 and v1.21.0-rc.0 reject the signal outright with `unrecognized attribute
+// name "profiles"` on `otelcol.receiver.otlp`'s output, and the alternative — the
+// OTel profiler distribution exporting OTLP straight to Pyroscope — is rejected by
+// Pyroscope 2.4.0 in turn, with `invalid_argument: invalid labels '{=" ... }' with
+// error: invalid label name ''`: the profiler's 2026 profiles payload and this
+// Pyroscope disagree on the label set. Both were run and observed; see
+// ../README.md.
+//
+// Session labels come from the environment so one file serves all fifteen
+// sessions, and the runner reloads Alloy between them.
+
+discovery.process "host" {
+}
+
+discovery.relabel "session" {
+  targets = discovery.process.host.targets
+
+  // Every session carries the same label set the runner records in sessions.json.
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "service_name"
+    replacement   = "linux-sched-profile"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "workload"
+    replacement   = sys.env("SESSION_WORKLOAD")
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "scheduler"
+    replacement   = sys.env("SESSION_SCHEDULER")
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "node"
+    replacement   = sys.env("SESSION_NODE")
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "kernel"
+    replacement   = sys.env("SESSION_KERNEL")
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "image"
+    replacement   = sys.env("SESSION_IMAGE")
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "run_id"
+    replacement   = sys.env("SESSION_RUN_ID")
+  }
+}
+
+pyroscope.ebpf "session" {
+  targets    = discovery.relabel.session.output
+  forward_to = [pyroscope.write.backend.receiver]
+  sample_rate = 19
+}
+
+pyroscope.write "backend" {
+  endpoint {
+    url = sys.env("PYROSCOPE_URL")
+  }
+}

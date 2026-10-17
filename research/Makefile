@@ -7,6 +7,12 @@
 
 SHELL := /bin/bash
 .ONESHELL:
+# With .ONESHELL the whole recipe runs in one shell, and without -e only the
+# *last* command's status decides whether the target failed. Every earlier
+# failure — a metric that could not be computed, a query that errored — is then
+# reported as success, which is how a failed sample-size step let a run continue
+# to the next phase with no frozen counts.
+.SHELLFLAGS := -eu -o pipefail -c
 
 include $(wildcard */*.mk)
 

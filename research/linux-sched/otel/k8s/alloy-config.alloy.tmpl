@@ -1,0 +1,78 @@
+// Alloy on a worker: the OTel eBPF profiler plus the Pyroscope writer, for one
+// session. Rendered per session with the session's labels and applied as a
+// ConfigMap; the runner restarts the DaemonSet so the labels take effect.
+//
+// `pyroscope.ebpf` embeds grafana/opentelemetry-ebpf-profiler, a fork of
+// open-telemetry/opentelemetry-ebpf-profiler — the OTel eBPF profiler the plan
+// names — and writes profiles to Pyroscope in Pyroscope's own format. The
+// alternative, OTLP profiles through Alloy's OTLP receiver, cannot work: Alloy
+// rejects the profiles signal outright, and Pyroscope rejects the profiler
+// distribution's payload in turn. Both were run and observed; see ../README.md.
+
+discovery.process "node" {
+}
+
+discovery.relabel "session" {
+  targets = discovery.process.node.targets
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "service_name"
+    replacement   = "linux-sched-profile"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "workload"
+    replacement   = "__WORKLOAD__"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "scheduler"
+    replacement   = "__SCHEDULER__"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "node"
+    replacement   = "__NODE__"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "kernel"
+    replacement   = "__KERNEL__"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "image"
+    replacement   = "__IMAGE__"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = []
+    target_label  = "run_id"
+    replacement   = "__RUN_ID__"
+  }
+}
+
+pyroscope.ebpf "session" {
+  targets     = discovery.relabel.session.output
+  forward_to  = [pyroscope.write.backend.receiver]
+  sample_rate = 19
+}
+
+pyroscope.write "backend" {
+  endpoint {
+    url = "__PYROSCOPE_URL__"
+  }
+}
