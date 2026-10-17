@@ -392,6 +392,7 @@ cmd_run() {
             break
         fi
         local block_started; block_started="$(date -u +%s)"
+        seed=$(( LINUX_SCHED_PLAN_SEED + b ))
         local raw_dir="${phase_root}/${SCENARIO_NAME}/block-$(printf '%02d' "$b")"
         mkdir -p "$raw_dir"
         printf '{"scenario":"%s","block":%s,"phase":"%s","protocol":"%s","duration_s":%s,"warmup_s":%s,"seed":%s,"order":"%s"}\n' \
