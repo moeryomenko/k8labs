@@ -7,15 +7,13 @@
 # every worker disk (each worker and the control plane have a 5 GiB filesystem)
 # and from the comparison data root.
 #
-# There is deliberately no Alloy service here. Alloy is the plan's intended OTLP
-# bridge, and it was deployed and tested: both v1.20.1 and v1.21.0-rc.0 reject the
-# profiles signal outright — `unrecognized attribute name "profiles"` on
-# `otelcol.receiver.otlp`'s output — so it cannot carry profile batches at all.
-# Pyroscope ingests OTLP profiles natively, and the eBPF profiler distribution is
-# itself an OpenTelemetry Collector, so profiles go from the profiler straight to
-# Pyroscope and the export counters the gate asserts on are the profiler's own
-# (`otelcol_exporter_sent_profile_samples`, exposed on its telemetry port). See
-# ../README.md.
+# There is no Alloy service here: Alloy runs as a DaemonSet on the research
+# workers, because `pyroscope.ebpf` profiles the node it runs on and the workloads
+# are on the workers. It is the OTLP *variant* of Alloy that cannot be used at all
+# — both v1.20.1 and v1.21.0-rc.0 reject the profiles signal outright with
+# `unrecognized attribute name "profiles"` on `otelcol.receiver.otlp`'s output, so
+# profiles cannot travel over OTLP from here or anywhere else. See ../README.md.
+# Alloy writes to this Pyroscope instance at the host's LAN address.
 #
 # Pin by digest: a moved tag would change what produced the profiles.
 services:
