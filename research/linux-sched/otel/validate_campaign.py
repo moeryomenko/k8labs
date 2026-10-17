@@ -90,8 +90,17 @@ def validate(problems: Problems, root: Path = HERE, mk_path: Path = MK) -> None:
 
     # Only the research workers, and only pinned images.
     problems.check(
-        "linux-sched/research: observer" in daemonset,
-        "the DaemonSet must select the research workers",
+        "kubernetes.io/hostname: __TARGET_NODE__" in daemonset,
+        "the DaemonSet must be pinned to a rendered target node, not to every "
+        "research worker: other nodes would profile under the session's labels",
+    )
+    problems.check(
+        (root / "host" / "provision-volume.sh").exists(),
+        "the 10 GiB volume provisioning script must exist",
+    )
+    problems.check(
+        "PROFILE_SIZE_BYTES" in _read(root / "host" / "provision-volume.sh"),
+        "the volume script must verify the 10 GiB size, not just create a directory",
     )
     for name, text in (("DaemonSet", daemonset), ("compose", compose)):
         problems.check(

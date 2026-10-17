@@ -1,9 +1,10 @@
 # Alloy on the research workers: the OTel eBPF profiler, for the OTel campaign.
 #
-# One pod per worker, profiling that node's processes and writing to Pyroscope on
-# the host. The session's labels live in the ConfigMap, which the runner renders
-# per session and follows with a rollout, so a stored profile carries exactly the
-# labels sessions.json recorded for its session.
+# One pod, on the session's target worker, profiling that node's processes and
+# writing to Pyroscope on the host. The session's labels live in the ConfigMap and
+# the target in the node selector; the runner renders both per session and follows
+# with a rollout, so a stored profile carries exactly the labels sessions.json
+# recorded for it, and comes from the node it names.
 #
 # Least privilege on purpose: the plan forbids `privileged: true`, and the
 # component's documented capability set is enough (see
@@ -50,8 +51,11 @@ spec:
       # The profiler resolves symbols for processes on the node and needs to see
       # them all.
       hostPID: true
+      # Pinned to the session's target worker. Profiling every research worker at
+      # once would label one node's samples with another node's session, and would
+      # also put the profiler beside a comparison block on the load worker.
       nodeSelector:
-        linux-sched/research: observer
+        kubernetes.io/hostname: __TARGET_NODE__
       tolerations:
         - operator: Exists
       containers:

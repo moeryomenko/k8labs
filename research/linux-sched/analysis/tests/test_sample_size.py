@@ -104,13 +104,18 @@ def test_plan_matches_the_frozen_power_calculation() -> None:
         )
     )
     contrast = record["scenarios"][0]["contrasts"][0]
+    # This fixture is a throughput metric, so it keeps the 5% default; latency
+    # metrics use the approved 20%.
+    assert contrast["effect"] == pytest.approx(0.05)
     expected = required_n_paired(
         contrast["sd_log_ratio"],
-        practical_effect=record["practical_effect"],
+        practical_effect=contrast["effect"],
         alpha=record["alpha_per_contrast"],
         power=record["power"],
     )
     assert contrast["required_n"] == expected
+    # The conservative bound is reported alongside and is not the frozen count.
+    assert contrast["required_n_upper95"] >= contrast["required_n"]
 
 
 def test_plan_rejects_a_pilot_without_the_control_arm() -> None:

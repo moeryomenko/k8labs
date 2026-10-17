@@ -23,7 +23,7 @@ spec:
         - matrixprod
         - --verify
         - --timeout
-        - 180s
+        - 30s
         - --metrics-brief
       resources:
         requests:

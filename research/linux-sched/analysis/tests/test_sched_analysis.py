@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 from pathlib import Path
@@ -107,14 +108,73 @@ def test_higher_is_better_orientation() -> None:
 
 
 def test_lower_is_better_metric_is_inverted() -> None:
+    # A 25% latency reduction, past the approved 20% band for this metric.
     observations = [
         obs(f"b{i}", CONTROL_SCHEDULER, 100.0, metric="latency_p99_ms")
         for i in range(3)
-    ] + [obs(f"b{i}", "lavd", 90.0, metric="latency_p99_ms") for i in range(3)]
+    ] + [obs(f"b{i}", "lavd", 75.0, metric="latency_p99_ms") for i in range(3)]
     verdict = analyse(observations).verdicts[0]
-    # A 10% latency reduction must read as a geometric-mean improvement > 1.
-    assert verdict.geometric_mean_ratio == pytest.approx(1.0 / 0.9, abs=1e-6)
+    assert verdict.geometric_mean_ratio == pytest.approx(1.0 / 0.75, abs=1e-6)
     assert verdict.decision == "improvement"
+    assert verdict.effect == pytest.approx(0.20)
+
+
+def test_a_latency_change_under_the_metric_band_is_not_an_improvement() -> None:
+    # 15% better: the 5% throughput band would have called this an improvement,
+    # the 20% latency band must not. With a consistent interval it is instead
+    # `equivalent`, which is the honest reading — the study resolves 20% on this
+    # metric, so a 15% change is inside the band it treats as no meaningful
+    # difference. What matters is that it is not reported as an improvement.
+    observations = [
+        obs(f"b{i}", CONTROL_SCHEDULER, 100.0, metric="latency_p99_ms")
+        for i in range(3)
+    ] + [obs(f"b{i}", "lavd", 85.0, metric="latency_p99_ms") for i in range(3)]
+    verdict = analyse(observations).verdicts[0]
+    assert verdict.decision == "equivalent"
+    assert verdict.decision != "improvement"
+    assert verdict.effect == pytest.approx(0.20)
+
+
+def test_throughput_keeps_the_five_percent_band() -> None:
+    observations = [obs(f"b{i}", CONTROL_SCHEDULER, 100.0) for i in range(3)] + [
+        obs(f"b{i}", "bpfland", 112.0) for i in range(3)
+    ]
+    verdict = analyse(observations).verdicts[0]
+    assert verdict.effect == pytest.approx(0.05)
+    assert verdict.decision == "improvement"
+
+
+def test_mixed_is_reported_descriptively_but_stays_in_the_family() -> None:
+    # Mixed is measured and reported, but no verdict is issued: a large, clean
+    # difference must still not be classified, and its slots stay inside the
+    # predeclared family size rather than weakening the correction.
+    observations = [
+        obs(
+            f"b{i}",
+            CONTROL_SCHEDULER,
+            100.0,
+            metric="latency_p99_ms",
+            workload="mixed-http-ffmpeg",
+        )
+        for i in range(3)
+    ] + [
+        obs(
+            f"b{i}",
+            "lavd",
+            40.0,
+            metric="latency_p99_ms",
+            workload="mixed-http-ffmpeg",
+        )
+        for i in range(3)
+    ]
+    verdict = analyse(observations).verdicts[0]
+    assert verdict.decision == "descriptive"
+    assert verdict.descriptive is True
+    assert verdict.effect == pytest.approx(0.20)
+    payload = json.loads(summary_json(analyse(observations)))
+    assert "mixed-http-ffmpeg" in payload["descriptive_workloads"]
+    assert payload["primary_contrasts"] == 10
+    assert payload["practical_effect_by_metric"] == {"latency_p99_ms": 0.20}
 
 
 def test_explicit_direction_column_overrides_metric_name() -> None:

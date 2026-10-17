@@ -49,6 +49,13 @@ resolve_targets() {
     local workers ranked node free
     workers="$(ready_workers)"
     [[ -n "$workers" ]] || die "no Ready worker nodes found"
+    if [[ -n "${LINUX_SCHED_TARGET_NODE:-}" ]]; then
+        printf '%s\n' "$workers" | grep -qx "$LINUX_SCHED_TARGET_NODE" \
+            || die "pinned target ${LINUX_SCHED_TARGET_NODE} is not a Ready observer worker"
+        TARGET_NODE="$LINUX_SCHED_TARGET_NODE"
+        LOAD_NODE="${LINUX_SCHED_LOAD_NODE:-}"
+        return 0
+    fi
     ranked=""
     while IFS= read -r node; do
         [[ -n "$node" ]] || continue
@@ -159,7 +166,17 @@ render_alloy() {
     kubectl -n "$OBSERVER_NAMESPACE" create configmap linux-sched-otel-alloy \
         --from-file=config.alloy="$rendered" --dry-run=client -o yaml \
         | kubectl -n "$OBSERVER_NAMESPACE" apply -f - >/dev/null
-    kubectl -n "$OBSERVER_NAMESPACE" rollout restart daemonset/linux-sched-otel-alloy >/dev/null
+
+    # The DaemonSet is pinned to this session's node, so no other worker profiles
+    # under this session's labels.
+    local daemonset="${PROFILE_TMP}/alloy-daemonset.yaml"
+    sed -e "s|__TARGET_NODE__|${node}|g" \
+        "${SCRIPT_DIR}/k8s/alloy-daemonset.yaml" > "$daemonset"
+    kubectl -n "$OBSERVER_NAMESPACE" apply -f "$daemonset" >/dev/null \
+        || die "could not pin the profiling DaemonSet to ${node}"
+    kubectl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
+        --timeout="${ALLOY_TIMEOUT_S}s" >/dev/null \
+        || die "Alloy did not become ready on ${node}"
     kubectl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
         --timeout="${ALLOY_TIMEOUT_S}s" >/dev/null \
         || die "Alloy did not roll out with the session's labels"

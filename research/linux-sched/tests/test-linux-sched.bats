@@ -258,3 +258,13 @@ setup() {
         "${SERIES_DIR}/linux-sched.mk"
     [ "$status" -eq 0 ]
 }
+
+@test "the runner can pin one fixed target for the whole study" {
+    # Re-ranking per invocation would move the measured node between phases.
+    run grep -n 'LINUX_SCHED_TARGET_NODE' "${SERIES_DIR}/experiments/run-block.sh"
+    [ "$status" -eq 0 ]
+    run grep -n 'pinned target' "${SERIES_DIR}/experiments/run-block.sh"
+    [ "$status" -eq 0 ]
+    run grep -n 'LINUX_SCHED_TARGET_NODE' "${SERIES_DIR}/otel/profiles.sh"
+    [ "$status" -eq 0 ]
+}

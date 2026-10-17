@@ -33,20 +33,45 @@ from sched_analysis import (  # noqa: E402
     DEFAULT_ALPHA,
     DEFAULT_POWER,
     MIN_BLOCKS_FOR_VERDICT,
-    PRACTICAL_EFFECT,
+    PRACTICAL_EFFECT_BY_METRIC,
     PRIMARY_CONTRASTS,
     _is_lower_better,
+    _normal_ppf,
     _oriented_log_ratio,
+    is_descriptive,
+    practical_effect,
     read_blocks,
     required_n_paired,
 )
 
 BALANCE = 3
 
+
+def _chi2_lower(p: float, df: int) -> float:
+    """Lower quantile of the chi-square distribution (Wilson-Hilferty).
+
+    Needed for the upper confidence bound on the pilot's variance. The
+    approximation is conservative at the small degrees of freedom a short pilot
+    has, which is the safe direction for a planning bound.
+    """
+
+    z = _normal_ppf(p)
+    term = 1.0 - 2.0 / (9.0 * df) + z * math.sqrt(2.0 / (9.0 * df))
+    return df * term**3
+
+
+def sd_upper_bound(sd: float, n: int, p: float = 0.05) -> float:
+    """One-sided (1 - p) upper confidence bound on a standard deviation."""
+
+    if n < 2 or sd <= 0.0:
+        return sd
+    df = n - 1
+    return sd * math.sqrt(df / _chi2_lower(p, df))
+
 # The minimum paired blocks from which a sample standard deviation can be
 # estimated at all. Deliberately not the confirmatory verdict floor: the pilot
 # exists to produce variance, not verdicts.
-MIN_PILOT_PAIRED_BLOCKS = 2
+MIN_PILOT_PAIRED_BLOCKS = 3
 
 # The protocol's confirmatory floor: "take the maximum for the workload, floor at
 # five, then round up to a multiple of three". It is independent of
@@ -100,9 +125,11 @@ def plan(observations: list) -> dict:
                 for b in shared
             ]
             sd = statistics.stdev(logs)
+            upper = sd_upper_bound(sd, len(shared))
+            effect = practical_effect(metric)
             required = required_n_paired(
                 sd,
-                practical_effect=PRACTICAL_EFFECT,
+                practical_effect=effect,
                 alpha=DEFAULT_ALPHA / PRIMARY_CONTRASTS,
                 power=DEFAULT_POWER,
             )
@@ -110,10 +137,22 @@ def plan(observations: list) -> dict:
                 {
                     "scheduler": scheduler,
                     "paired_blocks": len(shared),
+                    "effect": effect,
                     "sd_log_ratio": round(sd, 6),
                     "required_n": required,
+                    # Reported, not used for the freeze: with three paired blocks
+                    # the point estimate can understate the spread, and a study
+                    # planned on it alone would be underpowered without saying so.
+                    "sd_upper95_log_ratio": round(upper, 6),
+                    "required_n_upper95": required_n_paired(
+                        upper,
+                        practical_effect=effect,
+                        alpha=DEFAULT_ALPHA / PRIMARY_CONTRASTS,
+                        power=DEFAULT_POWER,
+                    ),
                 }
             )
+        descriptive = is_descriptive(workload)
         raw_required = max(c["required_n"] for c in contrasts)
         floored = max(raw_required, CONFIRMATORY_FLOOR_BLOCKS)
         frozen = round_up_to_multiple(floored, BALANCE)
@@ -121,10 +160,16 @@ def plan(observations: list) -> dict:
             {
                 "scenario": workload,
                 "metric": metric,
+                "descriptive": descriptive,
                 "contrasts": contrasts,
                 "required_n_raw": raw_required,
                 "required_n_floored": floored,
-                "confirmatory_blocks": frozen,
+                # A descriptive workload gets no confirmatory count: it is
+                # measured and reported, but nothing is frozen for it.
+                "confirmatory_blocks": None if descriptive else frozen,
+                "confirmatory_blocks_upper95": None if descriptive else round_up_to_multiple(
+                    max(c["required_n_upper95"] for c in contrasts), BALANCE
+                ),
                 "balanced_multiple": BALANCE,
             }
         )
@@ -132,14 +177,13 @@ def plan(observations: list) -> dict:
     return {
         "schema_version": 1,
         "control_scheduler": CONTROL_SCHEDULER,
-        "practical_effect": PRACTICAL_EFFECT,
+        "practical_effect_by_metric": dict(PRACTICAL_EFFECT_BY_METRIC),
         "power": DEFAULT_POWER,
         "alpha": DEFAULT_ALPHA,
         "primary_contrasts": PRIMARY_CONTRASTS,
         "alpha_per_contrast": DEFAULT_ALPHA / PRIMARY_CONTRASTS,
         "min_blocks": CONFIRMATORY_FLOOR_BLOCKS,
         "balance_multiple": BALANCE,
-        "delta_log": round(math.log(1.0 + PRACTICAL_EFFECT), 6),
         "scenarios": scenarios,
     }
 
@@ -156,10 +200,15 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(record, indent=2, sort_keys=False) + "\n", encoding="utf-8"
     )
     for scenario in record["scenarios"]:
+        count = scenario["confirmatory_blocks"]
+        upper = scenario["confirmatory_blocks_upper95"]
+        if scenario["descriptive"]:
+            print(f"{scenario['scenario']}: descriptive, no confirmatory count")
+            continue
         print(
-            f"{scenario['scenario']}: {scenario['confirmatory_blocks']} blocks "
+            f"{scenario['scenario']}: {count} blocks "
             f"(raw {scenario['required_n_raw']}, floor {CONFIRMATORY_FLOOR_BLOCKS}, "
-            f"balanced to {BALANCE})"
+            f"balanced to {BALANCE}; {upper} at the 95% variance bound)"
         )
     print(f"wrote {args.output}")
     return 0

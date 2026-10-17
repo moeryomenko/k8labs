@@ -28,7 +28,10 @@ LINUX_SCHED_TEST_DIR := $(LINUX_SCHED_DIR)tests
 
 # Host-owned data root, deliberately outside the Git worktree. Override with
 # K8LABS_RESEARCH_DATA_ROOT to relocate every series' experiment data.
-LINUX_SCHED_DATA_ROOT ?= $(if $(K8LABS_RESEARCH_DATA_ROOT),$(K8LABS_RESEARCH_DATA_ROOT)/linux-sched,$(PROJECT_ROOT)/build/research/linux-sched)
+# The data directory name carries the measurement protocol: a 180-second-window
+# campaign and a 30-second one are different studies and must not share a root.
+LINUX_SCHED_DATA_DIR ?= linux-sched
+LINUX_SCHED_DATA_ROOT ?= $(if $(K8LABS_RESEARCH_DATA_ROOT),$(K8LABS_RESEARCH_DATA_ROOT)/$(LINUX_SCHED_DATA_DIR),$(PROJECT_ROOT)/build/research/$(LINUX_SCHED_DATA_DIR))
 LINUX_SCHED_ANALYSIS_OUTPUT ?= $(LINUX_SCHED_DATA_ROOT)/analysis
 # Analysis and plots are built from confirmatory results only. Pilot and smoke
 # data must never reach a verdict, and after the phases were separated those live
@@ -193,12 +196,20 @@ PYROSCOPE_URL ?= http://127.0.0.1:4040
 
 .PHONY: linux-sched-otel-up
 linux-sched-otel-up: ## Start the host-side Pyroscope profile store
+	# A directory on a 745 GiB filesystem is not the plan's 10 GiB volume, and the
+	# 9 GiB stop threshold only means something against a filesystem that fills.
+	PROFILE_VOLUME=$(PROFILE_VOLUME) $(LINUX_SCHED_OTEL_DIR)/host/provision-volume.sh
 	cd $(LINUX_SCHED_OTEL_DIR)/host && PROFILE_VOLUME=$(PROFILE_VOLUME) docker compose up -d
 	@echo "  Pyroscope: $(PYROSCOPE_URL) (volume $(PROFILE_VOLUME))"
 
 .PHONY: linux-sched-otel-apply
 linux-sched-otel-apply: ## Deploy the Alloy profiling DaemonSet on the research workers
-	kubectl apply -f $(LINUX_SCHED_OTEL_DIR)/k8s/alloy-daemonset.yaml
+	@if [ -z "$(LINUX_SCHED_TARGET_NODE)" ]; then \
+		echo "ERROR: set LINUX_SCHED_TARGET_NODE to the fixed target worker; profiling every worker would mislabel samples" >&2; \
+		exit 1; \
+	fi
+	sed -e "s|__TARGET_NODE__|$(LINUX_SCHED_TARGET_NODE)|g" $(LINUX_SCHED_OTEL_DIR)/k8s/alloy-daemonset.yaml \
+		| kubectl apply -f -
 	kubectl -n linux-sched rollout status daemonset/linux-sched-otel-alloy --timeout=300s
 
 .PHONY: linux-sched-otel-profiles

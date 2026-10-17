@@ -124,6 +124,22 @@ resolve_hosts() {
     workers="$(ready_workers)"
     [[ -n "$workers" ]] || die "no Ready worker nodes found"
 
+    # A pinned assignment wins: the study must measure one fixed target, and a
+    # per-invocation re-ranking would silently move it between calibrations,
+    # pilots and confirmatory blocks.
+    if [[ -n "${LINUX_SCHED_TARGET_NODE:-}" ]]; then
+        printf '%s\n' "$workers" | grep -qx "$LINUX_SCHED_TARGET_NODE" \
+            || die "pinned target ${LINUX_SCHED_TARGET_NODE} is not a Ready observer worker"
+        TARGET_NODE="$LINUX_SCHED_TARGET_NODE"
+        if [[ -n "${LINUX_SCHED_LOAD_NODE:-}" ]]; then
+            LOAD_NODE="$LINUX_SCHED_LOAD_NODE"
+        else
+            LOAD_NODE="$(printf '%s\n' "$workers" | grep -vx "$TARGET_NODE" | head -1)"
+        fi
+        log "target=${TARGET_NODE} load=${LOAD_NODE:-none} (pinned)"
+        return 0
+    fi
+
     local node free best_node="" best_free=-1 ordered=""
     local -a ranked=() ordered_nodes=()
     while IFS= read -r node; do
@@ -299,6 +315,32 @@ cmd_plan() {
     print_plan "$scenario" "$mode"
 }
 
+# write_run_summary PHASE_ROOT MODE FIRST LAST COMPLETED CAP STARTED CAP_HIT SECONDS...
+#
+# Records the run's shape, above all whether the wall-clock cap cut it short:
+# without it a truncated run and a complete one leave the same blocks.csv behind.
+write_run_summary() {
+    local phase_root="$1" mode="$2" first_block="$3" last_block="$4" \
+        completed="$5" cap_s="$6" started_at="$7" cap_hit="$8"
+    shift 8
+    local out="${phase_root}/run-summary-${SCENARIO_NAME}.json"
+    local seconds_csv="" seconds
+    for seconds in "$@"; do
+        seconds_csv+="${seconds},";
+    done
+    seconds_csv="${seconds_csv%,}"
+    local cap_flag=()
+    (( cap_hit )) && cap_flag=(--cap-reached)
+    python3 "${LINUX_SCHED_ANALYSIS_DIR}/run_summary.py" \
+        --out "$out" --protocol "$LINUX_SCHED_PROTOCOL_VERSION" --phase "$mode" \
+        --scenario "$SCENARIO_NAME" --first "$first_block" --last "$last_block" \
+        --completed "$completed" --cap-s "$cap_s" \
+        --elapsed-s "$(( $(date -u +%s) - started_at ))" "${cap_flag[@]}" \
+        --duration-s "$DURATION_S" --warmup-s "${WARMUP_S:-0}" \
+        --block-seconds "$seconds_csv" || die "could not write the run summary"
+    log "run summary: ${out}"
+}
+
 cmd_run() {
     local scenario="$1" mode="$2" dir="$3" data_root="$4"
     load_scenario "$dir" "$scenario"
@@ -333,23 +375,52 @@ cmd_run() {
         log "${SCENARIO_NAME}: blocks 1..$(( first_block - 1 )) already recorded; running ${first_block}..${last_block}"
     fi
 
+    # Time is the stopping rule, not the data. Recorded with the run so a short
+    # run is never mistaken for a complete one.
+    local cap_s="$LINUX_SCHED_WALL_CLOCK_CAP_S"
+    local started_at; started_at="$(date -u +%s)"
+    local estimate_s="${LINUX_SCHED_BLOCK_ESTIMATE_S:-600}"
+    local observed=()
+    local completed=0 cap_hit=0
+
     local b arm seed
     for (( b = first_block; b <= last_block; b++ )); do
-        seed=$(( LINUX_SCHED_PLAN_SEED + b ))
+        local elapsed=$(( $(date -u +%s) - started_at ))
+        if ! within_wall_clock_cap "$elapsed" "$estimate_s" "$cap_s"; then
+            log "wall-clock cap: ${elapsed}s elapsed, ~${estimate_s}s per block, cap ${cap_s}s; not starting block ${b}"
+            cap_hit=1
+            break
+        fi
+        local block_started; block_started="$(date -u +%s)"
         local raw_dir="${phase_root}/${SCENARIO_NAME}/block-$(printf '%02d' "$b")"
         mkdir -p "$raw_dir"
-        printf '{"scenario":"%s","block":%s,"phase":"%s","seed":%s,"order":"%s"}\n' \
-            "$SCENARIO_NAME" "$b" "$mode" "$seed" \
+        printf '{"scenario":"%s","block":%s,"phase":"%s","protocol":"%s","duration_s":%s,"warmup_s":%s,"seed":%s,"order":"%s"}\n' \
+            "$SCENARIO_NAME" "$b" "$mode" "$LINUX_SCHED_PROTOCOL_VERSION" \
+            "$DURATION_S" "${WARMUP_S:-0}" "$seed" \
             "$(balanced_block_order "$b" | tr '\n' ' ')" > "${raw_dir}/metadata.json"
         # IFS excludes the space, so the arm order must be split explicitly.
         mapfile -t arms < <(balanced_block_order "$b")
         for arm in "${arms[@]}"; do
             run_block "$SCENARIO_NAME" "$arm" "$b" "$raw_dir"
         done
-        log "block ${b} complete; cooldown ${LINUX_SCHED_COOLDOWN_S}s"
+        completed=$(( completed + 1 ))
+        local block_seconds=$(( $(date -u +%s) - block_started ))
+        observed+=( "$block_seconds" )
+        # Estimate the next block from what this run has actually taken.
+        if (( ${#observed[@]} > 0 )); then
+            estimate_s=$(( (estimate_s + block_seconds) / 2 ))
+        fi
+        log "block ${b} complete in ${block_seconds}s; cooldown ${LINUX_SCHED_COOLDOWN_S}s"
         sleep "$LINUX_SCHED_COOLDOWN_S"
     done
-    log "all ${blocks} blocks complete for ${SCENARIO_NAME}; blocks.csv: ${BLOCKS_CSV}"
+
+    write_run_summary "$phase_root" "$mode" "$first_block" "$last_block" \
+        "$completed" "$cap_s" "$started_at" "$cap_hit" "${observed[@]}"
+    if (( cap_hit )); then
+        log "${SCENARIO_NAME}: stopped at the ${cap_s}s wall-clock cap after ${completed} block(s); undecided contrasts are inconclusive"
+    else
+        log "all ${blocks} requested blocks complete for ${SCENARIO_NAME}; blocks.csv: ${BLOCKS_CSV}"
+    fi
 }
 
 cmd_overhead() {

@@ -29,7 +29,7 @@ LINUX_SCHED_PLAN_SEED="${LINUX_SCHED_PLAN_SEED:-20261015}"
 # Minimum samples frozen by the plan.
 LINUX_SCHED_MIN_BLOCKS="${LINUX_SCHED_MIN_BLOCKS:-5}"
 LINUX_SCHED_PILOT_BLOCKS="${LINUX_SCHED_PILOT_BLOCKS:-3}"
-LINUX_SCHED_COOLDOWN_S="${LINUX_SCHED_COOLDOWN_S:-60}"
+LINUX_SCHED_COOLDOWN_S="${LINUX_SCHED_COOLDOWN_S:-15}"
 LINUX_SCHED_QUIESCE_PCT="${LINUX_SCHED_QUIESCE_PCT:-10}"
 LINUX_SCHED_QUIESCE_HOLD_S="${LINUX_SCHED_QUIESCE_HOLD_S:-30}"
 
@@ -89,6 +89,16 @@ LINUX_SCHED_WORKLOAD_STORAGE_MIB="${LINUX_SCHED_WORKLOAD_STORAGE_MIB:-64}"
 # Headroom held back on top of the kubelet eviction threshold.
 LINUX_SCHED_DISK_RESERVE_MIB="${LINUX_SCHED_DISK_RESERVE_MIB:-64}"
 LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
+
+# Wall-clock ceiling for one confirmatory run, in seconds. The stopping rule is
+# time, not the data: it is independent of the results, so the frozen decision
+# rule needs no alpha adjustment, and a run that hits the ceiling reports whatever
+# the frozen rule can decide and calls the rest inconclusive rather than complete.
+LINUX_SCHED_WALL_CLOCK_CAP_S="${LINUX_SCHED_WALL_CLOCK_CAP_S:-14400}"
+
+# Names the measurement protocol a block belongs to, so data from an earlier
+# window length is never pooled with data from this one.
+LINUX_SCHED_PROTOCOL_VERSION="${LINUX_SCHED_PROTOCOL_VERSION:-v2}"
 
 OBSERVER_NAMESPACE="${OBSERVER_NAMESPACE:-linux-sched}"
 
@@ -263,6 +273,17 @@ next_block_id() {
     local csv="$1"
     [[ -s "$csv" ]] || { echo 1; return 0; }
     awk -F, 'NR > 1 && $1+0 > m { m = $1+0 } END { print m+1 }' "$csv"
+}
+
+# within_wall_clock_cap ELAPSED_S ESTIMATE_S CAP_S — true when another block fits.
+#
+# Checked before a block starts, against an estimate of how long one takes, so the
+# run cannot be cut off inside a block: a partial block would be discarded and its
+# arms wasted.
+within_wall_clock_cap() {
+    local elapsed="$1" estimate="$2" cap="$3"
+    (( cap <= 0 )) && return 0
+    (( elapsed + estimate <= cap ))
 }
 
 # seeded_permutation SEED N — print a deterministic balanced permutation of the
