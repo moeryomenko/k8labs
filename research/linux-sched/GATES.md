@@ -649,6 +649,17 @@ ephemeral use is the Postgres scale-2 database at about 36 MB. The spool cap
 are derived from those figures rather than guessed, because the gate below
 decides whether the study can run at all on this hardware.
 
+**The images, not the samples, are the binding constraint.** Once every
+scenario's image is resident, a 5 GiB worker holds about 975 MB free: the OS, the
+observer's toolchain and roughly 830 MB of workload images account for the rest.
+The gate therefore cannot be set to demand unallocated space the node does not
+have. Its purpose is narrower and is preserved: keep a sample's *measured*
+transient use — a 26-33 MB spool plus up to 36 MB of workload ephemeral storage —
+away from the 789 MB eviction threshold. The gate is now the threshold plus a
+64 MiB spool cap and a 64 MiB workload allowance, 923,320,556 B, which leaves
+about 2.7x the measured transient need in hand. Runs on these nodes are bounded by
+image residency, and the report has to say so.
+
 **Free-space gate.** A sample refuses to start unless the target worker has at
 least the kubelet eviction threshold (789102828 B) plus the spool cap, the
 workload allowance and a 64 MiB reserve — 1,057,538,284 B in total. It has been
