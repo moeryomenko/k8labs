@@ -331,7 +331,7 @@ write_run_summary() {
     seconds_csv="${seconds_csv%,}"
     local cap_flag=()
     (( cap_hit )) && cap_flag=(--cap-reached)
-    python3 "${LINUX_SCHED_ANALYSIS_DIR}/run_summary.py" \
+    python3 "${SCRIPT_DIR}/../analysis/run_summary.py" \
         --out "$out" --protocol "$LINUX_SCHED_PROTOCOL_VERSION" --phase "$mode" \
         --scenario "$SCENARIO_NAME" --first "$first_block" --last "$last_block" \
         --completed "$completed" --cap-s "$cap_s" \

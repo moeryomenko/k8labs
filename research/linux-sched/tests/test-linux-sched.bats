@@ -268,3 +268,18 @@ setup() {
     run grep -n 'LINUX_SCHED_TARGET_NODE' "${SERIES_DIR}/otel/profiles.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "shell scripts never reference variables only the makefile defines" {
+    # Regression: the run summary used ${LINUX_SCHED_ANALYSIS_DIR}, which exists in
+    # the makefile but never in the runner's environment, so `set -u` aborted the
+    # run after every arm had completed.
+    local makefile_only="LINUX_SCHED_ANALYSIS_DIR LINUX_SCHED_CONFIGS_DIR LINUX_SCHED_DATA_ROOT LINUX_SCHED_ANALYSIS_OUTPUT LINUX_SCHED_CONFIRMATORY_DIR LINUX_SCHED_OTEL_DIR LINUX_SCHED_TEST_DIR LINUX_SCHED_RUNNER"
+    local name
+    for name in $makefile_only; do
+        run grep -rn "\${${name}" "${SERIES_DIR}/experiments" "${SERIES_DIR}/capture" "${SERIES_DIR}/otel" --include='*.sh'
+        if [ "$status" -eq 0 ]; then
+            echo "referenced but not defined for the runner: $name" >&2
+            return 1
+        fi
+    done
+}
