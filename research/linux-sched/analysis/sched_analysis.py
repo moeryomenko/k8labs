@@ -365,12 +365,19 @@ def holm_decisions(comparisons: list[dict], alpha: float = DEFAULT_ALPHA) -> lis
     if not comparisons:
         return []
     decisions = [
-        "descriptive" if c.get("descriptive") else "inconclusive" for c in comparisons
+        "incomplete"
+        if c.get("incomplete")
+        else ("descriptive" if c.get("descriptive") else "inconclusive")
+        for c in comparisons
     ]
-    # Descriptive contrasts are reported but not tested: they must not consume a
-    # step-down position another contrast could have used, while the family size
-    # stays the predeclared one.
-    tested = [i for i, c in enumerate(comparisons) if not c.get("descriptive")]
+    # Descriptive and incomplete contrasts are reported but not tested: they must
+    # not consume a step-down position another contrast could have used, while the
+    # family size stays the predeclared one.
+    tested = [
+        i
+        for i, c in enumerate(comparisons)
+        if not c.get("descriptive") and not c.get("incomplete")
+    ]
     if not tested:
         return decisions
 
@@ -403,6 +410,7 @@ def holm_decisions(comparisons: list[dict], alpha: float = DEFAULT_ALPHA) -> lis
 
 def analyse(
     observations: list[Observation],
+    required_blocks: dict[tuple[str, str], int] | None = None,
     alpha: float = DEFAULT_ALPHA,
     bootstrap_resamples: int = BOOTSTRAP_RESAMPLES,
     bootstrap_seed: int = BOOTSTRAP_SEED,
@@ -415,6 +423,7 @@ def analyse(
     """
 
     result = AnalysisResult()
+    required = required_blocks or {}
     grouped: dict[tuple[str, str, str | None], dict[str, dict[str, float]]] = {}
     for obs in observations:
         key = (obs.workload, obs.metric, obs.direction)
@@ -463,6 +472,28 @@ def analyse(
                 for b in shared
             ]
             n = len(logs)
+            # A scenario the wall-clock cap left short of its frozen count is not
+            # underpowered-but-complete: it is unfinished, and saying so is the
+            # difference between "no effect" and "no evidence".
+            wanted = required.get((workload, metric))
+            if wanted is not None and n < wanted:
+                result.verdicts.append(
+                    Verdict(
+                        workload=workload,
+                        metric=metric,
+                        scheduler=scheduler,
+                        blocks=n,
+                        geometric_mean_ratio=math.exp(statistics.fmean(logs)),
+                        ci_low=float("nan"),
+                        ci_high=float("nan"),
+                        bootstrap_low=float("nan"),
+                        bootstrap_high=float("nan"),
+                        decision="incomplete",
+                        effect=practical_effect(metric),
+                        descriptive=is_descriptive(workload),
+                    )
+                )
+                continue
             df = n - 1
             mean = statistics.fmean(logs)
             sd = statistics.stdev(logs)
@@ -510,6 +541,7 @@ def analyse(
                     "t_upper": _t(mean - band_high),
                     "effect": effect,
                     "descriptive": is_descriptive(workload),
+                    "incomplete": False,
                 }
             )
             boot.append(
@@ -625,10 +657,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blocks", required=True, help="Path to blocks.csv")
     parser.add_argument("--output-dir", required=True, help="Output directory")
+    parser.add_argument(
+        "--sample-size",
+        type=Path,
+        default=None,
+        help="Frozen sample-size record; a scenario short of its count is "
+        "incomplete rather than a verdict. Defaults to the record beside the "
+        "confirmatory blocks.",
+    )
     args = parser.parse_args(argv)
 
     observations = read_blocks(Path(args.blocks))
-    result = analyse(observations)
+    sample_size = args.sample_size
+    if sample_size is None:
+        beside = Path(args.blocks).resolve().parent.parent / "sample-size.json"
+        sample_size = beside if beside.is_file() else None
+
+    required: dict[tuple[str, str], int] = {}
+    if sample_size is not None and Path(sample_size).is_file():
+        record = json.loads(Path(sample_size).read_text(encoding="utf-8"))
+        for entry in record.get("scenarios", []):
+            frozen = entry.get("confirmatory_blocks")
+            if frozen:
+                required[(entry["scenario"], entry["metric"])] = int(frozen)
+        print(f"frozen counts: {sample_size} ({len(required)} scenario(s))")
+
+    result = analyse(observations, required_blocks=required)
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.csv").write_text(summary_csv(result), encoding="utf-8")

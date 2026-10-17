@@ -381,7 +381,7 @@ cmd_run() {
     local started_at; started_at="$(date -u +%s)"
     local estimate_s="${LINUX_SCHED_BLOCK_ESTIMATE_S:-600}"
     local observed=()
-    local completed=0 cap_hit=0
+    local completed=0 cap_hit=0 worst_s=0
 
     local b arm seed
     for (( b = first_block; b <= last_block; b++ )); do
@@ -407,10 +407,11 @@ cmd_run() {
         completed=$(( completed + 1 ))
         local block_seconds=$(( $(date -u +%s) - block_started ))
         observed+=( "$block_seconds" )
-        # Estimate the next block from what this run has actually taken.
-        if (( ${#observed[@]} > 0 )); then
-            estimate_s=$(( (estimate_s + block_seconds) / 2 ))
-        fi
+        # Charge the next block the slowest block so far plus the cleanup
+        # allowance, so admission errs towards not starting work that cannot
+        # finish: a block cut off by the cap wastes its arms and cannot count.
+        (( block_seconds > worst_s )) && worst_s="$block_seconds"
+        estimate_s=$(( worst_s + LINUX_SCHED_CLEANUP_ALLOWANCE_S ))
         log "block ${b} complete in ${block_seconds}s; cooldown ${LINUX_SCHED_COOLDOWN_S}s"
         sleep "$LINUX_SCHED_COOLDOWN_S"
     done

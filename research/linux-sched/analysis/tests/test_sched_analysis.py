@@ -349,3 +349,23 @@ def test_summary_csv_rows_match_their_header() -> None:
     assert len(header.split(",")) == len(row.split(","))
     assert header.split(",")[-2:] == ["effect", "descriptive"]
     assert row.split(",")[-2:] == ["0.05", "no"]
+
+
+def test_a_scenario_short_of_its_frozen_count_is_incomplete() -> None:
+    # The wall-clock cap can leave a scenario unfinished. That must read as
+    # "unfinished", never as a verdict at a lower power than the study declared.
+    observations = [obs(f"b{i}", CONTROL_SCHEDULER, 100.0) for i in range(3)] + [
+        obs(f"b{i}", "bpfland", 120.0) for i in range(3)
+    ]
+    result = analyse(observations, required_blocks={("http", "throughput_rps"): 12})
+    verdict = result.verdicts[0]
+    assert verdict.decision == "incomplete"
+    assert verdict.blocks == 3
+
+
+def test_a_scenario_at_its_frozen_count_is_still_decided() -> None:
+    observations = [obs(f"b{i}", CONTROL_SCHEDULER, 100.0) for i in range(3)] + [
+        obs(f"b{i}", "bpfland", 120.0) for i in range(3)
+    ]
+    result = analyse(observations, required_blocks={("http", "throughput_rps"): 3})
+    assert result.verdicts[0].decision == "improvement"

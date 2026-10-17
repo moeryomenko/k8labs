@@ -96,6 +96,11 @@ LINUX_SCHED_QUIESCE_TIMEOUT_S="${LINUX_SCHED_QUIESCE_TIMEOUT_S:-300}"
 # the frozen rule can decide and calls the rest inconclusive rather than complete.
 LINUX_SCHED_WALL_CLOCK_CAP_S="${LINUX_SCHED_WALL_CLOCK_CAP_S:-14400}"
 
+# Charged on top of the slowest observed block when deciding whether the next
+# block fits the wall-clock budget: quiescence, artifact verification and cleanup
+# happen after the measurement and are part of the block's cost.
+LINUX_SCHED_CLEANUP_ALLOWANCE_S="${LINUX_SCHED_CLEANUP_ALLOWANCE_S:-120}"
+
 # Names the measurement protocol a block belongs to, so data from an earlier
 # window length is never pooled with data from this one.
 LINUX_SCHED_PROTOCOL_VERSION="${LINUX_SCHED_PROTOCOL_VERSION:-v2}"
