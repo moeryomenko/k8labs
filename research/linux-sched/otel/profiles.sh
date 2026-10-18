@@ -32,7 +32,12 @@ source "${LINUX_SCHED_DIR}/experiments/lib.sh"
 
 SESSION_SECONDS="${OTEL_SESSION_SECONDS:-60}"
 PROFILE_VOLUME="${PROFILE_VOLUME:?set PROFILE_VOLUME to the host-owned profile directory}"
+# PYROSCOPE_URL is how *this host* reaches Pyroscope (profilecli, health checks).
+# PYROSCOPE_INGEST_URL is how the profiler *Pods* reach it, and it cannot be
+# loopback: inside a pod, 127.0.0.1 is the pod. Left unset, it falls back to
+# PYROSCOPE_URL, which is correct only when the profiler runs on the host.
 PYROSCOPE_URL="${PYROSCOPE_URL:-http://127.0.0.1:4040}"
+PYROSCOPE_INGEST_URL="${PYROSCOPE_INGEST_URL:-$PYROSCOPE_URL}"
 STOP_BYTES="${OTEL_STOP_BYTES:-9663676416}"   # 9 GiB
 ALLOY_TIMEOUT_S="${OTEL_ALLOY_TIMEOUT_S:-300}"
 SCENARIOS="${OTEL_SCENARIOS:-http postgres ffmpeg stress-ng mixed-http-ffmpeg}"
@@ -193,7 +198,7 @@ render_alloy() {
     sed -e "s|__WORKLOAD__|${workload}|g" -e "s|__SCHEDULER__|${arm}|g" \
         -e "s|__NODE__|${node}|g" -e "s|__KERNEL__|${kernel}|g" \
         -e "s|__IMAGE__|${image}|g" -e "s|__RUN_ID__|${run_id}|g" \
-        -e "s|__PYROSCOPE_URL__|${PYROSCOPE_URL}|g" \
+        -e "s|__PYROSCOPE_URL__|${PYROSCOPE_INGEST_URL}|g" \
         "${SCRIPT_DIR}/k8s/alloy-config.alloy.tmpl" > "$rendered"
 
     grep -q "replacement   = \"${run_id}\"" "$rendered" \

@@ -32,6 +32,12 @@ RETENTION="${OTEL_RETENTION:-336h}"
 # against that documented allowance and the stop threshold against real bytes.
 BUDGET_BYTES="${OTEL_BUDGET_BYTES:-10200547328}"   # 9.5 GiB usable floor
 STOP_BYTES="${OTEL_STOP_BYTES:-9663676416}"        # 9 GiB
+# Session windows are recorded on this host, but profiles are timestamped by the
+# *node's* clock, and the two are only loosely synchronised — the lab guests ran
+# ~100 s behind. Querying the session's exact window then looks after its own
+# profiles and finds nothing. Pad both ends: this is a clock-tolerance bound, not
+# a claim about when the session ran.
+SKEW_MARGIN_S="${OTEL_SKEW_MARGIN_S:-600}"
 EXPECTED_SESSIONS="${OTEL_EXPECTED_SESSIONS:-15}"
 
 # Same versioned root the measured campaign uses: a protocol revision must not
@@ -57,6 +63,9 @@ fi
 
 while IFS=$'\t' read -r workload scheduler run_id start end run_id_check; do
     [[ -n "$workload" ]] || continue
+    # Widen by the skew margin before querying.
+    start="$(date -u -d "${start} - ${SKEW_MARGIN_S} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$start")"
+    end="$(date -u -d "${end} + ${SKEW_MARGIN_S} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$end")"
     query="{service_name=\"linux-sched-profile\",workload=\"${workload}\",scheduler=\"${scheduler}\",run_id=\"${run_id}\"}"
     out="$(docker exec "$PYROSCOPE_CONTAINER" /usr/bin/profilecli query top \
         --url "$PYROSCOPE_URL" --profile-type "$PROFILE_TYPE" --query "$query" \
