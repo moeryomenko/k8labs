@@ -283,3 +283,12 @@ setup() {
         fi
     done
 }
+
+@test "a load-sourced arm survives a failed workload-log fetch" {
+    # The metric comes from the load generator, so a missing pod log must not
+    # discard a completed measurement.
+    run grep -n 'podlog_fatal' "${SERIES_DIR}/capture/capture-block.sh"
+    [ "$status" -eq 0 ]
+    run grep -n 'the metric does not need it' "${SERIES_DIR}/capture/capture-block.sh"
+    [ "$status" -eq 0 ]
+}

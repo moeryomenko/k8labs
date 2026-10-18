@@ -415,9 +415,19 @@ main() {
         local -a pods; mapfile -t pods < <(split_words "$APPLIED_PODS")
         : > "$podlog_file"
         local pod
+        local podlog_fatal=1
+        # For a load-sourced scenario the workload log is evidence, not the
+        # measurement: the metric comes from the load generator's output. Letting
+        # a failed log fetch kill the arm threw away a completed measurement —
+        # exactly how an http calibration failed with a finished load behind it.
+        [[ "${PRIMARY_SOURCE:-load}" == "podlog" ]] || podlog_fatal=0
         for pod in "${pods[@]}"; do
-            kubectl_wl logs "$pod" --all-containers=true --tail=-1 >> "$podlog_file" \
-                || die "failed to collect workload log from ${pod} for arm ${arm}"
+            if ! kubectl_wl logs "$pod" --all-containers=true --tail=-1 >> "$podlog_file"; then
+                if (( podlog_fatal )); then
+                    die "failed to collect workload log from ${pod} for arm ${arm}"
+                fi
+                log "  could not collect the workload log from ${pod}; the metric does not need it"
+            fi
         done
         kubectl_wl delete -f "${out_dir}/workload-${arm}.yaml" \
             --ignore-not-found --wait=true --timeout=120s >/dev/null \
