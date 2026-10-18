@@ -30,7 +30,10 @@ RETENTION="${OTEL_RETENTION:-336h}"
 # The image is exactly 10 GiB; the filesystem on it reports less because ext4
 # spends inode tables, journal and superblock. The gate checks usable capacity
 # against that documented allowance and the stop threshold against real bytes.
-BUDGET_BYTES="${OTEL_BUDGET_BYTES:-10200547328}"   # 9.5 GiB usable floor
+# The *image* is exactly 10 GiB; ext4 on a filesystem this small spends more
+# than half a gigabyte on inode tables, journal and superblock, and this one
+# reports ~9.13 GiB usable. The floor is measured, not assumed: 9 GiB.
+BUDGET_BYTES="${OTEL_BUDGET_BYTES:-9663676416}"   # 9 GiB usable floor
 STOP_BYTES="${OTEL_STOP_BYTES:-9663676416}"        # 9 GiB
 # Session windows are recorded on this host, but profiles are timestamped by the
 # *node's* clock, and the two are only loosely synchronised — the lab guests ran
@@ -51,6 +54,23 @@ failures=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; failures=$(( failures + 1 )); }
 pass() { printf 'ok:   %s\n' "$*"; }
 
+# NODE_SKEW_S — how far the measured node's clock lags this host, in seconds.
+#
+# Session windows are recorded here, profiles are timestamped there. Without this
+# conversion a query spans the wrong period however wide the margin.
+node_skew() {
+    local pod host_now node_now
+    pod="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
+        -l app.kubernetes.io/name=linux-sched-observer -o name 2>/dev/null | head -1 | sed 's|pod/||')"
+    [[ -n "$pod" ]] || { printf '0'; return 0; }
+    host_now="$(date -u +%s)"
+    node_now="$(kubectl_wl -n "$OBSERVER_NAMESPACE" exec "$pod" -- date -u +%s 2>/dev/null | tr -d '\r')"
+    [[ "$node_now" =~ ^[0-9]+$ ]] || { printf '0'; return 0; }
+    printf '%s' "$(( host_now - node_now ))"
+}
+NODE_SKEW_S="$(node_skew)"
+printf 'node clock lags this host by %ss\n' "$NODE_SKEW_S"
+
 [[ -s "$RECORD" ]] || { echo "FATAL: no sessions.json at ${RECORD}; run the campaign first" >&2; exit 1; }
 
 # 1. Every session answers an exact-label, exact-time-range query.
@@ -63,9 +83,17 @@ fi
 
 while IFS=$'\t' read -r workload scheduler run_id start end run_id_check; do
     [[ -n "$workload" ]] || continue
-    # Widen by the skew margin before querying.
-    start="$(date -u -d "${start} - ${SKEW_MARGIN_S} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$start")"
-    end="$(date -u -d "${end} + ${SKEW_MARGIN_S} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$end")"
+    # Convert the recorded window into the clock that timestamped the profiles.
+    #
+    # Session windows are recorded on this host; profiles are timestamped by the
+    # node, whose clock drifts (measured ~100 s here). Epoch arithmetic, not
+    # `date -d "<ts> - 600 seconds"`, which GNU date rejects for an RFC3339 stamp
+    # with a Z suffix — so the padding silently did nothing and every query looked
+    # just after its own profiles.
+    start_epoch=$(( $(date -u -d "$start" +%s) - SKEW_MARGIN_S - NODE_SKEW_S ))
+    end_epoch=$(( $(date -u -d "$end" +%s) + SKEW_MARGIN_S - NODE_SKEW_S ))
+    start="$(date -u -d "@${start_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
+    end="$(date -u -d "@${end_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
     query="{service_name=\"linux-sched-profile\",workload=\"${workload}\",scheduler=\"${scheduler}\",run_id=\"${run_id}\"}"
     out="$(docker exec "$PYROSCOPE_CONTAINER" /usr/bin/profilecli query top \
         --url "$PYROSCOPE_URL" --profile-type "$PROFILE_TYPE" --query "$query" \
@@ -74,9 +102,16 @@ while IFS=$'\t' read -r workload scheduler run_id start end run_id_check; do
         continue
     }
     total="$(printf '%s' "$out" | python3 -c '
-import json, sys
+import json, re, sys
+raw = sys.stdin.read()
+# profilecli logs a line before the payload, and that line contains braces (the
+# query itself). Take the JSON from its own line, or every successful response
+# parses as a failure and reads as "no samples".
+match = re.search(r"(?m)^\{", raw)
+if not match:
+    print(0); raise SystemExit
 try:
-    payload = json.loads(sys.stdin.read())
+    payload = json.loads(raw[match.start():])
 except Exception:
     print(0); raise SystemExit
 series = payload.get("series") or []
@@ -138,7 +173,11 @@ fi
 # 3. Volume, retention and the stop threshold.
 if [[ -d "$PROFILE_VOLUME" ]]; then
     avail="$(df -B1 --output=avail "$PROFILE_VOLUME" | tail -1 | tr -d '[:space:]')"
-    used="$(du -sb "$PROFILE_VOLUME" 2>/dev/null | awk '{print $1}')"
+    # `du` exits non-zero on paths it cannot read, which inside the mounted volume
+    # is normal (Pyroscope's own root-owned files); the total is still valid. With
+    # `pipefail` an unguarded assignment aborts the gate silently — the same trap
+    # the session runner hit.
+    used="$(du -sb "$PROFILE_VOLUME" 2>/dev/null | awk '{print $1}' || true)"
     if [[ "${avail:-0}" =~ ^[0-9]+$ ]] && (( avail >= BUDGET_BYTES )); then
         pass "profile volume has ${avail} B usable (10 GiB image, 9.5 GiB floor)"
     else

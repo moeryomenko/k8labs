@@ -24,7 +24,8 @@ SIZE="${PROFILE_SIZE:-10G}"
 # 0.25 GiB of a 10 GiB image. Usable capacity is therefore checked against a
 # documented allowance rather than against the image size, and both are reported.
 IMAGE_BYTES="${PROFILE_SIZE_BYTES:-10737418240}"       # exactly 10 GiB
-USABLE_FLOOR_BYTES="${PROFILE_USABLE_FLOOR_BYTES:-10200547328}"   # 9.5 GiB
+# Measured, not assumed: a 10 GiB ext4 image reports about 9.13 GiB usable.
+USABLE_FLOOR_BYTES="${PROFILE_USABLE_FLOOR_BYTES:-9663676416}"   # 9 GiB
 
 log() { printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
 
