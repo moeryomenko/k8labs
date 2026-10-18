@@ -132,24 +132,17 @@ profile_bytes() {
     du -sb "$PROFILE_VOLUME" 2>/dev/null | awk '{print $1}' || true
 }
 
+# start_forward — a local port forwarded to the *Ready* Alloy pod on the target
+# node. A pod that is terminating still matches a node-name selector, and
+# forwarding to it never answers: that is what made the first session die with
+# "Alloy port-forward never became reachable" seconds after a rollout.
 start_forward() {
     local pod port
-    # The pod on the *target* node: the campaign runs one session at a time, and
-    # an arbitrary pod may be the idle load worker's, whose profile counter never
-    # moves — which reads as "collected no profiles" for a session that worked.
-    pod="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
-        -l app.kubernetes.io/name=linux-sched-otel-alloy \
-        --field-selector "spec.nodeName=${TARGET_NODE}" \
-        -o jsonpath='{.items[0].metadata.name}')"
-    if [[ -z "$pod" ]]; then
-        pod="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
-            -l app.kubernetes.io/name=linux-sched-otel-alloy \
-            -o jsonpath='{.items[0].metadata.name}')"
-    fi
-    [[ -n "$pod" ]] || die "no Alloy pod; run 'make linux-sched-otel-apply' first"
+    pod="$(alloy_pod_on "$TARGET_NODE")"
+    [[ -n "$pod" ]] || die "no Ready Alloy pod on ${TARGET_NODE}; run 'make linux-sched-otel-apply' first"
     port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
     kubectl_wl -n "$OBSERVER_NAMESPACE" port-forward "pod/${pod}" "${port}:12345" \
-        >"${PROFILE_TMP}/forward.log" 2>&1 &
+        >"${PROFILE_TMP}/forward-${port}.log" 2>&1 &
     FORWARD_PID=$!
     local deadline=$(( SECONDS + 90 ))
     while (( SECONDS < deadline )); do
@@ -157,9 +150,11 @@ start_forward() {
             printf '%s' "$port"
             return 0
         fi
+        kill -0 "$FORWARD_PID" 2>/dev/null || break
         sleep 1
     done
-    die "Alloy port-forward never became reachable"
+    stop_forward
+    die "Alloy port-forward to ${pod} never became reachable"
 }
 
 stop_forward() {
@@ -240,9 +235,23 @@ render_alloy() {
 
     # The profiler's own view: a configuration with no targets profiles nothing,
     # and that is otherwise visible only as a session that collects no profiles.
-    local port targets
+    # Target discovery is not instantaneous: the profiler has to enumerate the
+    # node's processes, so this polls rather than checking the instant the
+    # configuration lands. A configuration with no targets profiles nothing, and
+    # that is otherwise visible only as a session that collected no profiles.
+    local port targets deadline
     port="$(start_forward)"
-    targets="$(alloy_metric "$port" 'pyroscope_ebpf_active_targets')"
+    deadline=$(( SECONDS + 120 ))
+    targets=0
+    while (( SECONDS < deadline )); do
+        targets="$(alloy_metric "$port" 'pyroscope_ebpf_active_targets')"
+        # An `if`, not a bare `&&` list: a false `(( ))` as a standalone statement
+        # returns non-zero and `set -e` aborts the session instead of retrying.
+        if [[ "${targets:-0}" =~ ^[0-9]+$ ]] && (( targets > 0 )); then
+            break
+        fi
+        sleep 5
+    done
     stop_forward
     if [[ "${targets:-0}" =~ ^[0-9]+$ ]] && (( targets > 0 )); then
         log "  Alloy ${pod} restarted; profiler has ${targets} active target(s)"
@@ -252,11 +261,30 @@ render_alloy() {
 }
 
 # alloy_pod_on NODE — the Alloy pod scheduled on a node, or empty.
+# alloy_pod_on NODE — a Ready, non-terminating Alloy pod on a node, or empty.
+#
+# Readiness and the absence of a deletion timestamp are both required. A node-name
+# selector alone returns terminating pods during a rollout, and a port-forward to
+# one hangs until it times out.
 alloy_pod_on() {
     kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
         -l app.kubernetes.io/name=linux-sched-otel-alloy \
-        --field-selector "spec.nodeName=$1" \
-        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
+        --field-selector "spec.nodeName=$1" -o json 2>/dev/null \
+        | python3 -c '
+import json, sys
+try:
+    pods = json.load(sys.stdin)["items"]
+except Exception:
+    print(""); raise SystemExit
+for pod in pods:
+    if pod["metadata"].get("deletionTimestamp"):
+        continue
+    ready = [c for c in pod.get("status", {}).get("conditions", []) if c["type"] == "Ready"]
+    if ready and ready[0]["status"] == "True":
+        print(pod["metadata"]["name"]); break
+else:
+    print("")
+'
 }
 
 record_session() {

@@ -292,3 +292,17 @@ setup() {
     run grep -n 'the metric does not need it' "${SERIES_DIR}/capture/capture-block.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "loading a scenario clears the previous scenario's variables" {
+    # A process that loads several scenarios reused the last one's readiness
+    # probe: an ffmpeg session ran postgres's pg_isready and died.
+    run bash -c "
+        source '${SERIES_DIR}/experiments/lib.sh'
+        load_scenario '${SCENARIOS}' postgres
+        before=\"\${LOAD_READY_PROBE:-}\"
+        load_scenario '${SCENARIOS}' ffmpeg
+        after=\"\${LOAD_READY_PROBE:-}\"
+        [ -n \"\$before\" ] && [ -z \"\$after\" ] && echo CLEARED"
+    [ "$status" -eq 0 ]
+    [ "$output" = "CLEARED" ]
+}

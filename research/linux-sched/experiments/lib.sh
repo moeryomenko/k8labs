@@ -131,10 +131,26 @@ scenario_names() {
 }
 
 # load_scenario DIR NAME — source one scenario file into the current shell.
+# Scenario-scoped variables, cleared before each scenario is sourced.
+#
+# A scenario that omits one of these would otherwise inherit the previous
+# scenario's value in any process that loads more than one — which is how an
+# ffmpeg profiling session ran postgres's readiness probe and died on
+# `pg_isready` against a database that scenario never starts.
+SCENARIO_VARIABLES=(
+    SCENARIO_NAME SCENARIO_DESCRIPTION WORKLOAD PRIMARY_METRIC PRIMARY_DIRECTION
+    DURATION_S WARMUP_S TARGET_HOST LOAD_HOST WORKLOAD_MANIFEST METRIC_COMMAND
+    PRIMARY_SOURCE SECONDARY_METRIC_COMMAND SECONDARY_SOURCE SECONDARY_DIRECTION
+    LOAD_COMMAND LOAD_ARGS LOAD_READY_PROBE
+)
+
 load_scenario() {
-    local dir="$1" name="$2"
+    local dir="$1" name="$2" variable
     local file="${dir}/${name}.conf"
     [[ -f "$file" ]] || die "scenario not found: $file"
+    for variable in "${SCENARIO_VARIABLES[@]}"; do
+        unset "$variable"
+    done
     # shellcheck disable=SC1090
     source "$file"
     : "${SCENARIO_NAME:?scenario $name missing SCENARIO_NAME}"
