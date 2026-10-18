@@ -76,3 +76,30 @@ def test_routing_profiles_through_alloys_otlp_receiver_is_reported(tmp_path: Pat
     problems = Problems()
     validate(problems, root=root, mk_path=Path("/dev/null"))
     assert any("OTLP receiver" in problem for problem in problems)
+
+
+def test_a_configmap_in_the_daemonset_manifest_is_reported(tmp_path) -> None:
+    # Regression: the daemonset manifest once carried the placeholder ConfigMap,
+    # so applying it reverted each rendered session configuration to a
+    # no-target placeholder and every session silently collected nothing.
+    from pathlib import Path as _Path
+
+    root = _copy(tmp_path)
+    daemonset = root / "k8s" / "alloy-daemonset.yaml"
+    daemonset.write_text(
+        "kind: ConfigMap\n---\n" + daemonset.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    problems = Problems()
+    validate(problems, root=root, mk_path=_Path("/dev/null"))
+    assert any("must not contain a ConfigMap" in problem for problem in problems)
+
+
+def test_a_missing_placeholder_file_is_reported(tmp_path) -> None:
+    from pathlib import Path as _Path
+
+    root = _copy(tmp_path)
+    (root / "k8s" / "alloy-configmap.yaml").unlink()
+    problems = Problems()
+    validate(problems, root=root, mk_path=_Path("/dev/null"))
+    assert any("its own file" in problem for problem in problems)

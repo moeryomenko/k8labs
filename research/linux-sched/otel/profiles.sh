@@ -122,13 +122,30 @@ refuse_if_comparing() {
     fi
 }
 
-profile_bytes() { du -sb "$PROFILE_VOLUME" 2>/dev/null | awk '{print $1}'; }
+# profile_bytes — bytes stored under the profile volume.
+#
+# `du` exits non-zero when it meets a path it cannot read, which inside the
+# mounted volume is normal (Pyroscope's own root-owned files). The total is still
+# valid, and with `pipefail` an unguarded assignment would abort the session
+# silently — which is exactly how the first campaign's sessions died.
+profile_bytes() {
+    du -sb "$PROFILE_VOLUME" 2>/dev/null | awk '{print $1}' || true
+}
 
 start_forward() {
     local pod port
+    # The pod on the *target* node: the campaign runs one session at a time, and
+    # an arbitrary pod may be the idle load worker's, whose profile counter never
+    # moves — which reads as "collected no profiles" for a session that worked.
     pod="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
         -l app.kubernetes.io/name=linux-sched-otel-alloy \
+        --field-selector "spec.nodeName=${TARGET_NODE}" \
         -o jsonpath='{.items[0].metadata.name}')"
+    if [[ -z "$pod" ]]; then
+        pod="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
+            -l app.kubernetes.io/name=linux-sched-otel-alloy \
+            -o jsonpath='{.items[0].metadata.name}')"
+    fi
     [[ -n "$pod" ]] || die "no Alloy pod; run 'make linux-sched-otel-apply' first"
     port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
     kubectl_wl -n "$OBSERVER_NAMESPACE" port-forward "pod/${pod}" "${port}:12345" \
@@ -152,9 +169,20 @@ stop_forward() {
     FORWARD_PID=""
 }
 
+# alloy_metric PORT NAME — value of a counter, or 0 when it does not exist yet.
+#
+# A counter that has never been recorded is absent from the exposition, and an
+# empty value is not a failure: the caller compares before and after, and a
+# missing `before` must read as zero rather than as "no value".
 alloy_metric() {
-    curl -sS -m 5 "http://127.0.0.1:$1/metrics" 2>/dev/null \
-        | awk -v m="$2" '$1 ~ "^"m { print $2; exit }'
+    local value
+    value="$(curl -sS -m 5 "http://127.0.0.1:$1/metrics" 2>/dev/null \
+        | awk -v m="$2" '$1 ~ "^"m { print $2; exit }')"
+    if [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s' "$value"
+    else
+        printf '0'
+    fi
 }
 
 session_health() {
@@ -172,23 +200,63 @@ render_alloy() {
         -e "s|__IMAGE__|${image}|g" -e "s|__RUN_ID__|${run_id}|g" \
         -e "s|__PYROSCOPE_URL__|${PYROSCOPE_URL}|g" \
         "${SCRIPT_DIR}/k8s/alloy-config.alloy.tmpl" > "$rendered"
+
+    grep -q "replacement   = \"${run_id}\"" "$rendered" \
+        || die "rendered Alloy configuration lost the session run_id"
+
     kubectl_wl -n "$OBSERVER_NAMESPACE" create configmap linux-sched-otel-alloy \
         --from-file=config.alloy="$rendered" --dry-run=client -o yaml \
-        | kubectl_wl -n "$OBSERVER_NAMESPACE" apply -f - >/dev/null
+        | kubectl_wl -n "$OBSERVER_NAMESPACE" apply -f - >/dev/null \
+        || die "could not apply the session's Alloy configuration"
 
-    # The DaemonSet is pinned to this session's node, so no other worker profiles
-    # under this session's labels.
+    # The DaemonSet comes from its own file, which carries no placeholder
+    # ConfigMap: applying both objects together silently reverted every session's
+    # configuration to the empty-target placeholder, and the profiler then
+    # collected nothing while everything else looked healthy.
     local daemonset="${PROFILE_TMP}/alloy-daemonset.yaml"
     sed -e "s|__TARGET_NODE__|${node}|g" \
         "${SCRIPT_DIR}/k8s/alloy-daemonset.yaml" > "$daemonset"
     kubectl_wl -n "$OBSERVER_NAMESPACE" apply -f "$daemonset" >/dev/null \
         || die "could not pin the profiling DaemonSet to ${node}"
+
+    kubectl_wl -n "$OBSERVER_NAMESPACE" rollout restart daemonset/linux-sched-otel-alloy >/dev/null
     kubectl_wl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
         --timeout="${ALLOY_TIMEOUT_S}s" >/dev/null \
         || die "Alloy did not become ready on ${node}"
-    kubectl_wl -n "$OBSERVER_NAMESPACE" rollout status daemonset/linux-sched-otel-alloy \
-        --timeout="${ALLOY_TIMEOUT_S}s" >/dev/null \
-        || die "Alloy did not roll out with the session's labels"
+
+    # A rollout is not proof the pod read the new configuration: a pod that
+    # started before the write would profile the previous session's labels.
+    local pod config_created pod_started config_epoch pod_epoch
+    pod="$(alloy_pod_on "$node")"
+    [[ -n "$pod" ]] || die "no Alloy pod on ${node} after the rollout"
+    config_created="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get configmap linux-sched-otel-alloy \
+        -o jsonpath='{.metadata.creationTimestamp}')"
+    pod_started="$(kubectl_wl -n "$OBSERVER_NAMESPACE" get pod "$pod" \
+        -o jsonpath='{.status.startTime}')"
+    config_epoch="$(date -u -d "$config_created" +%s 2>/dev/null || echo 0)"
+    pod_epoch="$(date -u -d "$pod_started" +%s 2>/dev/null || echo 0)"
+    (( pod_epoch >= config_epoch )) \
+        || die "Alloy pod ${pod} started before the session's configuration was applied"
+
+    # The profiler's own view: a configuration with no targets profiles nothing,
+    # and that is otherwise visible only as a session that collects no profiles.
+    local port targets
+    port="$(start_forward)"
+    targets="$(alloy_metric "$port" 'pyroscope_ebpf_active_targets')"
+    stop_forward
+    if [[ "${targets:-0}" =~ ^[0-9]+$ ]] && (( targets > 0 )); then
+        log "  Alloy ${pod} restarted; profiler has ${targets} active target(s)"
+    else
+        die "profiler has no active targets after the session's labels were applied"
+    fi
+}
+
+# alloy_pod_on NODE — the Alloy pod scheduled on a node, or empty.
+alloy_pod_on() {
+    kubectl_wl -n "$OBSERVER_NAMESPACE" get pods \
+        -l app.kubernetes.io/name=linux-sched-otel-alloy \
+        --field-selector "spec.nodeName=$1" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
 }
 
 record_session() {

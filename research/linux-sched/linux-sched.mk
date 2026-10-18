@@ -208,6 +208,7 @@ linux-sched-otel-apply: ## Deploy the Alloy profiling DaemonSet on the research 
 		echo "ERROR: set LINUX_SCHED_TARGET_NODE to the fixed target worker; profiling every worker would mislabel samples" >&2; \
 		exit 1; \
 	fi
+	kubectl apply -f $(LINUX_SCHED_OTEL_DIR)/k8s/alloy-configmap.yaml
 	sed -e "s|__TARGET_NODE__|$(LINUX_SCHED_TARGET_NODE)|g" $(LINUX_SCHED_OTEL_DIR)/k8s/alloy-daemonset.yaml \
 		| kubectl apply -f -
 	kubectl -n linux-sched rollout status daemonset/linux-sched-otel-alloy --timeout=300s

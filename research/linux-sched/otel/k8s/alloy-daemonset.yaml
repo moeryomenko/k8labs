@@ -1,35 +1,22 @@
 # Alloy on the research workers: the OTel eBPF profiler, for the OTel campaign.
 #
 # One pod, on the session's target worker, profiling that node's processes and
-# writing to Pyroscope on the host. The session's labels live in the ConfigMap and
-# the target in the node selector; the runner renders both per session and follows
-# with a rollout, so a stored profile carries exactly the labels sessions.json
-# recorded for it, and comes from the node it names.
+# writing to Pyroscope on the host. The session's labels live in the ConfigMap
+# (a separate object, rendered per session) and the target in the node selector,
+# so a stored profile carries exactly the labels sessions.json recorded for it,
+# and comes from the node it names.
+#
+# This file deliberately contains no ConfigMap: applying both objects together
+# overwrote each rendered session configuration with the placeholder, which left
+# every session profiling nothing.
 #
 # Least privilege on purpose: the plan forbids `privileged: true`, and the
 # component's documented capability set is enough (see
 # https://grafana.com/docs/alloy/latest/reference/components/pyroscope/pyroscope.ebpf/).
 # These are the profiles for one node under one scheduler arm, not a measured
 # comparison sample: this campaign never runs while the comparison does.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: linux-sched-otel-alloy
-  namespace: linux-sched
-data:
-  config.alloy: |
-    // Placeholder; the runner renders the real configuration per session.
-    discovery.process "node" {}
-    pyroscope.ebpf "session" {
-      targets    = []
-      forward_to = [pyroscope.write.backend.receiver]
-    }
-    pyroscope.write "backend" {
-      endpoint {
-        url = "http://127.0.0.1:4040"
-      }
-    }
----
+# The rendered manifest is applied per session and then rolled, so the pod's
+# template carries nothing session-specific itself.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

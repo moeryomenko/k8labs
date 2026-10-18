@@ -89,6 +89,25 @@ def validate(problems: Problems, root: Path = HERE, mk_path: Path = MK) -> None:
     )
 
     # Only the research workers, and only pinned images.
+    # The DaemonSet must not carry the placeholder ConfigMap. Applying both
+    # objects together overwrote every rendered session configuration with the
+    # placeholder, which declares no targets, so every session profiled nothing
+    # while Alloy still reported itself healthy.
+    problems.check(
+        "kind: ConfigMap" not in daemonset,
+        "alloy-daemonset.yaml must not contain a ConfigMap: applying it with the "
+        "rendered session configuration reverts the labels to the placeholder",
+    )
+    problems.check(
+        (root / "k8s" / "alloy-configmap.yaml").is_file(),
+        "the placeholder Alloy configuration must live in its own file",
+    )
+    placeholder = root / "k8s" / "alloy-configmap.yaml"
+    if placeholder.is_file():
+        problems.check(
+            "kind: ConfigMap" in _read(placeholder),
+            "alloy-configmap.yaml must define the placeholder ConfigMap",
+        )
     problems.check(
         "kubernetes.io/hostname: __TARGET_NODE__" in daemonset,
         "the DaemonSet must be pinned to a rendered target node, not to every "

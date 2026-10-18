@@ -1,0 +1,29 @@
+# Placeholder Alloy configuration.
+#
+# The session runner renders the real configuration per session (labels plus the
+# Pyroscope URL) and applies it over this object. It exists as its own file so
+# that applying the DaemonSet cannot overwrite a rendered session configuration
+# with this placeholder — which is exactly what happened when both objects lived
+# in one manifest: every session silently profiled nothing, because the
+# placeholder declares no targets.
+#
+# Only `linux-sched-otel-apply` uses this file, to give a freshly created
+# DaemonSet something valid to mount before the first session renders its own.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: linux-sched-otel-alloy
+  namespace: linux-sched
+data:
+  config.alloy: |
+    // Placeholder until a session renders its own configuration.
+    discovery.process "node" {}
+    pyroscope.ebpf "session" {
+      targets    = []
+      forward_to = [pyroscope.write.backend.receiver]
+    }
+    pyroscope.write "backend" {
+      endpoint {
+        url = "http://127.0.0.1:4040"
+      }
+    }
