@@ -322,3 +322,16 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "CLEARED" ]
 }
+
+@test "the kernel image contract pins the sched_ext/for-7.4 commit" {
+    run grep -n '1f5dde349ac2fca1f119ae8de3f0d2f1c2a8d338' \
+        "${SERIES_DIR}/GATES.md" "${SERIES_DIR}/README.md"
+    [ "$status" -eq 0 ]
+}
+
+@test "the kernel image contract records the arena-scalar blocker" {
+    run grep -n 'BPF_F_ARENA_SCALAR' "${SERIES_DIR}/GATES.md"
+    [ "$status" -eq 0 ]
+    run python3 "${SERIES_DIR}/experiments/kernel_image_contract.py"
+    [ "$status" -eq 0 ]
+}

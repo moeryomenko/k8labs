@@ -161,3 +161,5 @@ rather than reporting a fake success):
    `__RPS__` placeholder. `make linux-sched-calibrate SCENARIO=http` finds it on
    the control arm by raising the rate until p99 crosses a target and freezing
    the highest rate that stayed under it; `run` refuses to start without it.
+
+Kernel-image contract: sched_ext/for-7.4 commit `1f5dde349ac2fca1f119ae8de3f0d2f1c2a8d338`; no Fedora package with `BPF_F_ARENA_SCALAR` resolves, so `scx_mavd` stays deferred (see `GATES.md`).

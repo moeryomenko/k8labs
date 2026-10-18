@@ -724,3 +724,16 @@ be read with a data-recovery flag.
   will not start without them), then `make linux-sched-calibrate SCENARIO=http`
   to freeze the offered rate the measured blocks then share.
 
+
+## Kernel image contract (added for exact 7.4 resolution attempt)
+
+Authoritative resolution (no invented values):
+
+- sched_ext/for-7.4 branch tip on git.kernel.org (tj/sched_ext.git):
+  `1f5dde349ac2fca1f119ae8de3f0d2f1c2a8d338`. That tree is still a
+  7.3-based development branch and does not yet carry `BPF_F_ARENA_SCALAR`.
+- Fedora rawhide `kernel-core` package currently resolves only
+  `7.3.0-0.rc7.261016g2f2f7eeef8b0.62.fc46`; no 7.4 kernel package exists.
+
+Blocker: no exact package NVR resolves for a kernel with `BPF_F_ARENA_SCALAR`,
+which `scx_mavd` requires. `scx_mavd` stays deferred. Do not invent a value.
