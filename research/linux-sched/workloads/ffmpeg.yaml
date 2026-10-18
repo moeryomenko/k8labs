@@ -24,7 +24,8 @@ spec:
       resources:
         requests:
           cpu: "1"
-        limits: {}
+        limits:
+          cpu: "__CPU_LIMIT__"
       volumeMounts:
         # The clip is baked on the node (Big Buck Bunny, CC-BY 3.0). Read-only
         # and byte-identical for every arm; the encode writes to `-f null -`.

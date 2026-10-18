@@ -29,7 +29,8 @@ spec:
       resources:
         requests:
           cpu: "1"
-        limits: {}
+        limits:
+          cpu: "__CPU_LIMIT__"
 ---
 apiVersion: v1
 kind: Service

@@ -330,6 +330,7 @@ main() {
         log "applying workload manifest ${manifest}"
         local rendered="${out_dir}/workload-${arm}.yaml"
         sed -e "s|__NODE_NAME__|${target_node}|g" -e "s|__ARM__|${arm}|g" \
+            -e "s|__CPU_LIMIT__|${LINUX_SCHED_CPU_LIMIT:-500m}|g" \
             "$manifest" > "$rendered"
         # Delete any leftover first. The workload Pod name is fixed per scenario
         # and `spec.nodeName` is immutable, so a Pod left behind by an earlier

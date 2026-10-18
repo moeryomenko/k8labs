@@ -28,4 +28,5 @@ spec:
       resources:
         requests:
           cpu: "1"
-        limits: {}
+        limits:
+          cpu: "__CPU_LIMIT__"

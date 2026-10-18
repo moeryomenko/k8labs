@@ -25,7 +25,8 @@ spec:
       resources:
         requests:
           cpu: "500m"
-        limits: {}
+        limits:
+          cpu: "__CPU_LIMIT__"
     - name: ffmpeg
       image: docker.io/linuxserver/ffmpeg:8.0.1@sha256:c72eaf699cb104e84c5292ee9b2a65bf3110738dec113d7cfcef02d7bc21b056
       # Runs for the scenario's warmup plus measured window (30 s + 180 s), so
@@ -42,7 +43,8 @@ spec:
       resources:
         requests:
           cpu: "500m"
-        limits: {}
+        limits:
+          cpu: "__CPU_LIMIT__"
       volumeMounts:
         - name: fixtures
           mountPath: /fixtures
