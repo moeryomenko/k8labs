@@ -180,14 +180,9 @@ activate_arm() {
         eevdf)
             scx_reset "$TARGET_NODE"
             ;;
-        scx_bpfland|scx_lavd)
+        scx_bpfland|scx_lavd|scx_mavd|scx_mlfq|scx_nitosis)
             SCX_PID="$(scx_start "$TARGET_NODE" "$arm")"
             log "started ${arm} (pid ${SCX_PID}) on ${TARGET_NODE}"
-            ;;
-        scx_mavd)
-            die "scx_mavd is deferred: its object sets BPF_F_ARENA_SCALAR, which " \
-                "the pinned kernel rejects (see GATES.md); set LINUX_SCHED_ARMS to " \
-                "include it only on a kernel that has that flag"
             ;;
         *)
             die "unknown scheduler arm: ${arm}"

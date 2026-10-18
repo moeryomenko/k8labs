@@ -13,13 +13,11 @@ set -Eeuo pipefail
 shopt -s inherit_errexit
 IFS=$'\n\t'
 
-# Schedulers compared in every block. The first entry is the control arm.
-# scx_mavd is absent on purpose: its object sets BPF_F_ARENA_SCALAR, which the
-# pinned kernel rejects, and its sources no longer build in the classic arena
-# form. It rejoins the series when a kernel with that flag is available; set
-# LINUX_SCHED_ARMS to add it back. See GATES.md.
+# Schedulers registered for the cgroup-v2 campaign. The first entry is the
+# control arm. Runtime preflight must confirm each sched_ext arm can build,
+# attach, make progress, and detach on the pinned kernel before it is measured.
 LINUX_SCHED_CONTROL="${LINUX_SCHED_CONTROL:-eevdf}"
-LINUX_SCHED_ARMS="${LINUX_SCHED_ARMS:-eevdf scx_bpfland scx_lavd}"
+LINUX_SCHED_ARMS="${LINUX_SCHED_ARMS:-eevdf scx_bpfland scx_lavd scx_mavd scx_mlfq scx_nitosis}"
 
 # Seed for the deterministic, position-balanced block schedule. It lives here
 # rather than in the runner because the schedule helpers are one of the things
@@ -445,7 +443,7 @@ scx_reset() {
             n=0
             for p in /proc/[0-9]*; do
                 c=$(cat "$p/comm" 2>/dev/null) || continue
-                case "$c" in scx_bpfland|scx_lavd|scx_mavd) n=$((n + 1));; esac
+                case "$c" in scx_bpfland|scx_lavd|scx_mavd|scx_mlfq|scx_nitosis) n=$((n + 1));; esac
             done
             echo "$n"
         ' 2>/dev/null || echo 1)"

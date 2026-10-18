@@ -39,6 +39,14 @@ setup() {
     [[ "$first" == *"block=3"* ]]
 }
 
+@test "plan registers every scheduler arm in the cgroup-v2 campaign" {
+    run "${RUNNER}" plan --scenario http --mode pilot --configs-dir "${SCENARIOS}"
+    [ "$status" -eq 0 ]
+    for arm in eevdf scx_bpfland scx_lavd scx_mavd scx_mlfq scx_nitosis; do
+        [[ "$output" == *"$arm"* ]]
+    done
+}
+
 @test "plan with confirmatory mode honours the frozen minimum block count" {
     LINUX_SCHED_MIN_BLOCKS=5 run "${RUNNER}" plan --scenario http --mode confirmatory \
         --configs-dir "${SCENARIOS}"
