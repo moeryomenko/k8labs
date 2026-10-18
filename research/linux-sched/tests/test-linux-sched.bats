@@ -234,6 +234,14 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
+@test "the node image fails closed when the pinned kernel is unavailable" {
+    local provisioner="${SERIES_DIR}/../../packer/scripts/01-configure-system.sh"
+    run grep -n 'Exact kernel .* is unavailable' "$provisioner"
+    [ "$status" -ne 0 ]
+    run grep -n 'kernel-modules-extra-' "$provisioner"
+    [ "$status" -eq 0 ]
+}
+
 @test "the makefiles fail a recipe when an earlier command fails" {
     # Regression: .ONESHELL without -e takes the target's status from the last
     # command only, so a failed sample-size step reported success and the run

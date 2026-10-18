@@ -35,20 +35,21 @@ else
     }
 fi
 
-# Refresh Fedora metadata before installing. If the lock's exact build has
-# rotated out of the repository, install the current kernel set and pin the
-# image to the version actually installed rather than failing on stale metadata.
-if ! dnf_install_kernel "kernel-core-${KERNEL_VERSION}" \
+# The research image must be reproducible: silently accepting a newer package
+# changes the kernel BTF and can invalidate sched_ext scheduler binaries.
+dnf_install_kernel "kernel-core-${KERNEL_VERSION}" \
     "kernel-modules-${KERNEL_VERSION}" \
-    "kernel-modules-core-${KERNEL_VERSION}"; then
-    echo "==> Exact kernel ${KERNEL_VERSION} is unavailable; installing current Fedora kernel"
-    dnf_install_kernel kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra
-fi
+    "kernel-modules-core-${KERNEL_VERSION}" \
+    "kernel-modules-extra-${KERNEL_VERSION}"
 
-# Resolve the version actually installed, including the architecture suffix:
-# the /boot filename and grubby both need the full NVR. The value passed in may
-# omit the arch (the lock stores the version without it).
-KERNEL_VERSION=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core | sort -V | tail -1)
+# Resolve the installed version, including the architecture suffix. The value
+# passed in may omit the architecture (the lock stores the version without it).
+INSTALLED_KERNEL_VERSION=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' "kernel-core-${KERNEL_VERSION}" | head -1)
+if [ -z "${INSTALLED_KERNEL_VERSION}" ]; then
+    echo "ERROR: exact kernel ${KERNEL_VERSION} was not installed" >&2
+    exit 1
+fi
+KERNEL_VERSION="${INSTALLED_KERNEL_VERSION}"
 
 echo "==> Kernel ${KERNEL_VERSION} installed from refreshed repositories"
 

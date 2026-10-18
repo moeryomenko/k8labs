@@ -122,6 +122,20 @@ The run-queue histograms cover the whole measured window. The trace and
 hold a full-window recording; `GATES.md` records why, and the windows used.
 ```
 
+## Factorial cgroup-v2 quota campaign (versioned)
+
+A separate, versioned analysis track for the six-arm factorial quota campaign.
+It does not alter the scheduler-only protocol above.
+
+- Analysis: `analysis/factorial_analysis.py` (interaction + throttling contrasts,
+  global Holm, 5 % performance / 10 % throttling margins).
+- Sample sizing: `analysis/factorial_sample_size.py` (90 % power, 12-block balance).
+
+```bash
+make linux-sched-factorial-sample-size
+make linux-sched-factorial-analyze
+```
+
 ## Pre-implementation gates
 
 The execution path refuses to run until these are satisfied (it fails loudly

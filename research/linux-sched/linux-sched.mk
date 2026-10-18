@@ -234,6 +234,31 @@ linux-sched-otel-down: ## Remove the profiling DaemonSet and stop the host-side 
 linux-sched-otel-validate: ## Validate the OTel manifests and configs offline
 	python3 $(LINUX_SCHED_DIR)otel/validate_campaign.py
 
+
+# ---- Factorial cgroup-v2 quota campaign (versioned) ----
+
+.PHONY: linux-sched-factorial-sample-size
+linux-sched-factorial-sample-size: ## Freeze confirmatory block counts for the factorial quota campaign
+	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/pilot/blocks.csv" ]; then echo "No pilot blocks.csv under $(LINUX_SCHED_DATA_ROOT)/pilot; run the pilots first."; exit 1; fi
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/factorial_sample_size.py --pilot-blocks $(LINUX_SCHED_DATA_ROOT)/pilot/blocks.csv --output $(LINUX_SCHED_DATA_ROOT)/sample-size.json
+
+.PHONY: linux-sched-factorial-analyze
+linux-sched-factorial-analyze: ## Analyze factorial quota campaign blocks
+	@if [ ! -f "$(LINUX_SCHED_CONFIRMATORY_DIR)/blocks.csv" ]; then echo "No confirmatory blocks.csv"; exit 1; fi
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/factorial_analysis.py --blocks $(LINUX_SCHED_CONFIRMATORY_DIR)/blocks.csv --output-dir $(LINUX_SCHED_ANALYSIS_OUTPUT)
+
+.PHONY: linux-sched-quota-sample-size
+linux-sched-quota-sample-size: linux-sched-factorial-sample-size
+
+.PHONY: linux-sched-quota-analyze
+linux-sched-quota-analyze: linux-sched-factorial-analyze
+
+.PHONY: linux-sched-cgroup-v2-sample-size
+linux-sched-cgroup-v2-sample-size: linux-sched-factorial-sample-size
+
+.PHONY: linux-sched-cgroup-v2-analyze
+linux-sched-cgroup-v2-analyze: linux-sched-factorial-analyze
+
 # ---- Test / clean ----
 
 .PHONY: linux-sched-test
