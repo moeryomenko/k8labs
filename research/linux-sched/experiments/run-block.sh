@@ -180,9 +180,16 @@ activate_arm() {
         eevdf)
             scx_reset "$TARGET_NODE"
             ;;
-        scx_bpfland|scx_lavd|scx_mavd|scx_mlfq|scx_nitosis)
+        scx_bpfland|scx_lavd|scx_mavd|scx_mlfq)
             SCX_PID="$(scx_start "$TARGET_NODE" "$arm")"
             log "started ${arm} (pid ${SCX_PID}) on ${TARGET_NODE}"
+            ;;
+        scx_nitosis)
+            # Nitosis receives the Kubernetes workload cgroup parent so its
+            # cells map onto pod scopes rather than the host root.
+            NITOSIS_CGROUP_PARENT="${LINUX_SCHED_NITOSIS_CGROUP_PARENT:-/kubepods.slice}"
+            SCX_PID="$(scx_start "$TARGET_NODE" "$arm" --cell-parent-cgroup "$NITOSIS_CGROUP_PARENT")"
+            log "started ${arm} (pid ${SCX_PID}) on ${TARGET_NODE} (cell parent ${NITOSIS_CGROUP_PARENT})"
             ;;
         *)
             die "unknown scheduler arm: ${arm}"

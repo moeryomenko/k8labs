@@ -737,3 +737,39 @@ Authoritative resolution (no invented values):
 
 Blocker: no exact package NVR resolves for a kernel with `BPF_F_ARENA_SCALAR`,
 which `scx_mavd` requires. `scx_mavd` stays deferred. Do not invent a value.
+
+## Runtime integration gate (scx_mavd, scx_mlfq, scx_nitosis)
+
+The three schedulers added to the campaign stay blocked from measurement until
+each passes five checks on the pinned kernel:
+
+1. **build** — the scheduler binary exists, built against the running kernel's
+   BTF.
+2. **verifier** — the BPF object loads under the kernel verifier.
+3. **attach** — the scheduler attaches as the active sched_ext scheduler.
+4. **progress** — it makes forward progress under a trivial workload.
+5. **detach** — it unregisters cleanly with no survivor process.
+
+`scx_mavd` is additionally gated on `BPF_F_ARENA_SCALAR`, which the pinned
+kernel does not provide, so it remains blocked here. `scx_mlfq` and
+`scx_nitosis` are eligible once their build/attach/progress/detach checks pass.
+
+### Staging
+
+Built schedulers are staged into the observer Pod on every research worker with
+`make linux-sched-scx-stage`. Staging is separate from running so a failed
+build is caught before an experiment starts.
+
+### Nitosis workload cgroup parent
+
+`scx_nitosis` receives the Kubernetes workload cgroup parent
+(`/kubepods.slice` by default) via `--cell-parent-cgroup`, so its cells map
+onto pod scopes rather than the host root. The value is resolved through the
+narrow read-only cgroup manifest access helper (`cgroup_manifest.py`), which
+rejects any path outside the allow-list. Override with
+`LINUX_SCHED_NITOSIS_CGROUP_PARENT`.
+
+### Observer gate
+
+The observer DaemonSet and its node-native tooling are validated offline by
+`make linux-sched-observers-test` and `make linux-sched-observer-check`.

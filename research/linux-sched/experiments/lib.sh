@@ -477,14 +477,20 @@ scx_stage() {
 # of the supervising local `kubectl exec`.
 scx_start() {
     local node="$1" name="$2" pod log pid
+    shift 2
+    local -a extra=("$@")
     pod="$(observer_pod_for_node "$node")"
     [[ -n "$pod" ]] || die "no observer pod on ${node}"
     scx_reset "$node"
     log="${LINUX_SCHED_SCX_LOG_DIR:-/tmp}/${name}.log"
     # The binary is exec'd through `sh -c`: the runtime refuses to exec a
     # hostPath binary directly ("exists but it is not executable").
+    local cmd="exec ${REMOTE_DIR:-/var/tmp/linux-sched}/bin/${name}"
+    if (( ${#extra[@]} > 0 )); then
+        cmd+=" $(printf '%q ' "${extra[@]}")"
+    fi
     kubectl --kubeconfig "$(workload_kubeconfig)" -n "$OBSERVER_NAMESPACE" \
-        exec "$pod" -- sh -c "exec ${REMOTE_DIR:-/var/tmp/linux-sched}/bin/${name}" \
+        exec "$pod" -- sh -c "$cmd" \
         > "$log" 2>&1 &
     pid=$!
     printf '%s' "$pid" > "$(scx_state_file)"
