@@ -89,3 +89,7 @@ reproducible_build:
   kbuild_build_host: k8labs-build
   tar_options: "--mtime=@1792368000 --owner=0 --group=0 --numeric-owner --sort=name"
   srpm_sha256: "0fda80a724f22148a313e42970f2cacbd2f734dce1ee7a2f520c2df2916ede67"
+  # Two mock builds from that SRPM: System.map and config identical, vmlinuz and
+  # module packages differ only by the per-build module-signing key. Pinning
+  # CONFIG_MODULE_SIG_KEY (see the runbook) closes that last gap.
+  remaining_variance: "per-build module signing key"

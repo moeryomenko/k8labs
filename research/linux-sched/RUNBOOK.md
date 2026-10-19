@@ -77,10 +77,26 @@ config_opts['environment']['TAR_OPTIONS'] = (
 )
 ```
 
-Module signing still uses a per-build generated key. For bit-identical
-`kernel-modules*` packages, place a fixed lab module-signing key at
-`certs/signing_key.pem` in the build tree before the build; the campaign runs
-with `CONFIG_MODULE_SIG_FORCE` unset, so any key is acceptable.
+Two builds with those settings were compared. `System.map` and `config` are
+byte-identical, which means the compiled code is deterministic; `vmlinuz` and
+the module packages still differ because the build generates a new module-signing
+key every time and embeds its certificate in the image.
+
+To make the runtime packages bit-identical as well, ship a fixed module-signing
+key inside the SRPM and point the kernel at it:
+
+```sh
+openssl req -new -x509 -nodes -days 3650 -newkey rsa:2048 \
+  -keyout certs/k8labs-module-signing.pem \
+  -out certs/k8labs-module-signing.x509 \
+  -subj "/CN=k8labs module signing/"
+```
+
+Add `CONFIG_MODULE_SIG_KEY="certs/k8labs-module-signing.pem"` to
+`redhat/kernel-local` and put both files in the source tarball. The campaign
+runs with `CONFIG_MODULE_SIG_FORCE` unset, so this key only needs to be stable,
+not secret. Changing the fragment changes the NVR, so decide this before the
+release build.
 
 With those two settings, two independent `make dist-srpm` runs produce the same
 SRPM: `sha256 0fda80a724f22148a313e42970f2cacbd2f734dce1ee7a2f520c2df2916ede67`.
