@@ -24,10 +24,14 @@
   UefiDriverEntryPoint
   DebugLib
   PrintLib
-  SecureBootVariableProvisionLib
+  SerialPortLib
+  UefiRuntimeServicesTableLib
+  UefiBootServicesTableLib
 
 [Guids]
   gEfiGlobalVariableGuid
+  gEfiImageSecurityDatabaseGuid
+  gEfiCustomModeEnableGuid
 
 [Protocols]
   gEfiVariableArchProtocolGuid
