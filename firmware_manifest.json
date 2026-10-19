@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "kind": "firmware-uki-build",
+  "firmware": {
+    "source_repo": "https://github.com/tianocore/edk2.git",
+    "source_commit": "d46aa46c8361194521391aa581593e556c707c6e",
+    "source_tag": "edk2-stable202508",
+    "architecture": "x86_64",
+    "output": "build/firmware/k8labs-cloudhv-secureboot.fd",
+    "sha256": null,
+    "secure_boot": {
+      "required": true,
+      "enabled": false,
+      "status": "pending-firmware-build",
+      "reason": "EDK2 source and toolchain are pinned; firmware artifact is not yet built in this environment."
+    },
+    "public_certificate": "firmware/k8labs-uefi-db.crt",
+    "public_key_fingerprint": "81b6f09f7be0746ca177e07fdc1503d44803dcf6e701b85c7777ba7f3dc017a4",
+    "public_cert_fingerprint": "288586d477df93564b346323379b857b491dd74aa9d98e19e5bc5107568be274",
+    "private_key_material_in_repo": false,
+    "private_key_path": "build/firmware/k8labs-uefi-db.key"
+  },
+  "toolchain": {
+    "gcc": "gcc (GCC) 16.2.1 20260810",
+    "nasm": "nasm 2.16.03",
+    "python": "Python 3.14.8",
+    "make": "GNU Make 4.4.1",
+    "ukify": "ukify 262",
+    "sbsign": "sbsign 0.9.5",
+    "edk2_build_target": "RELEASE",
+    "edk2_toolchain": "GCC5"
+  },
+  "uki": {
+    "output": "build/uki/EFI/BOOT/BOOTX64.EFI",
+    "install_path": "EFI/BOOT/BOOTX64.EFI",
+    "fallback_boot": true,
+    "signed": true,
+    "signing_tool": "sbsign",
+    "signing_public_key_fingerprint": "81b6f09f7be0746ca177e07fdc1503d44803dcf6e701b85c7777ba7f3dc017a4",
+    "sha256": "45ed71c2f5e92e9b42e46424b2522a2bc555657dbf65a1c432ff18f44e98224a",
+    "kernel": "/boot/vmlinuz-linux",
+    "initrd": "/boot/initramfs-linux.img",
+    "cmdline": "root=/dev/vda2 rw console=ttyS0",
+    "os_release": "k8labs"
+  },
+  "qcow2": {
+    "path": "build/k8labs-base.qcow2",
+    "sha256": "24b0b32f9f57db77c9e992c9533fa9d911f192d1165f72f1f830dec6ad67f21c"
+  },
+  "firmware_source_repo": "https://github.com/tianocore/edk2.git",
+  "firmware_source_commit": "d46aa46c8361194521391aa581593e556c707c6e",
+  "firmware_source_tag": "edk2-stable202508",
+  "firmware_arch": "x86_64",
+  "public_key_fingerprint": "81b6f09f7be0746ca177e07fdc1503d44803dcf6e701b85c7777ba7f3dc017a4",
+  "uki_sha256": "45ed71c2f5e92e9b42e46424b2522a2bc555657dbf65a1c432ff18f44e98224a",
+  "qcow2_sha256": "24b0b32f9f57db77c9e992c9533fa9d911f192d1165f72f1f830dec6ad67f21c",
+  "secure_boot_enabled": false
+}
