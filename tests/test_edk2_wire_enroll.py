@@ -28,35 +28,32 @@ def test_dsc_gains_the_driver_after_the_secure_boot_anchor() -> None:
     assert out.index(wire_mod.DSC_ANCHOR) < out.index(wire_mod.DRIVER_INF)
 
 
-def test_fdf_gains_the_driver_and_three_default_key_files() -> None:
+def test_fdf_places_the_driver_in_the_firmware_volume() -> None:
     out = wire_mod.wire_fdf(FDF)
     assert f"INF  {wire_mod.DRIVER_INF}" in out
-    guids = wire_mod.default_key_guids()
-    for name, guid in guids.items():
-        assert f"FILE FREEFORM = {guid}" in out
-        assert f"SECTION RAW = OvmfPkg/CloudHv/{name}" in out
 
 
 def test_wiring_is_idempotent() -> None:
-    once = wire_mod.wire_fdf(FDF)
-    assert wire_mod.wire_fdf(once) == once
+    once = wire_mod.wire_dsc(DSC)
+    assert wire_mod.wire_dsc(once) == once
+    fdf_once = wire_mod.wire_fdf(FDF)
+    assert wire_mod.wire_fdf(fdf_once) == fdf_once
 
 
 def test_missing_anchor_fails_loudly() -> None:
-    for func, text in (
-        (wire_mod.wire_dsc, "no anchor\n"),
-        (wire_mod.wire_fdf, "no anchor\n"),
-    ):
+    for func in (wire_mod.wire_dsc, wire_mod.wire_fdf):
         try:
-            func(text)
+            func("no anchor\n")
         except ValueError as exc:
             assert "anchor" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("missing anchor must raise")
 
 
-def test_default_key_guids_match_security_pkg() -> None:
-    guids = wire_mod.default_key_guids()
-    assert guids["K8LabsPk.esl"].lower() == "85254ea7-4759-4fc4-82d4-5eed5fb0a4a0"
-    assert guids["K8LabsKek.esl"].lower() == "6f64916e-9f7a-4c35-b952-cd041efb05a3"
-    assert guids["K8LabsDb.esl"].lower() == "c491d352-7623-4843-accc-2791a7574421"
+def test_firmware_does_not_carry_default_key_ffs_files() -> None:
+    # Regression: FFS default-key entries corrupted the PEI variable store.
+    fdf = ROOT / "firmware" / "edk2" / "K8LabsEnrollKeys"
+    assert fdf.is_dir()
+    sources = " ".join(p.read_text(errors="ignore") for p in fdf.iterdir())
+    assert "FILE FREEFORM" not in sources
+    assert "gDefault" not in sources

@@ -62,3 +62,33 @@ def test_reads_the_committed_lab_certificate() -> None:
     assert len(der) > 500
     blob = esl.build_signature_list([der])
     assert struct.unpack("<I", blob[16:20])[0] == len(blob)
+
+
+def test_c_header_contains_named_arrays() -> None:
+    cert = b"\x30\x82\x01\x00" + b"x" * 20
+    blob = esl.build_signature_list([cert])
+    header = esl.to_c_header({"K8LABS_DB_ESL": blob})
+    assert "STATIC CONST UINT8  K8LABS_DB_ESL[]" in header
+    assert "#define K8LABS_DB_ESL_SIZE  (sizeof (K8LABS_DB_ESL))" in header
+    assert "0x30, 0x82, 0x01, 0x00" in header
+
+
+def test_c_header_rejects_empty_blob() -> None:
+    try:
+        esl.to_c_header({"EMPTY": b""})
+    except ValueError as exc:
+        assert "empty signature list" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("empty blob must be rejected")
+
+
+def test_committed_header_matches_the_lab_certificate() -> None:
+    der = esl.read_der_certificate(ROOT / "firmware" / "k8labs-uefi-db.crt")
+    blob = esl.build_signature_list([der])
+    expected = esl.to_c_header(
+        {"K8LABS_PK_ESL": blob, "K8LABS_KEK_ESL": blob, "K8LABS_DB_ESL": blob}
+    )
+    committed = (
+        ROOT / "firmware" / "edk2" / "K8LabsEnrollKeys" / "K8LabsSecureBootKeys.h"
+    ).read_text(encoding="utf-8")
+    assert committed == expected

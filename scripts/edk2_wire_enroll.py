@@ -1,15 +1,12 @@
 """Wire the k8labs Secure Boot enrollment driver into a pinned EDK2 tree.
 
-The driver and the default-key FFS files are applied to a checked-out EDK2 tree
-at build time, so the upstream sources stay pristine and the overlay is fully
-described by files in this repository.
+The driver is applied to a checked-out EDK2 tree at build time, so upstream
+sources stay pristine and the overlay is fully described by files here.
 
-The wiring is textual and anchored on stable lines:
-
-* `OvmfPkg/CloudHv/CloudHvX64.dsc` — the component list inside the
-  `!if $(SECURE_BOOT_ENABLE) == TRUE` block.
-* `OvmfPkg/CloudHv/CloudHvX64.fdf` — the same block inside `[FV.DXEFV]`, where
-  the driver INF and the default-key FILE FREEFORM entries are added.
+Only the DSC component list is patched. The driver carries its signature lists
+as compiled-in arrays: adding default-key FILE FREEFORM entries to `[FV.DXEFV]`
+was tried and rejected, because it corrupted the firmware's PEI variable store
+("NvVarStore FV headers were invalid", then an ASSERT in Platform.c).
 """
 
 from __future__ import annotations
@@ -22,25 +19,7 @@ FDF_ANCHOR = (
     "  INF  SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/"
     "SecureBootConfigDxe.inf\n"
 )
-
 DRIVER_INF = "OvmfPkg/K8LabsEnrollKeys/K8LabsEnrollKeys.inf"
-
-# GUIDs come from SecurityPkg/SecurityPkg.dec: gDefaultPKFileGuid,
-# gDefaultKEKFileGuid, gDefaultdbFileGuid.
-DEFAULT_KEY_FILES = (
-    ("K8LabsPk.esl", "85254EA7-4759-4FC4-82D4-5EED5FB0A4A0"),
-    ("K8LabsKek.esl", "6F64916E-9F7A-4C35-B952-CD041EFB05A3"),
-    ("K8LabsDb.esl", "C491D352-7623-4843-ACCC-2791A7574421"),
-)
-
-
-def _ffs_blocks(indent: str = "  ") -> str:
-    out = [f"{indent}INF  {DRIVER_INF}\n"]
-    for name, guid in DEFAULT_KEY_FILES:
-        out.append(f"{indent}FILE FREEFORM = {guid} {{\n")
-        out.append(f"{indent}  SECTION RAW = OvmfPkg/CloudHv/{name}\n")
-        out.append(f"{indent}}}\n")
-    return "".join(out)
 
 
 def wire_dsc(text: str) -> str:
@@ -54,34 +33,36 @@ def wire_dsc(text: str) -> str:
 
 
 def wire_fdf(text: str) -> str:
-    """Add the enrollment driver and default-key files to [FV.DXEFV]."""
-    if DRIVER_INF in text:
+    """Place the enrollment driver in [FV.DXEFV].
+
+    The DSC only builds a module; the FDF decides what is placed in the
+    firmware volume. Omitting this step produced a firmware that built cleanly
+    and never ran the driver.
+    """
+    if f"INF  {DRIVER_INF}" in text:
         return text
     if FDF_ANCHOR not in text:
         raise ValueError("FDF anchor (SecureBootConfigDxe.inf) not found")
-    return text.replace(FDF_ANCHOR, FDF_ANCHOR + _ffs_blocks(), 1)
+    return text.replace(FDF_ANCHOR, FDF_ANCHOR + f"  INF  {DRIVER_INF}\n", 1)
 
 
-def default_key_guids() -> dict[str, str]:
-    return {name: guid for name, guid in DEFAULT_KEY_FILES}
-
-
-def wire(edk2_root: str | Path, driver_dir: str | Path, esl_dir: str | Path) -> None:
-    """Copy the driver and ESLs into the tree and patch DSC/FDF in place."""
+def wire(edk2_root: str | Path, driver_dir: str | Path) -> None:
+    """Copy the driver into the tree and patch the DSC in place."""
     root = Path(edk2_root)
     dsc = root / "OvmfPkg" / "CloudHv" / "CloudHvX64.dsc"
     fdf = root / "OvmfPkg" / "CloudHv" / "CloudHvX64.fdf"
 
+    source_driver = Path(driver_dir)
+    header = source_driver / "K8LabsSecureBootKeys.h"
+    if not header.is_file():
+        raise FileNotFoundError(
+            f"missing generated key header: {header} (run scripts/edk2_esl.py --header-out)"
+        )
+
     target_driver = root / "OvmfPkg" / "K8LabsEnrollKeys"
     if target_driver.exists():
         shutil.rmtree(target_driver)
-    shutil.copytree(Path(driver_dir), target_driver)
-
-    for name, _guid in DEFAULT_KEY_FILES:
-        source = Path(esl_dir) / name
-        if not source.is_file():
-            raise FileNotFoundError(f"missing default-key file: {source}")
-        shutil.copyfile(source, root / "OvmfPkg" / "CloudHv" / name)
+    shutil.copytree(source_driver, target_driver)
 
     dsc.write_text(wire_dsc(dsc.read_text(encoding="utf-8")), encoding="utf-8")
     fdf.write_text(wire_fdf(fdf.read_text(encoding="utf-8")), encoding="utf-8")
@@ -93,9 +74,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--edk2-root", required=True, type=Path)
     parser.add_argument("--driver-dir", required=True, type=Path)
-    parser.add_argument("--esl-dir", required=True, type=Path)
     args = parser.parse_args()
-    wire(args.edk2_root, args.driver_dir, args.esl_dir)
+    wire(args.edk2_root, args.driver_dir)
     print("wired k8labs Secure Boot enrollment driver")
     return 0
 

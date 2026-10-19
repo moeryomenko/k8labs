@@ -23,7 +23,11 @@
 [LibraryClasses]
   UefiDriverEntryPoint
   DebugLib
+  PrintLib
   SecureBootVariableProvisionLib
+
+[Guids]
+  gEfiGlobalVariableGuid
 
 [Protocols]
   gEfiVariableArchProtocolGuid
