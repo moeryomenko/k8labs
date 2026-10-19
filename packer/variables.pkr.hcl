@@ -5,13 +5,19 @@
 variable "kernel_version" {
   description = "Kernel version (full NVR) to pin during image baking"
   type        = string
-  default     = "7.3.0-0.rc7.261014g4056b3c9d3c9.60.fc46"
+  default     = "7.3.0-0.0.next.20261016.64.k8.680e037.fc44"
 }
 
 variable "kernel_repo_url" {
-  description = "rpm-md repository base URL to install the kernel from (empty = base OS repos)"
+  description = "rpm-md repository to install the kernel from (empty = base OS repos). The campaign uses the locked local repository uploaded by base.pkr.hcl."
   type        = string
-  default     = "https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/x86_64/os/"
+  default     = "file:///var/lib/k8labs-kernel-repo"
+}
+
+variable "kernel_rpm_source_dir" {
+  description = "Host directory holding the four locked kernel runtime RPMs"
+  type        = string
+  default     = "../artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.680e037.fc44"
 }
 
 # ---------------------------------------------------------------------------
@@ -207,4 +213,35 @@ variable "packer_scripts_dir" {
   description = "Directory containing the Packer provisioning scripts (relative to the packer template)"
   type        = string
   default     = "scripts"
+}
+
+# ---------------------------------------------------------------------------
+# Signed Unified Kernel Image
+# ---------------------------------------------------------------------------
+# The firmware trusts the lab certificate in its UEFI db and refuses unsigned
+# images, so the bake must sign the UKI. The key is a PKCS#11 URI (the lab HSM)
+# or a path; no private key material belongs in this repository.
+
+variable "uki_cmdline" {
+  description = "Kernel command line embedded in the UKI"
+  type        = string
+  default     = "root=/dev/vda2 rw console=ttyS0"
+}
+
+variable "uki_signing_key" {
+  description = "PKCS#11 URI or path of the lab Secure Boot signing key"
+  type        = string
+  default     = ""
+}
+
+variable "uki_signing_cert" {
+  description = "Path to the public certificate enrolled in the firmware db"
+  type        = string
+  default     = "../firmware/k8labs-uefi-db.crt"
+}
+
+variable "uki_signing_tool" {
+  description = "ukify signing tool: sbsign, systemd-sbsign or pesign"
+  type        = string
+  default     = "systemd-sbsign"
 }

@@ -59,6 +59,13 @@ source "cloud-hypervisor" "base" {
 build {
   sources = ["source.cloud-hypervisor.base"]
 
+  # The locked kernel RPMs are the only kernel source the bake may use. Upload
+  # them first and let 01-configure-system.sh build the rpm-md metadata.
+  provisioner "file" {
+    source = var.kernel_rpm_source_dir
+    destination = "/var/lib/k8labs-kernel-repo"
+  }
+
   # Configure the system and clean up BEFORE the extension payloads are
   # uploaded. 01-configure-system.sh creates /var/lib/extensions and
   # /var/lib/confexts (the upload destinations below) and installs the
@@ -143,6 +150,22 @@ build {
   provisioner "shell" {
     scripts = [
       "scripts/03-seal.sh"
+    ]
+  }
+
+  # Build the signed Unified Kernel Image and install it as the UEFI fallback
+  # boot entry. The firmware trusts the lab certificate and boots only signed
+  # images, so this step fails closed when the signing key is unavailable.
+  provisioner "shell" {
+    environment_vars = [
+      "KERNEL_VERSION=${var.kernel_version}",
+      "K8LABS_UKI_CMDLINE=${var.uki_cmdline}",
+      "K8LABS_SB_KEY=${var.uki_signing_key}",
+      "K8LABS_SB_CERT=${var.uki_signing_cert}",
+      "K8LABS_UKI_SIGNING_TOOL=${var.uki_signing_tool}",
+    ]
+    scripts = [
+      "scripts/04-uki.sh"
     ]
   }
 

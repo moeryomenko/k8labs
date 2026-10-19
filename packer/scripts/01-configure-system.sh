@@ -18,6 +18,16 @@ echo "==> Baking with kernel target: ${KERNEL_VERSION}"
 # is installed. KERNEL_REPO_URL is a base URL of an rpm-md repository.
 if [ -n "${KERNEL_REPO_URL:-}" ]; then
     echo "==> Kernel repository: ${KERNEL_REPO_URL}"
+    # A local repository ships as plain RPMs; build its metadata first.
+    case "${KERNEL_REPO_URL}" in
+        file://*)
+            dnf install -y createrepo_c >/dev/null
+            REPO_PATH="${KERNEL_REPO_URL#file://}"
+            createrepo_c --quiet "${REPO_PATH}"
+            ;;
+        *)
+            ;;
+    esac
     # The ad-hoc repo carries no configured OpenPGP key, so signature checking
     # is disabled for it. Packages are fetched over HTTPS from the vendor's
     # official mirror, and the kernel version is pinned by full NVR.
