@@ -18,7 +18,7 @@
 set -eux
 
 KERNEL_VERSION="${KERNEL_VERSION:?}"
-K8LABS_UKI_CMDLINE="${K8LABS_UKI_CMDLINE:-root=/dev/vda2 rw console=ttyS0}"
+K8LABS_UKI_CMDLINE="${K8LABS_UKI_CMDLINE:-}"
 K8LABS_SB_KEY="${K8LABS_SB_KEY:-}"
 K8LABS_SB_CERT="${K8LABS_SB_CERT:-}"
 K8LABS_UKI_SIGNING_TOOL="${K8LABS_UKI_SIGNING_TOOL:-systemd-sbsign}"
@@ -50,6 +50,21 @@ done
 # -fc44.x86_64); dracut and ukify must use the release, not the RPM NVR.
 KERNEL_RELEASE="${KERNEL_IMAGE#/boot/vmlinuz-}"
 
+# Reuse the command line the installer generated for this kernel. The image uses
+# a btrfs subvolume root, so a hardcoded root= device would panic at boot.
+if [ -z "${K8LABS_UKI_CMDLINE}" ]; then
+    BLS_ENTRY=""
+    for entry in /boot/loader/entries/*-"${KERNEL_RELEASE}".conf; do
+        [ -f "${entry}" ] || continue
+        BLS_ENTRY="${entry}"
+        break
+    done
+    [ -n "${BLS_ENTRY}" ] || fail "no boot loader entry for ${KERNEL_RELEASE}"
+    K8LABS_UKI_CMDLINE="$(sed -n 's/^options[[:space:]]*//p' "${BLS_ENTRY}" | head -n1)"
+    [ -n "${K8LABS_UKI_CMDLINE}" ] || fail "boot loader entry has no options line"
+fi
+echo "==> UKI command line: ${K8LABS_UKI_CMDLINE}"
+
 # The base image ships no initramfs; build one for the installed kernel so the
 # UKI is self-contained.
 if [ ! -f "/boot/initramfs-${KERNEL_RELEASE}.img" ]; then
@@ -62,8 +77,13 @@ INITRAMFS="/boot/initramfs-${KERNEL_RELEASE}.img"
 # The bake guest does not mount the ESP; the fallback boot entry must land on
 # the EFI system partition, not on the root filesystem.
 if ! mountpoint -q "${ESP_MOUNT}"; then
-    ESP_DEV="$(blkid -t TYPE=vfat -o device | head -n1)"
-    [ -n "${ESP_DEV}" ] || fail "no EFI system partition found"
+    # Resolve the ESP from the disk that holds /, never from "first vfat
+    # device": the bake VM also has a vfat cloud-init seed disk, and picking
+    # that one silently throws the UKI away with the VM.
+    ROOT_SRC="$(findmnt -n -o SOURCE /)"
+    ROOT_DISK="/dev/$(lsblk -no PKNAME "${ROOT_SRC}" | head -n1)"
+    ESP_DEV="$(lsblk -no NAME,FSTYPE "${ROOT_DISK}" | awk '$2 == "vfat" { print "/dev/" $1; exit }')"
+    [ -n "${ESP_DEV}" ] || fail "no EFI system partition found on ${ROOT_DISK}"
     mkdir -p "${ESP_MOUNT}"
     mount "${ESP_DEV}" "${ESP_MOUNT}"
 fi
@@ -87,4 +107,5 @@ ukify build \
 sbverify --cert "${K8LABS_SB_CERT}" "${UKI_PATH}" \
     || fail "the UKI signature does not verify against ${K8LABS_SB_CERT}"
 
+sync
 echo "==> signed UKI installed at ${UKI_PATH}"

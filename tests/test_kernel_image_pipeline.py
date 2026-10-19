@@ -66,6 +66,16 @@ def test_uki_step_mounts_the_efi_system_partition() -> None:
     script = _read(PACKER / "scripts" / "04-uki.sh")
     assert 'if ! mountpoint -q "${ESP_MOUNT}"' in script
     assert "mount \"${ESP_DEV}\" \"${ESP_MOUNT}\"" in script
+    # Regression: picking the first vfat device selected the cloud-init seed
+    # disk and the UKI vanished with the bake VM.
+    assert "findmnt -n -o SOURCE /" in script
+    assert "lsblk -no PKNAME" in script
+
+
+def test_uki_step_flushes_before_the_disk_is_captured() -> None:
+    script = _read(PACKER / "scripts" / "04-uki.sh")
+    assert script.count("sync") >= 1
+    assert script.index("sbverify --cert") < script.rindex("sync")
 
 
 def test_uki_uses_the_installed_release_not_the_rpm_nvr() -> None:
@@ -75,3 +85,11 @@ def test_uki_uses_the_installed_release_not_the_rpm_nvr() -> None:
     assert 'KERNEL_RELEASE="${KERNEL_IMAGE#/boot/vmlinuz-}"' in script
     assert '--kver "${KERNEL_RELEASE}"' in script
     assert '--uname "${KERNEL_RELEASE}"' in script
+
+
+def test_uki_reuses_the_installed_kernel_cmdline() -> None:
+    # The image roots on a btrfs subvolume; a hardcoded root= device panics.
+    script = _read(PACKER / "scripts" / "04-uki.sh")
+    assert "BLS_ENTRY" in script
+    assert "loader/entries/*-" in script
+    assert "sed -n 's/^options" in script

@@ -223,9 +223,9 @@ variable "packer_scripts_dir" {
 # or a path; no private key material belongs in this repository.
 
 variable "uki_cmdline" {
-  description = "Kernel command line embedded in the UKI"
+  description = "Kernel command line embedded in the UKI (empty = reuse the installed kernel's boot loader options)"
   type        = string
-  default     = "root=/dev/vda2 rw console=ttyS0"
+  default     = ""
 }
 
 variable "uki_signing_key" {
