@@ -21,6 +21,7 @@
 #include <Uefi.h>
 
 #include <Guid/AuthenticatedVariableFormat.h>
+#include <Guid/EventGroup.h>
 #include <Guid/GlobalVariable.h>
 #include <Guid/ImageAuthentication.h>
 #include <Library/DebugLib.h>
@@ -129,27 +130,17 @@ ReportSecureBootState (
   Say ("SetupMode", Status);
 }
 
-/**
-  Entry point: enroll db, KEK and PK from the compiled-in signature lists.
-
-  @param[in] ImageHandle  Image handle of this driver.
-  @param[in] SystemTable  Pointer to the EFI System Table.
-
-  @retval EFI_SUCCESS  Enrollment completed.
-  @retval Others       A variable write failed.
-**/
-EFI_STATUS
+STATIC
+VOID
 EFIAPI
-K8LabsEnrollKeysEntryPoint (
-  IN EFI_HANDLE        ImageHandle,
-  IN EFI_SYSTEM_TABLE  *SystemTable
+K8LabsOnEndOfDxe (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
   )
 {
   EFI_STATUS  Status;
 
-  SerialPortInitialize ();
-  Say ("entry", EFI_SUCCESS);
-
+  Say ("end-of-dxe", EFI_SUCCESS);
   Say ("custom mode on", EnterCustomMode (TRUE));
 
   //
@@ -183,5 +174,40 @@ K8LabsEnrollKeysEntryPoint (
   Say ("custom mode off", EnterCustomMode (FALSE));
   ReportSecureBootState ();
 
-  return EFI_SUCCESS;
+  gBS->CloseEvent (Event);
+}
+
+/**
+  Entry point: register the enrollment callback for EndOfDxe.
+
+  @param[in] ImageHandle  Image handle of this driver.
+  @param[in] SystemTable  Pointer to the EFI System Table.
+
+  @retval EFI_SUCCESS  Callback registered.
+  @retval Others       Event creation failed.
+**/
+EFI_STATUS
+EFIAPI
+K8LabsEnrollKeysEntryPoint (
+  IN EFI_HANDLE        ImageHandle,
+  IN EFI_SYSTEM_TABLE  *SystemTable
+  )
+{
+  EFI_EVENT   Event;
+  EFI_STATUS  Status;
+
+  SerialPortInitialize ();
+  Say ("entry", EFI_SUCCESS);
+
+  Status = gBS->CreateEventEx (
+                  EVT_NOTIFY_SIGNAL,
+                  TPL_CALLBACK,
+                  K8LabsOnEndOfDxe,
+                  NULL,
+                  &gEfiEndOfDxeEventGroupGuid,
+                  &Event
+                  );
+  Say ("register end-of-dxe callback", Status);
+
+  return Status;
 }

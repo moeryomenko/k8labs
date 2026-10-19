@@ -30,6 +30,7 @@
 
 [Guids]
   gEfiGlobalVariableGuid
+  gEfiEndOfDxeEventGroupGuid
   gEfiImageSecurityDatabaseGuid
   gEfiCustomModeEnableGuid
 
