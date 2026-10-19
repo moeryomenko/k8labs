@@ -80,9 +80,9 @@ PRIVATE_KEY_PATH = "build/firmware/k8labs-uefi-db.key"
 PRIVATE_KEY = PRIVATE_KEY_PATH
 
 SECURE_BOOT_REQUIRED = True
-SECURE_BOOT_ENABLED = False
+SECURE_BOOT_ENABLED = True
 SECUREBOOT_ENABLED = SECURE_BOOT_ENABLED
-SECURE_BOOT_STATUS = "pending-firmware-build"
+SECURE_BOOT_STATUS = "verified-secure-boot-enabled"
 SECURE_BOOT = {
     "required": SECURE_BOOT_REQUIRED,
     "enabled": SECURE_BOOT_ENABLED,

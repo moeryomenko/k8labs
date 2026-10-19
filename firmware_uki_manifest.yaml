@@ -6,12 +6,12 @@ firmware:
   source_tag: "edk2-stable202508"
   architecture: "x86_64"
   output: "build/firmware/k8labs-cloudhv-secureboot.fd"
-  sha256: null
+  sha256: "5a442b9f2aa5eee409d76ae8de3c040d52050ac6c4c5e4121b4ed1897088b9a2"
   secure_boot:
     required: true
-    enabled: false
-    status: "pending-firmware-build"
-    reason: "EDK2 source and toolchain are pinned; the firmware artifact is not built in this tree, so no artifact hash is claimed."
+    enabled: true
+    status: "verified-secure-boot-enabled"
+    reason: "Booted under Cloud Hypervisor: the enrollment driver reported SecureBoot=1 after enrolling the lab PK/KEK/db, and the firmware rejected an unsigned image with Access Denied."
   public_certificate: "firmware/k8labs-uefi-db.crt"
   public_key_fingerprint: "81b6f09f7be0746ca177e07fdc1503d44803dcf6e701b85c7777ba7f3dc017a4"
   public_cert_fingerprint: "288586d477df93564b346323379b857b491dd74aa9d98e19e5bc5107568be274"
@@ -49,4 +49,4 @@ firmware_arch: "x86_64"
 public_key_fingerprint: "81b6f09f7be0746ca177e07fdc1503d44803dcf6e701b85c7777ba7f3dc017a4"
 uki_sha256: null
 qcow2_sha256: null
-secure_boot_enabled: false
+secure_boot_enabled: true
