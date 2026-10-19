@@ -39,6 +39,24 @@ clean_builds_required: 2
 hsm_signature_required: true
 operator_approval_required: true
 
+# rpmbuild switches for the release build. `--without debuginfo` must never be
+# added: the spec strips every CONFIG_DEBUG_INFO*=y, which drops
+# CONFIG_DEBUG_INFO_BTF and, with it, CONFIG_SCHED_CLASS_EXT.
+rpmbuild_opts:
+  - --without debug
+  - --without doc
+  - --without headers
+  - --without cross_headers
+  - --without perf
+  - --without libperf
+  - --without tools
+  - --without ynl
+  - --without kmap
+  - --without kernel_abi_stablelists
+  - --without selftests
+forbidden_rpmbuild_opts:
+  - --without debuginfo
+
 # Only these four runtime RPMs are tracked in Git LFS.
 lfs_tracked_rpms:
   - kernel-core

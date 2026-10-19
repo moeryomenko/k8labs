@@ -58,6 +58,28 @@ RELEASE_REQUIRES_HSM_SIGNATURE = True
 HSM_SIGNATURE_REQUIRED = RELEASE_REQUIRES_HSM_SIGNATURE
 OPERATOR_APPROVAL_REQUIRED = True
 
+# Exact rpmbuild switches for the release build.
+RPMBUILD_OPTS = (
+    "--without debug",
+    "--without doc",
+    "--without headers",
+    "--without cross_headers",
+    "--without perf",
+    "--without libperf",
+    "--without tools",
+    "--without ynl",
+    "--without kmap",
+    "--without kernel_abi_stablelists",
+    "--without selftests",
+)
+
+# `--without debuginfo` makes the kernel spec strip every CONFIG_DEBUG_INFO*=y
+# from the merged .config. That removes CONFIG_DEBUG_INFO_BTF and, because
+# CONFIG_SCHED_CLASS_EXT depends on BPF_SYSCALL && BPF_JIT && DEBUG_INFO_BTF,
+# it silently drops sched_ext too. A kernel built that way cannot run any of
+# the scheduler arms, so the build must fail closed instead of producing it.
+FORBIDDEN_RPMBUILD_OPTS = ("--without debuginfo",)
+
 RUNTIME_RPMS = (
     "kernel-core",
     "kernel-modules",
@@ -178,6 +200,26 @@ def missing_required_options(
         content = read_config_fragment(path)
     enabled = config_fragment_options(content)
     return [option for option in REQUIRED_CONFIG_OPTIONS if option not in enabled]
+
+
+def forbidden_rpmbuild_opts(opts: str | list[str] | None = None) -> list[str]:
+    """Return forbidden rpmbuild switches present in *opts*.
+
+    A build with `--without debuginfo` loses BTF and therefore sched_ext, so it
+    must never be used for a scheduler-campaign kernel.
+    """
+    if opts is None:
+        opts = list(RPMBUILD_OPTS)
+    text = " ".join(opts) if not isinstance(opts, str) else opts
+    return [flag for flag in FORBIDDEN_RPMBUILD_OPTS if flag in text]
+
+
+def assert_rpmbuild_opts(opts: str | list[str] | None = None) -> None:
+    bad = forbidden_rpmbuild_opts(opts)
+    if bad:
+        raise ValueError(
+            "rpmbuild options drop BTF/sched_ext and are forbidden: " + ", ".join(bad)
+        )
 
 
 def config_fragment_hash(
@@ -445,6 +487,11 @@ def check(
             errors.append("derived NVR is invalid")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"NVR derivation failed: {exc}")
+
+    try:
+        assert_rpmbuild_opts()
+    except ValueError as exc:
+        errors.append(str(exc))
 
     gitattributes = target / ".gitattributes"
     if not _gitattributes_has_lfs(gitattributes):

@@ -108,3 +108,22 @@ def test_hsm_and_operator_approval_required() -> None:
     assert kbh.RELEASE_REQUIRES_HSM_SIGNATURE is True
     assert kbh.OPERATOR_APPROVAL_REQUIRED is True
     assert kbh.CLEAN_BUILDS_REQUIRED == 2
+
+
+def test_build_without_debuginfo_is_rejected() -> None:
+    # The spec strips CONFIG_DEBUG_INFO*=y for --without debuginfo, which drops
+    # BTF and therefore CONFIG_SCHED_CLASS_EXT.
+    assert kbh.forbidden_rpmbuild_opts(("--without debuginfo",)) == [
+        "--without debuginfo"
+    ]
+    with pytest.raises(ValueError, match="forbidden"):
+        kbh.assert_rpmbuild_opts(["--without debug", "--without debuginfo"])
+    assert kbh.forbidden_rpmbuild_opts() == []
+
+
+def test_release_build_opts_keep_bpf_and_sched_ext_config() -> None:
+    assert "CONFIG_DEBUG_INFO_BTF" in kbh.REQUIRED_CONFIG_OPTIONS
+    assert "CONFIG_SCHED_CLASS_EXT" in kbh.REQUIRED_CONFIG_OPTIONS
+    assert "--without debuginfo" not in kbh.RPMBUILD_OPTS
+    # debug (the second kernel variant) is skipped; debuginfo packaging is not.
+    assert "--without debug" in kbh.RPMBUILD_OPTS
