@@ -66,3 +66,12 @@ def test_uki_step_mounts_the_efi_system_partition() -> None:
     script = _read(PACKER / "scripts" / "04-uki.sh")
     assert 'if ! mountpoint -q "${ESP_MOUNT}"' in script
     assert "mount \"${ESP_DEV}\" \"${ESP_MOUNT}\"" in script
+
+
+def test_uki_uses_the_installed_release_not_the_rpm_nvr() -> None:
+    # The installed kernel is named <NVR>.x86_64, so dracut and ukify must use
+    # the release derived from the file, not the RPM NVR.
+    script = _read(PACKER / "scripts" / "04-uki.sh")
+    assert 'KERNEL_RELEASE="${KERNEL_IMAGE#/boot/vmlinuz-}"' in script
+    assert '--kver "${KERNEL_RELEASE}"' in script
+    assert '--uname "${KERNEL_RELEASE}"' in script

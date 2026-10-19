@@ -38,16 +38,25 @@ fail() {
 command -v ukify >/dev/null 2>&1 || fail "ukify is required to build the UKI"
 command -v sbverify >/dev/null 2>&1 || fail "sbverify is required to verify the signed UKI"
 
-KERNEL_IMAGE="/boot/vmlinuz-${KERNEL_VERSION}"
-[ -f "${KERNEL_IMAGE}" ] || fail "kernel image not found: ${KERNEL_IMAGE}"
+KERNEL_IMAGE=""
+for candidate in /boot/vmlinuz-"${KERNEL_VERSION}"*; do
+    [ -f "${candidate}" ] || continue
+    KERNEL_IMAGE="${candidate}"
+    break
+done
+[ -n "${KERNEL_IMAGE}" ] || fail "kernel image not found for ${KERNEL_VERSION}"
+
+# The installed release carries the architecture suffix (for example
+# -fc44.x86_64); dracut and ukify must use the release, not the RPM NVR.
+KERNEL_RELEASE="${KERNEL_IMAGE#/boot/vmlinuz-}"
 
 # The base image ships no initramfs; build one for the installed kernel so the
 # UKI is self-contained.
-if [ ! -f "/boot/initramfs-${KERNEL_VERSION}.img" ]; then
+if [ ! -f "/boot/initramfs-${KERNEL_RELEASE}.img" ]; then
     command -v dracut >/dev/null 2>&1 || fail "dracut is required to build the initramfs"
-    dracut --force --kver "${KERNEL_VERSION}" "/boot/initramfs-${KERNEL_VERSION}.img"
+    dracut --force --kver "${KERNEL_RELEASE}" "/boot/initramfs-${KERNEL_RELEASE}.img"
 fi
-INITRAMFS="/boot/initramfs-${KERNEL_VERSION}.img"
+INITRAMFS="/boot/initramfs-${KERNEL_RELEASE}.img"
 [ -s "${INITRAMFS}" ] || fail "initramfs is empty: ${INITRAMFS}"
 
 # The bake guest does not mount the ESP; the fallback boot entry must land on
@@ -65,7 +74,7 @@ ukify build \
     --linux "${KERNEL_IMAGE}" \
     --initrd "${INITRAMFS}" \
     --cmdline "${K8LABS_UKI_CMDLINE}" \
-    --uname "${KERNEL_VERSION}" \
+    --uname "${KERNEL_RELEASE}" \
     --signtool "${K8LABS_UKI_SIGNING_TOOL}" \
     --secureboot-private-key "${K8LABS_SB_KEY}" \
     --secureboot-certificate "${K8LABS_SB_CERT}" \
