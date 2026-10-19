@@ -26,9 +26,14 @@ def test_sched_ext_commit_is_recorded() -> None:
     assert SCHED_EXT_FOR_7_4_COMMIT == "1f5dde349ac2fca1f119ae8de3f0d2f1c2a8d338"
 
 
-def test_no_arena_scalar_package_resolves() -> None:
-    assert kic.ARENA_SCALAR_AVAILABLE is False
-    assert AVAILABLE_RAWHIDE_KERNEL.startswith("7.3.0-")
+def test_required_interfaces_are_available_in_pinned_source() -> None:
+    # The pinned linux-next source carries both interfaces, so no private
+    # patches are needed and scx_mavd is no longer deferred on interface grounds.
+    assert kic.ARENA_SCALAR_AVAILABLE is True
+    assert kic.SUB_CID_SCHED_UPDATED_AVAILABLE is True
+    assert kic.PINNED_LINUX_NEXT_COMMIT == "2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64"
+    assert "BPF_F_ARENA_SCALAR" in kic.REQUIRED_INTERFACES
+    assert "sub_cid_sched_updated" in kic.REQUIRED_INTERFACES
 
 
 def test_pinned_kernel_is_consistent(tmp_path, monkeypatch) -> None:
@@ -36,9 +41,7 @@ def test_pinned_kernel_is_consistent(tmp_path, monkeypatch) -> None:
     import yaml
 
     lock = tmp_path / "versions.lock.yaml"
-    lock.write_text(
-        "fedora:\n  kernel: 7.0.0-0.fc00\n", encoding="utf-8"
-    )
+    lock.write_text("fedora:\n  kernel: 7.0.0-0.fc00\n", encoding="utf-8")
     monkeypatch.setattr(kic, "VERSIONS_LOCK", lock)
     errors = check()
     assert any("versions.lock.yaml" in e for e in errors)

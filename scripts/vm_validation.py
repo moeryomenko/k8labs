@@ -24,7 +24,7 @@ UKI_PATH = UKI_OUTPUT
 UKI = UKI_OUTPUT
 BOOTX64_PATH = UKI_OUTPUT
 
-QCOW2_PATH = "build/k8labs-base.qcow2"
+QCOW2_PATH = "build/k8labs-custom-kernel.qcow2"
 QCOW2 = QCOW2_PATH
 BASE_IMAGE = QCOW2_PATH
 CUSTOM_QCOW2 = QCOW2_PATH
@@ -35,7 +35,9 @@ STOCK_FIRMWARE_PATH = STOCK_FIRMWARE
 KVM_DEVICE = "/dev/kvm"
 CLOUD_HYPERVISOR_BIN = "cloud-hypervisor"
 
-PINNED_KERNEL_NVR = "7.3.0-0.rc7.261014g4056b3c9d3c9.60.fc46"
+# Derived by scripts/kernel_build_harness.py from the pinned linux-next source
+# (Makefile VERSION=7 PATCHLEVEL=3 EXTRAVERSION=-rc7) plus the config fragment.
+PINNED_KERNEL_NVR = "kernel-7.3.0-0.rc7.2efb7a11f1aa.680e0375.fc44"
 PINNED_KERNEL_VERSION = PINNED_KERNEL_NVR
 KERNEL_NVR = PINNED_KERNEL_NVR
 EXPECTED_KERNEL_NVR = PINNED_KERNEL_NVR
@@ -43,12 +45,16 @@ EXPECTED_KERNEL_NVR = PINNED_KERNEL_NVR
 PINNED_FIRMWARE_COMMIT = "d46aa46c8361194521391aa581593e556c707c6e"
 FIRMWARE_SOURCE_COMMIT = PINNED_FIRMWARE_COMMIT
 
-LAB_CERT_FINGERPRINT = "81b6f09f7be0746ca177e07fdc1503d44803dcf6e701b85c7777ba7f3dc017a4"
+LAB_CERT_FINGERPRINT = (
+    "81b6f09f7be0746ca177e07fdc1503d44803dcf6e701b85c7777ba7f3dc017a4"
+)
 PUBLIC_KEY_FINGERPRINT = LAB_CERT_FINGERPRINT
 UEFI_DB_FINGERPRINT = LAB_CERT_FINGERPRINT
 EXPECTED_LAB_CERT_FINGERPRINT = LAB_CERT_FINGERPRINT
 
-PUBLIC_CERT_FINGERPRINT = "288586d477df93564b346323379b857b491dd74aa9d98e19e5bc5107568be274"
+PUBLIC_CERT_FINGERPRINT = (
+    "288586d477df93564b346323379b857b491dd74aa9d98e19e5bc5107568be274"
+)
 PUBLIC_CERT_PATH = "firmware/k8labs-uefi-db.crt"
 LAB_CERT_PATH = PUBLIC_CERT_PATH
 
@@ -57,6 +63,11 @@ REQUIRED_CONFIG_OPTIONS = (
     "CONFIG_BPF_SYSCALL",
     "CONFIG_BPF_JIT",
     "CONFIG_DEBUG_INFO_BTF",
+    "CONFIG_CGROUPS",
+    "CONFIG_CGROUP_SCHED",
+    "CONFIG_CFS_BANDWIDTH",
+    "CONFIG_EFI_STUB",
+    "CONFIG_MODULE_SIG",
 )
 REQUIRED_CONFIGS = REQUIRED_CONFIG_OPTIONS
 
@@ -125,10 +136,11 @@ def check_prerequisites():
     fw = _abs(FIRMWARE_OUTPUT)
     if not fw.is_file():
         errors.append(
-            "custom firmware artifact missing: " + FIRMWARE_OUTPUT
+            "custom firmware artifact missing: "
+            + FIRMWARE_OUTPUT
             + " (build/firmware/k8labs-cloudhv-secureboot.fd not built; "
-            "scripts/build_firmware.sh exits 2 because automated EDK2 build is "
-            "not implemented in this environment)"
+            "scripts/build-firmware.sh records the pinned EDK2 inputs and "
+            "refuses to proceed until the firmware is built and verified)"
         )
     uki = _abs(UKI_OUTPUT)
     if not uki.is_file():
@@ -165,10 +177,14 @@ def boot_command(firmware=None, disk=None, console_log=None):
     disk = disk or _abs(QCOW2_PATH)
     cmd = [
         CLOUD_HYPERVISOR_BIN,
-        "--cpus", "boot=2",
-        "--memory", "size=1024M",
-        "--firmware", str(firmware),
-        "--disk", "path=" + str(disk) + ",image_type=qcow2",
+        "--cpus",
+        "boot=2",
+        "--memory",
+        "size=1024M",
+        "--firmware",
+        str(firmware),
+        "--disk",
+        "path=" + str(disk) + ",image_type=qcow2",
     ]
     if console_log is not None:
         cmd += ["--console", "file=" + str(console_log)]
@@ -178,15 +194,25 @@ def boot_command(firmware=None, disk=None, console_log=None):
 def run_vm(timeout=120, firmware=None, disk=None, console_log=None):
     errors = check()
     if errors:
-        return {"status": "FAIL", "blocker": errors[0], "errors": errors, "booted": False}
+        return {
+            "status": "FAIL",
+            "blocker": errors[0],
+            "errors": errors,
+            "booted": False,
+        }
     if console_log is None:
         fd, console_log = tempfile.mkstemp(prefix="vm-validation-", suffix=".log")
         os.close(fd)
     console_log = Path(console_log)
     cmd = boot_command(firmware=firmware, disk=disk, console_log=console_log)
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              text=True, timeout=timeout, check=False)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
         return {
             "status": "PASS" if proc.returncode == 0 else "FAIL",
             "returncode": proc.returncode,
@@ -243,7 +269,9 @@ def verify_schedulers():
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(description="Validate custom kernel image and signed UKI in disposable VM.")
+    parser = argparse.ArgumentParser(
+        description="Validate custom kernel image and signed UKI in disposable VM."
+    )
     parser.add_argument("--json", action="store_true", help="Print JSON result.")
     parser.add_argument("--run-vm", action="store_true", help="Attempt to boot the VM.")
     args = parser.parse_args(argv)

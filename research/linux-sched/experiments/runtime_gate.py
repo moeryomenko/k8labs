@@ -11,9 +11,10 @@ from measurement until each passes five checks on the pinned kernel:
 
 This module is the offline half of that gate. It records the per-scheduler
 result and refuses to declare a scheduler eligible unless all five checks pass.
-`scx_mavd` is additionally gated on the arena-scalar prog flag
-(`BPF_F_ARENA_SCALAR`), which the pinned kernel does not yet provide, so it
-stays blocked here even when its binary builds.
+`scx_mavd` additionally depends on the arena-scalar prog flag
+(`BPF_F_ARENA_SCALAR`); that flag is present in the pinned linux-next source, so
+`scx_mavd` is limited only by the same five checks as every other arm and is
+blocked here purely because its binary is not built in this tree.
 """
 
 from __future__ import annotations
@@ -42,7 +43,9 @@ except Exception:  # pragma: no cover - defensive
 
 
 def _scx_root() -> Path:
-    return Path(os.environ.get("LINUX_SCHED_SCX_ROOT", str(PROJECT_ROOT.parent / "scx")))
+    return Path(
+        os.environ.get("LINUX_SCHED_SCX_ROOT", str(PROJECT_ROOT.parent / "scx"))
+    )
 
 
 def _binary_path(name: str) -> Path:

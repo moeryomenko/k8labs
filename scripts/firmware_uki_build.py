@@ -109,28 +109,33 @@ UKI_SIGNED = True
 UKI_SIGNATURE = "sbsign"
 UKI_SIGNING_KEY_FINGERPRINT = PUBLIC_KEY_FINGERPRINT
 
-# Computed from the built artifact when present.
-UKI_SHA256 = "45ed71c2f5e92e9b42e46424b2522a2bc555657dbf65a1c432ff18f44e98224a"
+# Computed from the built artifact. None means "not built in this tree yet",
+# which is not the same as a verified hash.
+UKI_SHA256: str | None = None
 UKI_HASH = UKI_SHA256
 
-QCOW2_PATH = "build/k8labs-base.qcow2"
+# The custom-kernel image the cluster image map points at. The stock
+# `build/k8labs-base.qcow2` is a separate, digest-independent build artifact and
+# must never be recorded here as if it were this kernel's image.
+QCOW2_PATH = "build/k8labs-custom-kernel.qcow2"
 QCOW2 = QCOW2_PATH
 BASE_IMAGE = QCOW2_PATH
-QCOW2_SHA256 = "24b0b32f9f57db77c9e992c9533fa9d911f192d1165f72f1f830dec6ad67f21c"
+QCOW2_SHA256: str | None = None
 QCOW2_HASH = QCOW2_SHA256
 
 # ---------------------------------------------------------------------------
 # Required pin fields (for validation)
 # ---------------------------------------------------------------------------
+# Source and trust pins are always required. The two artifact hashes are not:
+# they only become required once the corresponding artifact has been built.
 REQUIRED_PIN_FIELDS = (
     "firmware_source_repo",
     "firmware_source_commit",
     "firmware_source_tag",
     "firmware_arch",
     "public_key_fingerprint",
-    "uki_sha256",
-    "qcow2_sha256",
 )
+ARTIFACT_SHA_FIELDS = ("uki_sha256", "qcow2_sha256")
 REQUIRED_FIELDS = REQUIRED_PIN_FIELDS
 REQUIRED_PINS = REQUIRED_PIN_FIELDS
 REQUIRED_MANIFEST_FIELDS = REQUIRED_PIN_FIELDS
@@ -268,20 +273,27 @@ def check(
     else:
         errors.extend(check_required_pin_fields(manifest))
 
-    # Verify the UKI hash if the artifact is present.
-    uki_path = PROJECT_ROOT / UKI_OUTPUT
-    if uki_path.is_file():
-        actual = sha256_file(uki_path)
-        recorded = _flatten_manifest(manifest).get("uki_sha256")
-        if recorded and recorded != actual:
-            errors.append(f"UKI hash mismatch: recorded {recorded}, actual {actual}")
-    # Verify the QCOW2 hash if the artifact is present.
-    qcow2_path = PROJECT_ROOT / QCOW2_PATH
-    if qcow2_path.is_file():
-        actual = sha256_file(qcow2_path)
-        recorded = _flatten_manifest(manifest).get("qcow2_sha256")
-        if recorded and recorded != actual:
-            errors.append(f"QCOW2 hash mismatch: recorded {recorded}, actual {actual}")
+    # Artifact hashes are verified only against artifacts that exist. A
+    # present artifact without a recorded hash, or with a hash that does not
+    # match, fails closed: nothing unaudited may be treated as release input.
+    artifact_base = Path(root) if root is not None else PROJECT_ROOT
+    for label, relative, field in (
+        ("UKI", UKI_OUTPUT, "uki_sha256"),
+        ("QCOW2", QCOW2_PATH, "qcow2_sha256"),
+    ):
+        artifact_path = artifact_base / relative
+        if not artifact_path.is_file():
+            continue
+        actual = sha256_file(artifact_path)
+        recorded = _flatten_manifest(manifest).get(field)
+        if not recorded:
+            errors.append(f"{label} artifact exists but no {field} is recorded")
+        elif not isinstance(recorded, str):
+            errors.append(f"{label} {field} must be a string digest")
+        elif recorded != actual:
+            errors.append(
+                f"{label} hash mismatch: recorded {recorded}, actual {actual}"
+            )
 
     # Private key material scan.
     scan_root = Path(root) if root is not None else PROJECT_ROOT

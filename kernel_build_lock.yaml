@@ -1,43 +1,56 @@
-clean_builds_required: 2
-config_fragment: configs/fedora-44-kernel.config-fragment
-config_fragment_sha256: ba0631a17e500ff9b1d198373cc84c0358930db0bc517fd22048ad88ea76e76c
+# Reproducible kernel build lock for the linux-sched cgroup-v2 quota campaign.
+#
+# This file records pins and inputs only. Artifact hashes are recorded after a
+# build produces the artifact; a hash is never written for something that has
+# not been built.
+schema_version: 1
+kind: kernel-build-lock
+
+# Exact upstream source (linux-next tag next-20261016). Verified to contain
+# BPF_F_ARENA_SCALAR and sched_ext_ops.sub_cid_sched_updated().
+source_repo: https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git
+source_tag: next-20261016
+source_commit: 2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64
+
+# Fedora packaging tree, pinned to an immutable commit (never the branch tip).
+kernel_ark_repo: https://gitlab.com/cki-project/kernel-ark.git
+kernel_ark_branch: ark-infra
+ark_infra_commit: 858721d1e05149394e01ae4f5ce3202484c22850
+
+# Digest-pinned builder and RPM buildroot.
+fedora_version: '44'
 fedora_image: registry.fedoraproject.org/fedora@sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011
 fedora_image_digest: sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011
-fedora_version: '44'
-kernel_ark_repo: https://gitlab.com/ckiw/kernel-ark.git
-kind: kernel-build-lock
-lfs_tracked_rpms:
-- kernel-core
-- kernel-modules
-- kernel-modules-core
-- kernel-modules-extra
 mock_buildroot: fedora-44-x86_64
-non_lfs_artifacts:
-- cache_path: build/fedora-cloud-base.qcow2
-  id: base-image-qcow2
-  sha256: 28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f
-- cache_path: build/CLOUDHV.fd
-  id: firmware
-  sha256: dc2fc8f0e43b96712d9fccc52a3a590769606412b3e1bc911d217addd3bef624
-- cache_path: build/kernel-debuginfo.rpm
-  id: debuginfo
-  sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-nvr: kernel-7.3.0-0.rc0.2efb7a11f1aa.ba0631a1.fc44
+architecture: x86_64
+
+# Merged configuration fragment and the NVR derived from source + fragment.
+config_fragment: configs/fedora-44-kernel.config-fragment
+config_fragment_sha256: 680e0375e8e21efbb88b6dbe8e8a39dc51dcc26c62aebd6d36fe75c5c658c2ea
+nvr: kernel-7.3.0-0.rc7.2efb7a11f1aa.680e0375.fc44
+
+# Release policy: two clean payload builds are compared before one
+# operator-approved HSM-signed release is produced.
+clean_builds_required: 2
+hsm_signature_required: true
 operator_approval_required: true
-out_of_lfs:
-- qcow2
-- firmware
-- debug
-packaging: kernel-ark-ark-infra
-release_requires_hsm_signature: true
-runtime_rpms:
-- lfs: true
-  name: kernel-core
-- lfs: true
-  name: kernel-modules
-- lfs: true
-  name: kernel-modules-core
-- lfs: true
-  name: kernel-modules-extra
-schema_version: 1
-source_commit: 2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64
+
+# Only these four runtime RPMs are tracked in Git LFS.
+lfs_tracked_rpms:
+  - kernel-core
+  - kernel-modules
+  - kernel-modules-core
+  - kernel-modules-extra
+
+# Artifacts that stay outside Git LFS. Their hashes are filled in by the build;
+# null means "not built yet", which is not a verified hash.
+non_lfs_artifacts:
+  - id: source-tarball
+    path: build/firmware/kernel-source.tar.xz
+    sha256: null
+  - id: firmware
+    path: build/firmware/k8labs-cloudhv-secureboot.fd
+    sha256: null
+  - id: debuginfo
+    path: build/firmware/kernel-debuginfo.rpm
+    sha256: null

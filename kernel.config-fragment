@@ -1,8 +1,0 @@
-# k8labs reproducible kernel config fragment
-# Merged onto the pinned upstream linux-next source before building.
-CONFIG_SCHED_CLASS_EXT=y
-CONFIG_BPF_SYSCALL=y
-CONFIG_DEBUG_INFO_BTF=y
-CONFIG_BPF_JIT=y
-CONFIG_CGROUPS=y
-CONFIG_CGROUP_CPUACCT=y

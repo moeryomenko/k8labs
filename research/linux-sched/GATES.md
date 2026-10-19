@@ -285,10 +285,29 @@ The result is a container-side `sched_ext_ops` of 512/51 against the kernel's
 LINUX_SCHED_SCX_ROOT=<durable-path>/scx-kern make -C research linux-sched-scx-stage
 ```
 
-## `scx_mavd` — blocked: needs a 7.4 kernel
+## `scx_mavd` — RESOLVED by the pinned linux-next source
 
-`scx_mavd` is the only arm on the **cid** path, and on this kernel it fails to
-load with `EINVAL` and no verifier log:
+**Resolved.** The two interfaces `scx_mavd` and `scx_nitosis` need are present in
+the pinned upstream source, so the custom kernel needs no private patches:
+
+| Interface | Pinned source location |
+|---|---|
+| `BPF_F_ARENA_SCALAR` | `include/uapi/linux/bpf.h` |
+| `bpf_jit_supports_arena_scalar` (x86) | `arch/x86/net/bpf_jit_comp.c` |
+| `sched_ext_ops.sub_cid_sched_updated` | `kernel/sched/ext/internal.h` |
+
+Source pin: linux-next `next-20261016`
+(`2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64`), verified by fetching that exact
+commit and grepping the three locations above. See
+`scripts/kernel_source_gate.py` and `kernel_source_pinned.yaml`.
+
+The historical blocker below is kept because it explains why the earlier
+Fedora/rawhide pin could not run `scx_mavd`.
+
+### Historical blocker — Fedora/rawhide could not supply the flag
+
+`scx_mavd` is the only arm on the **cid** path, and on the previous pinned
+kernel it fails to load with `EINVAL` and no verifier log:
 
 ```
 libbpf: prog 'scx_lib_init_probe': BPF program load failed: -EINVAL
@@ -329,11 +348,10 @@ ordinary addresses and corrupt memory. The change that introduced this for
 So `scx_mavd` runs in this lab only under a kernel that has the flag (v7.4), or
 as the pre-`6b9fe0d69` revision built in the classic arena form.
 
-Decision: `scx_mavd` is **deferred** from the series. The series runs three arms
-(EEVDF, `scx_bpfland`, `scx_lavd`) so that every arm shares one scx revision and
-one kernel ABI; `scx_mavd` rejoins when a kernel with the flag is available. The
-runner refuses the arm with a pointer here until then, so it cannot be started by
-accident.
+Decision (historical, now superseded): `scx_mavd` was deferred from the series
+while no kernel with the flag was available. The pinned linux-next source above
+resolves this, so the arm is no longer deferred on interface grounds; it is
+gated only by the runtime build/attach checks every arm must pass.
 
 Note the BCC situation is unrelated: `libbpf-tools` CO-RE binaries cover the
 run-queue metrics, and `kernel-devel` is deliberately not installed when the

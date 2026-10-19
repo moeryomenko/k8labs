@@ -5,8 +5,11 @@ Compares the default **EEVDF** scheduler with sched_ext implementations
 a randomized, seeded **paired-block** crossover and the frozen decision rule
 from the approved plan.
 
-`scx_mavd` is deferred: it needs a kernel with the arena-scalar prog flag
-(`BPF_F_ARENA_SCALAR`), which the pinned kernel does not have. See `GATES.md`.
+`scx_mavd` needs the arena-scalar prog flag (`BPF_F_ARENA_SCALAR`) and
+`scx_nitosis` needs `sched_ext_ops.sub_cid_sched_updated()`. Both are present in
+the pinned linux-next source `next-20261016`
+(`2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64`), so the custom kernel build needs no
+private patches. See `GATES.md`.
 
 This series owns *in-guest* CPU scheduling only. Kubernetes pod placement is
 studied separately in the sibling `kube-sched` series.
@@ -142,9 +145,10 @@ The execution path refuses to run until these are satisfied (it fails loudly
 rather than reporting a fake success):
 
 1. A kernel build with the required BTF and sched_ext interfaces, used for
-   **all** arms (including EEVDF). `scx_mavd` would additionally need a kernel
-   with `BPF_F_ARENA_SCALAR`, so it is deferred (see `GATES.md`).
-2. `scx_bpfland`/`scx_lavd` binaries staged on the worker, with
+   **all** arms (including EEVDF). All six arms, including `scx_mavd`, are gated
+   only by the runtime build/verifier/attach/progress/detach checks (see
+   `GATES.md`).
+2. Every sched_ext arm binary staged on the worker, with
    verifier/attach/progress/detach checks passing.
 3. `bpftrace`, `perf`, and the BCC tools installed on the worker image. These
    are node-native: the image bake installs them (see `GATES.md` for the exact
@@ -162,7 +166,11 @@ rather than reporting a fake success):
    the control arm by raising the rate until p99 crosses a target and freezing
    the highest rate that stayed under it; `run` refuses to start without it.
 
-Kernel-image contract: sched_ext/for-7.4 commit `1f5dde349ac2fca1f119ae8de3f0d2f1c2a8d338`; no Fedora package with `BPF_F_ARENA_SCALAR` resolves, so `scx_mavd` stays deferred (see `GATES.md`).
+Kernel-image contract: the resolved source pin is linux-next `next-20261016`
+(`2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64`), which contains both
+`BPF_F_ARENA_SCALAR` and `sched_ext_ops.sub_cid_sched_updated()`. Historical
+context: the earlier `sched_ext/for-7.4` pin `1f5dde349ac2fca1f119ae8de3f0d2f1c2a8d338`
+did not carry the arena-scalar flag (see `GATES.md`).
 
 ## Runtime integration gates
 

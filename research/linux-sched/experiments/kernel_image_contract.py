@@ -13,18 +13,41 @@ EXTENSIONS_MANIFEST = PROJECT_ROOT / "extensions" / "manifest.yaml"
 GATES_DOC = PROJECT_ROOT / "research" / "linux-sched" / "GATES.md"
 README_DOC = PROJECT_ROOT / "research" / "linux-sched" / "README.md"
 
+# Historical: the sched_ext/for-7.4 branch tip that still lacked the arena
+# scalar prog flag, and why the series was deferred before this pin.
 SCHED_EXT_FOR_7_4_COMMIT = "1f5dde349ac2fca1f119ae8de3f0d2f1c2a8d338"
+
+# Resolved source pin for the custom kernel: a linux-next snapshot that already
+# contains BOTH required interfaces, so no private patches are needed.
+PINNED_LINUX_NEXT_TAG = "next-20261016"
+PINNED_LINUX_NEXT_COMMIT = "2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64"
 PINNED_KERNEL_VERSION = "7.3.0-0.rc7.261014g4056b3c9d3c9.60.fc46"
 AVAILABLE_RAWHIDE_KERNEL = "7.3.0-0.rc7.261016g2f2f7eeef8b0.62.fc46"
-ARENA_SCALAR_AVAILABLE = False
+ARENA_SCALAR_AVAILABLE = True
+SUB_CID_SCHED_UPDATED_AVAILABLE = True
 
-BLOCKER = (
-    "No Fedora/rawhide kernel package resolves with BPF_F_ARENA_SCALAR "
+REQUIRED_INTERFACES = {
+    "BPF_F_ARENA_SCALAR": "include/uapi/linux/bpf.h",
+    "bpf_jit_supports_arena_scalar": "arch/x86/net/bpf_jit_comp.c",
+    "sub_cid_sched_updated": "kernel/sched/ext/internal.h",
+}
+
+RESOLUTION = (
+    "Resolved: linux-next "
+    f"{PINNED_LINUX_NEXT_TAG} ({PINNED_LINUX_NEXT_COMMIT}) contains both "
+    "BPF_F_ARENA_SCALAR (with x86 JIT support) and "
+    "sched_ext_ops.sub_cid_sched_updated(), so the custom kernel needs no "
+    "private patches. See researches GATES.md and the kernel source gate."
+)
+
+HISTORICAL_BLOCKER = (
+    "No Fedora/rawhide kernel package resolved with BPF_F_ARENA_SCALAR "
     "(required by scx_mavd); Fedora rawhide ships only "
     f"{AVAILABLE_RAWHIDE_KERNEL}, and the sched_ext/for-7.4 branch "
-    f"({SCHED_EXT_FOR_7_4_COMMIT}) is still a 7.3-based tree without the flag. "
-    "scx_mavd stays deferred until a kernel with the flag is packaged."
+    f"({SCHED_EXT_FOR_7_4_COMMIT}) was still a 7.3-based tree without the flag."
 )
+
+BLOCKER = RESOLUTION
 
 
 def _packer_kernel_version() -> str | None:
@@ -100,8 +123,11 @@ def check() -> list[str]:
     for doc in (GATES_DOC, README_DOC):
         if doc.is_file():
             text = doc.read_text(encoding="utf-8")
-            if SCHED_EXT_FOR_7_4_COMMIT not in text and "BPF_F_ARENA_SCALAR" not in text:
-                errors.append(f"{doc} does not document the kernel-image blocker")
+            if "BPF_F_ARENA_SCALAR" not in text:
+                errors.append(f"{doc} does not document the kernel-image contract")
+                break
+            if PINNED_LINUX_NEXT_COMMIT not in text:
+                errors.append(f"{doc} does not record the pinned source commit")
                 break
 
     return errors

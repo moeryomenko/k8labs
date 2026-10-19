@@ -20,16 +20,23 @@ SOURCE_COMMIT = PINNED_SOURCE_COMMIT
 FEDORA_VERSION = "44"
 FEDORA_IMAGE = "registry.fedoraproject.org/fedora@sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011"
 FEDORA_IMAGE_REF = FEDORA_IMAGE
-FEDORA_IMAGE_DIGEST = "sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011"
+FEDORA_IMAGE_DIGEST = (
+    "sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011"
+)
 PODMAN_IMAGE = FEDORA_IMAGE
 
 MOCK_BUILDROOT = "fedora-44-x86_64"
 MOCK_CONFIG = MOCK_BUILDROOT
 BUILDROOT = MOCK_BUILDROOT
 
-KERNEL_ARK_REPO = "https://gitlab.com/ckiw/kernel-ark.git"
+KERNEL_ARK_REPO = "https://gitlab.com/cki-project/kernel-ark.git"
 ARK_INFRA_REPO = KERNEL_ARK_REPO
-ARK_INFRA_REF = "main"
+# The packaging tree is pinned to an immutable commit, not the moving branch:
+# ark-infra carries only the RPM spec/build scripts and is merged onto the
+# pinned upstream source, so it must never advance underneath a release.
+ARK_INFRA_BRANCH = "ark-infra"
+ARK_INFRA_COMMIT = "858721d1e05149394e01ae4f5ce3202484c22850"
+ARK_INFRA_REF = ARK_INFRA_COMMIT
 PACKAGING = "kernel-ark-ark-infra"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -74,8 +81,27 @@ INVENTORY_PATH = INVENTORY_FILE
 PROVISIONER = PROJECT_ROOT / "packer" / "scripts" / "01-configure-system.sh"
 PACKER_PROVISIONER = PROVISIONER
 
+# Kernel version fields, read from the pinned source's top-level Makefile at
+# PINNED_SOURCE_COMMIT (VERSION=7 PATCHLEVEL=3 SUBLEVEL=0 EXTRAVERSION=-rc7).
+# The NVR is derived from these plus the pinned commit and the merged config
+# fragment, so two different kernels can never share one NVR.
 NVR_VERSION_BASE = "7.3.0"
-NVR_RELEASE_PREFIX = "0.rc0"
+NVR_UPSTREAM_BUILD = "0.rc7"
+NVR_RELEASE_PREFIX = NVR_UPSTREAM_BUILD
+
+# Config options the campaign actually depends on. The merged .config must
+# enable every one of these or the build is not usable for the study.
+REQUIRED_CONFIG_OPTIONS = (
+    "CONFIG_SCHED_CLASS_EXT",
+    "CONFIG_BPF_SYSCALL",
+    "CONFIG_BPF_JIT",
+    "CONFIG_DEBUG_INFO_BTF",
+    "CONFIG_CGROUPS",
+    "CONFIG_CGROUP_SCHED",
+    "CONFIG_CFS_BANDWIDTH",
+    "CONFIG_EFI_STUB",
+    "CONFIG_MODULE_SIG",
+)
 
 
 class LFSUnavailableError(RuntimeError):
@@ -116,6 +142,30 @@ def read_config_fragment(path: str | os.PathLike[str] | None = None) -> str:
 
 def normalize_config_fragment(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+
+
+def config_fragment_options(text: str) -> set[str]:
+    """Return the enabled CONFIG_* symbols declared by a config fragment."""
+    enabled: set[str] = set()
+    for line in normalize_config_fragment(text).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, _, value = line.partition("=")
+        if value.strip() == "y":
+            enabled.add(name.strip())
+    return enabled
+
+
+def missing_required_options(
+    path: str | os.PathLike[str] | None = None,
+    content: str | None = None,
+) -> list[str]:
+    """Return required campaign config options the fragment does not enable."""
+    if content is None:
+        content = read_config_fragment(path)
+    enabled = config_fragment_options(content)
+    return [option for option in REQUIRED_CONFIG_OPTIONS if option not in enabled]
 
 
 def config_fragment_hash(
@@ -260,14 +310,18 @@ def save_lock(data: dict[str, Any], path: str | os.PathLike[str] | None = None) 
     target = Path(path) if path is not None else LOCK_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.suffix.lower() == ".json":
-        target.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        target.write_text(
+            json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     else:
         try:
             import yaml
 
             target.write_text(yaml.safe_dump(data, sort_keys=True), encoding="utf-8")
         except Exception:  # noqa: BLE001
-            target.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            target.write_text(
+                json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
     return target
 
 
@@ -357,6 +411,9 @@ def check(
 
     if not resolve_config_fragment().is_file():
         errors.append("Fedora config fragment is missing")
+    else:
+        for option in missing_required_options():
+            errors.append(f"config fragment does not enable {option}")
 
     try:
         nvr = derive_nvr(PINNED_SOURCE_COMMIT, config_fragment_hash())
@@ -379,7 +436,9 @@ def check(
     lock = load_lock(LOCK_FILE)
     if lock:
         if lock.get("source_commit") not in (None, PINNED_SOURCE_COMMIT):
-            errors.append("kernel build lock source_commit does not match pinned source")
+            errors.append(
+                "kernel build lock source_commit does not match pinned source"
+            )
         if lock.get("fedora_image") not in (None, FEDORA_IMAGE):
             errors.append("kernel build lock Fedora image is not digest-pinned")
 
@@ -392,7 +451,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--derive-nvr", action="store_true", help="print derived NVR")
     parser.add_argument("--source-commit", default=PINNED_SOURCE_COMMIT)
     parser.add_argument("--config-fragment", default=None)
-    parser.add_argument("--ensure-lfs", action="store_true", help="fail if LFS unavailable")
+    parser.add_argument(
+        "--ensure-lfs", action="store_true", help="fail if LFS unavailable"
+    )
     parser.add_argument("--write-gitattributes", action="store_true")
     args = parser.parse_args(argv)
 
@@ -405,6 +466,9 @@ def main(argv: list[str] | None = None) -> int:
         except LFSUnavailableError as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
             return 1
+        print("Git LFS storage available")
+        if not (args.check or args.derive_nvr or args.write_gitattributes):
+            return 0
     if args.derive_nvr:
         fragment_hash = config_fragment_hash(path=args.config_fragment)
         print(derive_nvr(args.source_commit, fragment_hash))

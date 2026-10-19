@@ -1,8 +1,18 @@
 # k8labs reproducible kernel config fragment
 # Merged onto the pinned upstream linux-next source before building.
+# Every option here is required by the linux-sched cgroup-v2 quota campaign:
+# sched_ext schedules, BPF/BTF loads the schedulers, and cgroup v2 CFS
+# bandwidth is what the CPU quota treatments exercise.
 CONFIG_SCHED_CLASS_EXT=y
 CONFIG_BPF_SYSCALL=y
-CONFIG_DEBUG_INFO_BTF=y
 CONFIG_BPF_JIT=y
+CONFIG_DEBUG_INFO_BTF=y
 CONFIG_CGROUPS=y
+CONFIG_CGROUP_SCHED=y
+CONFIG_CFS_BANDWIDTH=y
 CONFIG_CGROUP_CPUACCT=y
+# Secure Boot needs a signed EFI-stub kernel image.
+CONFIG_EFI_STUB=y
+# Module signatures so the signed release can be verified.
+CONFIG_MODULE_SIG=y
+CONFIG_MODULE_SIG_ALL=y

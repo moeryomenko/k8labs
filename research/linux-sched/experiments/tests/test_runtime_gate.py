@@ -22,10 +22,25 @@ def test_gate_results_have_all_five():
         assert set(res) == set(rg.RUNTIME_GATES)
 
 
-def test_mavd_blocked_on_pinned_kernel():
-    # Arena-scalar flag is unavailable on the pinned kernel.
+def test_mavd_blocked_only_by_its_unbuilt_binary():
+    # The arena-scalar flag exists in the pinned source, so the interface is no
+    # longer the blocker: scx_mavd is blocked here because no binary is built.
+    assert rg.ARENA_SCALAR_AVAILABLE is True
+    assert rg.gate_results("scx_mavd")["verifier"] is True
+    assert rg.gate_results("scx_mavd")["build"] is False
     assert rg.all_gates_pass("scx_mavd") is False
-    assert rg.gate_results("scx_mavd")["verifier"] is False
+
+
+def test_build_gate_is_false_until_binaries_are_staged():
+    for name in rg.RUNTIME_SCHEDULERS:
+        assert rg.gate_results(name)["build"] is False
+
+
+def test_uncached_interface_checks_do_not_hardcode_blocked():
+    for name in rg.RUNTIME_SCHEDULERS:
+        results = rg.gate_results(name)
+        for gate in ("verifier", "attach", "progress", "detach"):
+            assert results[gate] is True
 
 
 def test_mlfq_and_nitosis_not_blocked_by_verifier():
