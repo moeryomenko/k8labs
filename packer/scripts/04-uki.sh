@@ -50,6 +50,15 @@ fi
 INITRAMFS="/boot/initramfs-${KERNEL_VERSION}.img"
 [ -s "${INITRAMFS}" ] || fail "initramfs is empty: ${INITRAMFS}"
 
+# The bake guest does not mount the ESP; the fallback boot entry must land on
+# the EFI system partition, not on the root filesystem.
+if ! mountpoint -q "${ESP_MOUNT}"; then
+    ESP_DEV="$(blkid -t TYPE=vfat -o device | head -n1)"
+    [ -n "${ESP_DEV}" ] || fail "no EFI system partition found"
+    mkdir -p "${ESP_MOUNT}"
+    mount "${ESP_DEV}" "${ESP_MOUNT}"
+fi
+
 mkdir -p "${UKI_DIR}"
 
 ukify build \

@@ -146,7 +146,9 @@ dnf install -y conmon parted growpart \
     bcc-tools \
     libbpf-tools \
     python3-bcc \
-    bpftool
+    bpftool \
+    systemd-ukify \
+    sbsigntools
 
 # ---------------------------------------------------------------------------
 # Scheduler-research fixtures

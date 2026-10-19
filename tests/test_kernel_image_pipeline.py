@@ -53,4 +53,16 @@ def test_uki_step_verifies_the_signature_before_shipping() -> None:
 def test_uki_step_is_wired_into_the_build() -> None:
     base = _read(PACKER / "base.pkr.hcl")
     assert "scripts/04-uki.sh" in base
-    assert "K8LABS_SB_KEY=${var.uki_signing_key}" in base
+    assert 'destination = "/root/uki-signing.key"' in base
+
+
+def test_uki_tooling_is_installed_in_the_image() -> None:
+    script = _read(PACKER / "scripts" / "01-configure-system.sh")
+    assert "systemd-ukify" in script
+    assert "sbsigntools" in script
+
+
+def test_uki_step_mounts_the_efi_system_partition() -> None:
+    script = _read(PACKER / "scripts" / "04-uki.sh")
+    assert 'if ! mountpoint -q "${ESP_MOUNT}"' in script
+    assert "mount \"${ESP_DEV}\" \"${ESP_MOUNT}\"" in script
