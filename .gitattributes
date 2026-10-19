@@ -1,0 +1,5 @@
+# Reproducible kernel build: only the four runtime RPMs are in Git LFS.
+kernel-core-*.rpm filter=lfs diff=lfs merge=lfs -text
+kernel-modules-*.rpm filter=lfs diff=lfs merge=lfs -text
+kernel-modules-core-*.rpm filter=lfs diff=lfs merge=lfs -text
+kernel-modules-extra-*.rpm filter=lfs diff=lfs merge=lfs -text

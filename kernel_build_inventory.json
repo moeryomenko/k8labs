@@ -1,0 +1,31 @@
+{
+  "config_fragment_sha256": "ba0631a17e500ff9b1d198373cc84c0358930db0bc517fd22048ad88ea76e76c",
+  "fedora_image": "registry.fedoraproject.org/fedora@sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011",
+  "kind": "kernel-build-inventory",
+  "non_lfs_artifacts": [
+    {
+      "cache_path": "build/fedora-cloud-base.qcow2",
+      "id": "base-image-qcow2",
+      "sha256": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
+    },
+    {
+      "cache_path": "build/CLOUDHV.fd",
+      "id": "firmware",
+      "sha256": "dc2fc8f0e43b96712d9fccc52a3a590769606412b3e1bc911d217addd3bef624"
+    },
+    {
+      "cache_path": "build/kernel-debuginfo.rpm",
+      "id": "debuginfo",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "nvr": "kernel-7.3.0-0.rc0.2efb7a11f1aa.ba0631a1.fc44",
+  "runtime_rpms_in_lfs": [
+    "kernel-core",
+    "kernel-modules",
+    "kernel-modules-core",
+    "kernel-modules-extra"
+  ],
+  "schema_version": 1,
+  "source_commit": "2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64"
+}

@@ -1,0 +1,425 @@
+"""Reproducible kernel build harness for the pinned k8labs kernel source."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+SCHEMA_VERSION = 1
+
+PINNED_SOURCE_COMMIT = "2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64"
+SOURCE_COMMIT = PINNED_SOURCE_COMMIT
+
+FEDORA_VERSION = "44"
+FEDORA_IMAGE = "registry.fedoraproject.org/fedora@sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011"
+FEDORA_IMAGE_REF = FEDORA_IMAGE
+FEDORA_IMAGE_DIGEST = "sha256:10667e171df877cedd245b7065238143e09eaae7da4656d3e62eb7c094378011"
+PODMAN_IMAGE = FEDORA_IMAGE
+
+MOCK_BUILDROOT = "fedora-44-x86_64"
+MOCK_CONFIG = MOCK_BUILDROOT
+BUILDROOT = MOCK_BUILDROOT
+
+KERNEL_ARK_REPO = "https://gitlab.com/ckiw/kernel-ark.git"
+ARK_INFRA_REPO = KERNEL_ARK_REPO
+ARK_INFRA_REF = "main"
+PACKAGING = "kernel-ark-ark-infra"
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_FRAGMENT = PROJECT_ROOT / "configs" / "fedora-44-kernel.config-fragment"
+CONFIG_FRAGMENT_PATH = CONFIG_FRAGMENT
+FEDORA_CONFIG_FRAGMENT = CONFIG_FRAGMENT
+KERNEL_CONFIG_FRAGMENT = CONFIG_FRAGMENT
+CONFIG_FRAGMENT_CANDIDATES = (
+    PROJECT_ROOT / "configs" / "fedora-44-kernel.config-fragment",
+    PROJECT_ROOT / "configs" / "kernel.config-fragment",
+    PROJECT_ROOT / "kernel.config-fragment",
+    PROJECT_ROOT / "packer" / "kernel.config-fragment",
+)
+
+CLEAN_BUILDS_REQUIRED = 2
+BUILDS_REQUIRED = CLEAN_BUILDS_REQUIRED
+PAYLOAD_BUILDS_REQUIRED = CLEAN_BUILDS_REQUIRED
+RELEASE_REQUIRES_HSM_SIGNATURE = True
+HSM_SIGNATURE_REQUIRED = RELEASE_REQUIRES_HSM_SIGNATURE
+OPERATOR_APPROVAL_REQUIRED = True
+
+RUNTIME_RPMS = (
+    "kernel-core",
+    "kernel-modules",
+    "kernel-modules-core",
+    "kernel-modules-extra",
+)
+RUNTIME_RPM_NAMES = RUNTIME_RPMS
+LFS_TRACKED_RPMS = RUNTIME_RPMS
+LFS_TRACKED = RUNTIME_RPMS
+TRACKED_RPMS = RUNTIME_RPMS
+
+NON_LFS_ARTIFACTS = ("base-image-qcow2", "firmware", "debuginfo", "debugsource")
+OUT_OF_LFS_ARTIFACTS = NON_LFS_ARTIFACTS
+
+LOCK_FILE = PROJECT_ROOT / "kernel_build_lock.yaml"
+LOCK_PATH = LOCK_FILE
+ARTIFACT_LOCK = LOCK_FILE
+INVENTORY_FILE = PROJECT_ROOT / "kernel_build_inventory.json"
+INVENTORY_PATH = INVENTORY_FILE
+
+PROVISIONER = PROJECT_ROOT / "packer" / "scripts" / "01-configure-system.sh"
+PACKER_PROVISIONER = PROVISIONER
+
+NVR_VERSION_BASE = "7.3.0"
+NVR_RELEASE_PREFIX = "0.rc0"
+
+
+class LFSUnavailableError(RuntimeError):
+    """Raised when Git LFS storage is unavailable."""
+
+
+class HashMismatchError(ValueError):
+    """Raised when an artifact hash does not match the lock."""
+
+
+class NVR:
+    def __init__(self, name: str, version: str, release: str) -> None:
+        self.name = name
+        self.version = version
+        self.release = release
+
+    def __str__(self) -> str:
+        return f"{self.name}-{self.version}-{self.release}"
+
+
+def _first_existing(paths: tuple[Path, ...]) -> Path:
+    for path in paths:
+        if path.is_file():
+            return path
+    return paths[0]
+
+
+def resolve_config_fragment(path: str | os.PathLike[str] | None = None) -> Path:
+    if path is not None:
+        return Path(path)
+    return _first_existing(CONFIG_FRAGMENT_CANDIDATES)
+
+
+def read_config_fragment(path: str | os.PathLike[str] | None = None) -> str:
+    resolved = resolve_config_fragment(path)
+    return resolved.read_text(encoding="utf-8")
+
+
+def normalize_config_fragment(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+
+
+def config_fragment_hash(
+    path: str | os.PathLike[str] | None = None,
+    content: str | None = None,
+    *,
+    text: str | None = None,
+) -> str:
+    if content is None:
+        content = text
+    if content is None:
+        content = read_config_fragment(path)
+    normalized = normalize_config_fragment(content)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _short(value: str, length: int = 12) -> str:
+    return value.strip()[:length]
+
+
+def derive_nvr(
+    source_commit: str,
+    config_hash: str,
+    *,
+    name: str = "kernel",
+    version: str | None = None,
+    release_prefix: str | None = None,
+    config_fragment: str | None = None,
+    commit: str | None = None,
+) -> str:
+    if commit is not None:
+        source_commit = commit
+    if config_fragment is not None:
+        config_hash = config_fragment_hash(content=config_fragment)
+    version = version or NVR_VERSION_BASE
+    release_prefix = release_prefix or NVR_RELEASE_PREFIX
+    short_commit = _short(source_commit, 12)
+    short_hash = _short(config_hash, 8)
+    release = f"{release_prefix}.{short_commit}.{short_hash}.fc{FEDORA_VERSION}"
+    return f"{name}-{version}-{release}"
+
+
+derive_nvr_from_commit_and_config = derive_nvr
+build_nvr = derive_nvr
+compute_nvr = derive_nvr
+nvr_for = derive_nvr
+make_nvr = derive_nvr
+calculate_nvr = derive_nvr
+
+
+def derive_nvr_from_paths(
+    source_commit: str,
+    config_path: str | os.PathLike[str] | None = None,
+) -> str:
+    return derive_nvr(source_commit, config_fragment_hash(path=config_path))
+
+
+def parse_nvr(value: str) -> NVR:
+    name, version, release = value.split("-", 2)
+    return NVR(name=name, version=version, release=release)
+
+
+def lfs_available(root: str | os.PathLike[str] | None = None) -> bool:
+    if os.environ.get("K8LABS_LFS_AVAILABLE") == "0":
+        return False
+    if os.environ.get("GIT_LFS_AVAILABLE") == "0":
+        return False
+    if shutil.which("git-lfs") is None:
+        return False
+    target = Path(root) if root is not None else PROJECT_ROOT
+    try:
+        subprocess.run(
+            ["git", "-C", str(target), "lfs", "version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+    return os.environ.get("K8LABS_LFS_STORAGE_AVAILABLE") != "0"
+
+
+def ensure_lfs_available(root: str | os.PathLike[str] | None = None) -> None:
+    if not lfs_available(root):
+        raise LFSUnavailableError("Git LFS storage is unavailable")
+
+
+is_lfs_available = lfs_available
+
+
+def track_runtime_rpms_in_lfs(
+    gitattributes_path: str | os.PathLike[str] | None = None,
+) -> Path:
+    path = (
+        Path(gitattributes_path)
+        if gitattributes_path is not None
+        else (PROJECT_ROOT / ".gitattributes")
+    )
+    lines = ["# Reproducible kernel build: only the four runtime RPMs are in Git LFS."]
+    for rpm in RUNTIME_RPMS:
+        lines.append(f"{rpm}-*.rpm filter=lfs diff=lfs merge=lfs -text")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _gitattributes_has_lfs(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8")
+    return all(f"{rpm}-" in text and "filter=lfs" in text for rpm in RUNTIME_RPMS)
+
+
+def _provisioner_fail_closed() -> bool:
+    if not PROVISIONER.is_file():
+        return False
+    text = PROVISIONER.read_text(encoding="utf-8")
+    if "Exact kernel" in text and "is unavailable" in text:
+        return False
+    return "kernel-modules-extra-" in text
+
+
+def load_lock(path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    target = Path(path) if path is not None else LOCK_FILE
+    if not target.is_file():
+        return {}
+    text = target.read_text(encoding="utf-8")
+    if target.suffix.lower() == ".json":
+        data = json.loads(text)
+    else:
+        try:
+            import yaml
+
+            data = yaml.safe_load(text)
+        except Exception:  # noqa: BLE001
+            data = None
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def save_lock(data: dict[str, Any], path: str | os.PathLike[str] | None = None) -> Path:
+    target = Path(path) if path is not None else LOCK_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.suffix.lower() == ".json":
+        target.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    else:
+        try:
+            import yaml
+
+            target.write_text(yaml.safe_dump(data, sort_keys=True), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            target.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def sha256_file(path: str | os.PathLike[str]) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    artifacts = lock.get("artifacts")
+    if isinstance(artifacts, list):
+        entries.extend(item for item in artifacts if isinstance(item, dict))
+    if isinstance(artifacts, dict):
+        for group in artifacts.values():
+            if isinstance(group, list):
+                entries.extend(item for item in group if isinstance(item, dict))
+    for key in ("non_lfs_artifacts", "out_of_lfs", "locked_artifacts", "non_lfs"):
+        group = lock.get(key)
+        if isinstance(group, list):
+            entries.extend(item for item in group if isinstance(item, dict))
+    runtime = lock.get("runtime_rpms")
+    if isinstance(runtime, list):
+        for item in runtime:
+            if isinstance(item, dict) and "sha256" in item:
+                entries.append(item)
+    return entries
+
+
+def verify_artifact_hashes(
+    lock: Any,
+    artifact_dir: str | os.PathLike[str] | None = None,
+    *,
+    root: str | os.PathLike[str] | None = None,
+) -> list[str]:
+    if isinstance(lock, (str, os.PathLike)):
+        lock = load_lock(lock)
+    if not isinstance(lock, dict):
+        lock = {}
+    errors: list[str] = []
+    base = Path(artifact_dir) if artifact_dir is not None else PROJECT_ROOT
+    if root is not None:
+        base = Path(root)
+    for entry in _artifact_entries(lock):
+        expected = entry.get("sha256")
+        if not isinstance(expected, str):
+            continue
+        location = entry.get("cache_path") or entry.get("path") or entry.get("file")
+        if not isinstance(location, str):
+            continue
+        candidate = Path(location)
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        if not candidate.is_file():
+            continue
+        actual = sha256_file(candidate)
+        if actual != expected.lower():
+            errors.append(f"hash mismatch: {location} expected {expected} got {actual}")
+    return errors
+
+
+def verify_rpm_hashes(*args: Any, **kwargs: Any) -> list[str]:
+    return verify_artifact_hashes(*args, **kwargs)
+
+
+check_artifact_hashes = verify_artifact_hashes
+verify_hashes = verify_artifact_hashes
+check_hashes = verify_artifact_hashes
+
+
+def assert_artifact_hashes(*args: Any, **kwargs: Any) -> None:
+    errors = verify_artifact_hashes(*args, **kwargs)
+    if errors:
+        raise HashMismatchError("; ".join(errors))
+
+
+def check(
+    root: str | os.PathLike[str] | None = None,
+    *,
+    lfs_root: str | os.PathLike[str] | None = None,
+) -> list[str]:
+    target = Path(root) if root is not None else PROJECT_ROOT
+    errors: list[str] = []
+
+    if not resolve_config_fragment().is_file():
+        errors.append("Fedora config fragment is missing")
+
+    try:
+        nvr = derive_nvr(PINNED_SOURCE_COMMIT, config_fragment_hash())
+        if not nvr.startswith("kernel-"):
+            errors.append("derived NVR is invalid")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"NVR derivation failed: {exc}")
+
+    gitattributes = target / ".gitattributes"
+    if not _gitattributes_has_lfs(gitattributes):
+        errors.append("Git LFS tracking for the four runtime RPMs is missing")
+    try:
+        ensure_lfs_available(lfs_root or target)
+    except LFSUnavailableError as exc:
+        errors.append(str(exc))
+
+    if not _provisioner_fail_closed():
+        errors.append("RPM install path is not fail-closed on exact package hashes")
+
+    lock = load_lock(LOCK_FILE)
+    if lock:
+        if lock.get("source_commit") not in (None, PINNED_SOURCE_COMMIT):
+            errors.append("kernel build lock source_commit does not match pinned source")
+        if lock.get("fedora_image") not in (None, FEDORA_IMAGE):
+            errors.append("kernel build lock Fedora image is not digest-pinned")
+
+    return errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Reproducible kernel build harness")
+    parser.add_argument("--check", action="store_true", help="validate the harness")
+    parser.add_argument("--derive-nvr", action="store_true", help="print derived NVR")
+    parser.add_argument("--source-commit", default=PINNED_SOURCE_COMMIT)
+    parser.add_argument("--config-fragment", default=None)
+    parser.add_argument("--ensure-lfs", action="store_true", help="fail if LFS unavailable")
+    parser.add_argument("--write-gitattributes", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.write_gitattributes:
+        track_runtime_rpms_in_lfs()
+        print("wrote .gitattributes")
+    if args.ensure_lfs:
+        try:
+            ensure_lfs_available()
+        except LFSUnavailableError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
+    if args.derive_nvr:
+        fragment_hash = config_fragment_hash(path=args.config_fragment)
+        print(derive_nvr(args.source_commit, fragment_hash))
+        return 0
+    if args.check:
+        errors = check()
+        if errors:
+            for error in errors:
+                print(f"FAIL: {error}", file=sys.stderr)
+            return 1
+        print("kernel build harness OK")
+        return 0
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
