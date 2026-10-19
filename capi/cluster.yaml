@@ -85,7 +85,7 @@ spec:
     spec:
       images:
         - version: v1.37.0
-          path: /host-state/images/k8labs-base.qcow2
+          path: /host-state/images/k8labs-custom-kernel.qcow2
       network:
         cidr: 192.168.124.0/24
         gateway: 192.168.124.1

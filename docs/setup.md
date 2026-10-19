@@ -51,7 +51,7 @@ make host-agent-check
 Installation:
 
 - stages the baked base image and firmware beneath the configured HostAgent state directory;
-- publishes host-real staged paths in the Agent manifest while retaining `/host-state/images/k8labs-base.qcow2` as the manager-facing image key;
+- publishes host-real staged paths in the Agent manifest while retaining `/host-state/images/k8labs-custom-kernel.qcow2` as the manager-facing image key;
 - creates a local CA, an Agent server certificate, and the manager client certificate;
 - renders a single `Exec=` Quadlet invocation using the locked provider image digest;
 - mounts only the Agent TLS files, Agent state, `/dev/kvm`, user D-Bus/k8netd interfaces, user systemd-unit directory, and bounded VM/image/firmware roots.
@@ -100,8 +100,13 @@ The workflow applies `capi/cluster.yaml` to the Kind management context, applies
 The image path in the `HypervisorClusterTemplate` is an exact Agent artifact-manifest key. Keep it equal to:
 
 ```yaml
-path: /host-state/images/k8labs-base.qcow2
+path: /host-state/images/k8labs-custom-kernel.qcow2
 ```
+
+The custom-kernel image is used for future machine replacements created from
+this Cluster template. It does not replace or restart the running control
+plane; rollback remains available through the staged
+`/host-state/images/k8labs-base.qcow2` image.
 
 Cilium belongs only to workload clusters; do not replace Kind’s management-cluster CNI.
 

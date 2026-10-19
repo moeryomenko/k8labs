@@ -32,7 +32,7 @@ The HostAgent generates a local CA and distinct server/client leaves. The manage
 The workload image reference in `capi/cluster.yaml` is an Agent-visible artifact key:
 
 ```text
-/host-state/images/k8labs-base.qcow2
+/host-state/images/k8labs-custom-kernel.qcow2
 ```
 
 It must match the generated HostAgent artifact manifest exactly. Do not substitute a host filesystem path or a provider image reference.
