@@ -47,6 +47,7 @@ def test_make_help_lists_only_the_new_series() -> None:
         ["make", "-C", str(RESEARCH), "help"],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     # Strip ANSI colour codes: `make help` wraps target names in `\x1b[36m...`,

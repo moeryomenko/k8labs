@@ -56,6 +56,7 @@ def _kubectl(context: str, *args: str, input_text: str | None = None) -> str:
         capture_output=True,
         text=True,
         input=input_text,
+        check=False,
     )
     if result.returncode != 0:
         raise SystemExit(f"kubectl {' '.join(args)} failed: {result.stderr.strip()}")

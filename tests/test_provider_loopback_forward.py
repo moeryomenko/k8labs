@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from provider_loopback_forward import (  # noqa: E402
+from provider_loopback_forward import (
     HOST_GATEWAY,
     LOOPBACK_VM_PORTS,
     build_socat_command,
