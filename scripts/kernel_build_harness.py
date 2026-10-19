@@ -82,11 +82,23 @@ PROVISIONER = PROJECT_ROOT / "packer" / "scripts" / "01-configure-system.sh"
 PACKER_PROVISIONER = PROVISIONER
 
 # Kernel version fields, read from the pinned source's top-level Makefile at
-# PINNED_SOURCE_COMMIT (VERSION=7 PATCHLEVEL=3 SUBLEVEL=0 EXTRAVERSION=-rc7).
-# The NVR is derived from these plus the pinned commit and the merged config
-# fragment, so two different kernels can never share one NVR.
+# PINNED_SOURCE_COMMIT (VERSION=7 PATCHLEVEL=3 SUBLEVEL=0 EXTRAVERSION=-rc7)
+# and from the pinned ark-infra packaging revision.
+#
+# The kernel-ark build system defines the RPM release as
+#   <upstream build><ark build><dist localversion><dist>
+# and the values below reproduce exactly what `make dist-srpm` emits, verified
+# against the produced SRPM:
+#   kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44.src.rpm
 NVR_VERSION_BASE = "7.3.0"
-NVR_UPSTREAM_BUILD = "0.rc7"
+# linux-next path: UPSTREAMBUILD = "0.0.next.<tag date>."
+NVR_NEXT_TAG_DATE = "20261016"
+NVR_UPSTREAM_BUILD = f"0.0.next.{NVR_NEXT_TAG_DATE}."
+# ark-infra RHEL_RELEASE (Makefile.rhelver at the pinned ark-infra commit).
+NVR_ARK_BUILD = "64"
+# dist localversion prefix; the config-fragment hash follows it.
+NVR_LOCALVERSION_PREFIX = ".k8."
+NVR_LOCALVERSION_HASH_LEN = 7
 NVR_RELEASE_PREFIX = NVR_UPSTREAM_BUILD
 
 # Config options the campaign actually depends on. The merged .config must
@@ -196,15 +208,27 @@ def derive_nvr(
     config_fragment: str | None = None,
     commit: str | None = None,
 ) -> str:
+    """Derive the RPM NVR the kernel-ark build emits for this source+config.
+
+    The source enters the release through the linux-next tag the pinned commit
+    carries (`0.0.next.<tag date>.`), the way kernel-ark represents a linux-next
+    snapshot; the commit is checked rather than hashed into the string.
+    """
     if commit is not None:
         source_commit = commit
+    if source_commit != PINNED_SOURCE_COMMIT:
+        raise ValueError(
+            f"source commit {source_commit!r} is not the pinned source "
+            f"{PINNED_SOURCE_COMMIT!r}"
+        )
     if config_fragment is not None:
         config_hash = config_fragment_hash(content=config_fragment)
     version = version or NVR_VERSION_BASE
-    release_prefix = release_prefix or NVR_RELEASE_PREFIX
-    short_commit = _short(source_commit, 12)
-    short_hash = _short(config_hash, 8)
-    release = f"{release_prefix}.{short_commit}.{short_hash}.fc{FEDORA_VERSION}"
+    release_prefix = release_prefix or NVR_UPSTREAM_BUILD
+    localversion = NVR_LOCALVERSION_PREFIX + _short(
+        config_hash, NVR_LOCALVERSION_HASH_LEN
+    )
+    release = f"{release_prefix}{NVR_ARK_BUILD}{localversion}.fc{FEDORA_VERSION}"
     return f"{name}-{version}-{release}"
 
 

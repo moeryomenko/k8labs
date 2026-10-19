@@ -23,9 +23,23 @@ def test_nvr_is_deterministic() -> None:
     second = kbh.derive_nvr(commit, fragment_hash)
     assert first == second
     assert first.startswith("kernel-")
-    # Changing either input changes the NVR.
-    assert kbh.derive_nvr("0" * 40, fragment_hash) != first
+    # The config fragment is part of the release, so changing it changes the NVR.
     assert kbh.derive_nvr(commit, "f" * 64) != first
+    assert kbh.derive_nvr(commit, "f" * 64).endswith(".fc44")
+
+
+def test_nvr_rejects_a_non_pinned_source_commit() -> None:
+    with pytest.raises(ValueError, match="is not the pinned source"):
+        kbh.derive_nvr("0" * 40, kbh.config_fragment_hash())
+
+
+def test_nvr_matches_the_kernel_ark_build_output() -> None:
+    # Verified against the SRPM the build system emitted:
+    # kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44.src.rpm
+    assert (
+        kbh.derive_nvr(kbh.PINNED_SOURCE_COMMIT, kbh.config_fragment_hash())
+        == "kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44"
+    )
 
 
 def test_config_fragment_exists_and_hash_stable() -> None:

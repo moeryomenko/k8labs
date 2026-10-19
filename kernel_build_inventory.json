@@ -4,7 +4,7 @@
   "source_commit": "2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64",
   "ark_infra_commit": "858721d1e05149394e01ae4f5ce3202484c22850",
   "config_fragment_sha256": "680e0375e8e21efbb88b6dbe8e8a39dc51dcc26c62aebd6d36fe75c5c658c2ea",
-  "nvr": "kernel-7.3.0-0.rc7.2efb7a11f1aa.680e0375.fc44",
+  "nvr": "kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44",
   "runtime_rpms": [
     {"id": "kernel-core", "path": "build/firmware/rpms/kernel-core.rpm", "sha256": null},
     {"id": "kernel-modules", "path": "build/firmware/rpms/kernel-modules.rpm", "sha256": null},

@@ -25,9 +25,13 @@ mock_buildroot: fedora-44-x86_64
 architecture: x86_64
 
 # Merged configuration fragment and the NVR derived from source + fragment.
+# Verified against the SRPM the build emitted:
+#   kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44.src.rpm
 config_fragment: configs/fedora-44-kernel.config-fragment
 config_fragment_sha256: 680e0375e8e21efbb88b6dbe8e8a39dc51dcc26c62aebd6d36fe75c5c658c2ea
-nvr: kernel-7.3.0-0.rc7.2efb7a11f1aa.680e0375.fc44
+nvr: kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44
+dist_localversion: .k8.680e037
+ark_rhel_release: '64'
 
 # Release policy: two clean payload builds are compared before one
 # operator-approved HSM-signed release is produced.

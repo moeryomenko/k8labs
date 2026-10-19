@@ -37,7 +37,7 @@ CLOUD_HYPERVISOR_BIN = "cloud-hypervisor"
 
 # Derived by scripts/kernel_build_harness.py from the pinned linux-next source
 # (Makefile VERSION=7 PATCHLEVEL=3 EXTRAVERSION=-rc7) plus the config fragment.
-PINNED_KERNEL_NVR = "kernel-7.3.0-0.rc7.2efb7a11f1aa.680e0375.fc44"
+PINNED_KERNEL_NVR = "kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44"
 PINNED_KERNEL_VERSION = PINNED_KERNEL_NVR
 KERNEL_NVR = PINNED_KERNEL_NVR
 EXPECTED_KERNEL_NVR = PINNED_KERNEL_NVR
