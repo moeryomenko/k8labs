@@ -23,6 +23,8 @@
 [LibraryClasses]
   UefiDriverEntryPoint
   DebugLib
+  BaseMemoryLib
+  MemoryAllocationLib
   PrintLib
   SerialPortLib
   UefiRuntimeServicesTableLib

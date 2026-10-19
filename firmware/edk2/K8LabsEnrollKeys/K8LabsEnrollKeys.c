@@ -24,6 +24,9 @@
 #include <Guid/EventGroup.h>
 #include <Guid/GlobalVariable.h>
 #include <Guid/ImageAuthentication.h>
+#include <Guid/WinCertificate.h>
+#include <Library/BaseMemoryLib.h>
+#include <Library/MemoryAllocationLib.h>
 #include <Library/DebugLib.h>
 #include <Library/PrintLib.h>
 #include <Library/SerialPortLib.h>
@@ -32,6 +35,12 @@
 #include <Library/UefiRuntimeServicesTableLib.h>
 
 #include "K8LabsSecureBootKeys.h"
+
+//
+// WIN_CERTIFICATE_UEFI_GUID.CertType. The UEFI header spells this as a brace
+// initialiser macro, so a local constant is needed to take its address.
+//
+STATIC CONST EFI_GUID  mK8LabsCertType = EFI_CERT_TYPE_RSA2048_SHA256_GUID;
 
 #define K8LABS_SECURE_VAR_FLAGS  \
   (EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | \
@@ -60,17 +69,48 @@ EFI_STATUS
 Enroll (
   IN CONST CHAR16  *Name,
   IN EFI_GUID      *VendorGuid,
-  IN CONST UINT8   *Data,
-  IN UINTN          Size
+  IN CONST UINT8   *Esl,
+  IN UINTN          EslSize
   )
 {
-  return gRT->SetVariable (
-                (CHAR16 *)Name,
-                VendorGuid,
-                K8LABS_SECURE_VAR_FLAGS,
-                Size,
-                (VOID *)Data
-                );
+  EFI_STATUS                    Status;
+  UINTN                         HeaderSize;
+  UINTN                         Size;
+  UINT8                         *Buffer;
+  EFI_VARIABLE_AUTHENTICATION_2 *Auth;
+
+  //
+  // PK/KEK/db reject writes without EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS
+  // (AuthService.c: ProcessVarWithPk returns EFI_INVALID_PARAMETER). In setup
+  // mode or CustomMode the signature itself is not verified, but the
+  // EFI_VARIABLE_AUTHENTICATION_2 header must still be present.
+  //
+  HeaderSize = OFFSET_OF (EFI_VARIABLE_AUTHENTICATION_2, AuthInfo) +
+               OFFSET_OF (WIN_CERTIFICATE_UEFI_GUID, CertData);
+  Size       = HeaderSize + EslSize;
+  Buffer     = AllocateZeroPool (Size);
+  if (Buffer == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  Auth                        = (EFI_VARIABLE_AUTHENTICATION_2 *)Buffer;
+  Auth->AuthInfo.Hdr.dwLength = (UINT32)OFFSET_OF (WIN_CERTIFICATE_UEFI_GUID, CertData);
+  Auth->AuthInfo.Hdr.wRevision        = 0x0200;
+  Auth->AuthInfo.Hdr.wCertificateType = WIN_CERT_TYPE_EFI_GUID;
+  CopyMem (&Auth->AuthInfo.CertType, &mK8LabsCertType, sizeof (EFI_GUID));
+  CopyMem (Buffer + HeaderSize, (VOID *)Esl, EslSize);
+
+  Status = gRT->SetVariable (
+                  (CHAR16 *)Name,
+                  VendorGuid,
+                  EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS |
+                  EFI_VARIABLE_RUNTIME_ACCESS |
+                  EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS,
+                  Size,
+                  Buffer
+                  );
+  FreePool (Buffer);
+  return Status;
 }
 
 STATIC
