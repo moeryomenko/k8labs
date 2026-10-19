@@ -6,14 +6,68 @@
   "config_fragment_sha256": "680e0375e8e21efbb88b6dbe8e8a39dc51dcc26c62aebd6d36fe75c5c658c2ea",
   "nvr": "kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44",
   "runtime_rpms": [
-    {"id": "kernel-core", "path": "build/firmware/rpms/kernel-core.rpm", "sha256": null},
-    {"id": "kernel-modules", "path": "build/firmware/rpms/kernel-modules.rpm", "sha256": null},
-    {"id": "kernel-modules-core", "path": "build/firmware/rpms/kernel-modules-core.rpm", "sha256": null},
-    {"id": "kernel-modules-extra", "path": "build/firmware/rpms/kernel-modules-extra.rpm", "sha256": null}
+    {
+      "id": "kernel-core",
+      "path": "build/firmware/rpms/kernel-core.rpm",
+      "sha256": "cd318c56f5107a5d852515a21eea7436afdad339c37ec6b366007f4740bebd01",
+      "size_bytes": 22322553
+    },
+    {
+      "id": "kernel-modules",
+      "path": "build/firmware/rpms/kernel-modules.rpm",
+      "sha256": "c43f8ed9f7fa5466af463c480fbbe10ad6dddd4ed4ad85f07b2c9fca8d948700",
+      "size_bytes": 86430237
+    },
+    {
+      "id": "kernel-modules-core",
+      "path": "build/firmware/rpms/kernel-modules-core.rpm",
+      "sha256": "db886f9cfd0e844950242528e262f28d814ae677593f2e8ca90f46201c41e7a6",
+      "size_bytes": 56780633
+    },
+    {
+      "id": "kernel-modules-extra",
+      "path": "build/firmware/rpms/kernel-modules-extra.rpm",
+      "sha256": "722df6621c73e7b25157ffe2edf8f1c563923cb474e150ade4d62c9c72f2ebdf",
+      "size_bytes": 3278209
+    }
   ],
   "non_lfs_artifacts": [
-    {"id": "source-tarball", "path": "build/firmware/kernel-source.tar.xz", "sha256": null},
-    {"id": "firmware", "path": "build/firmware/k8labs-cloudhv-secureboot.fd", "sha256": null},
-    {"id": "debuginfo", "path": "build/firmware/kernel-debuginfo.rpm", "sha256": null}
-  ]
+    {
+      "id": "source-tarball",
+      "path": "build/firmware/kernel-source.tar.xz",
+      "sha256": null
+    },
+    {
+      "id": "firmware",
+      "path": "build/firmware/k8labs-cloudhv-secureboot.fd",
+      "sha256": null
+    },
+    {
+      "id": "debuginfo",
+      "path": "build/firmware/kernel-debuginfo.rpm",
+      "sha256": null
+    }
+  ],
+  "build_verified": {
+    "config_in_built_kernel": {
+      "CONFIG_DEBUG_INFO_BTF": "y",
+      "CONFIG_SCHED_CLASS_EXT": "y",
+      "CONFIG_DEBUG_INFO_NONE": "not set",
+      "CONFIG_CFS_BANDWIDTH": "y",
+      "CONFIG_EFI_STUB": "y",
+      "CONFIG_MODULE_SIG": "y"
+    },
+    "vmlinux_btf_sections": [
+      ".BTF",
+      ".BTF_ids"
+    ],
+    "note": "Verified by extracting kernel-core and running extract-vmlinux + readelf on the built image."
+  },
+  "built_artifacts": {
+    "build_dir": "/home/eryoma/kernel-campaign/out/rpms",
+    "builder": "podman + mock, Fedora 44 (digest-pinned), rpmbuild opts from kernel_build_lock.yaml",
+    "srpm": "kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44.src.rpm",
+    "srpm_sha256": "recorded-by-operator",
+    "runtime_rpms_built": true
+  }
 }
