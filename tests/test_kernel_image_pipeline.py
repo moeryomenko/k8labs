@@ -20,7 +20,7 @@ def test_packer_uploads_only_the_locked_kernel_rpms() -> None:
 
 def test_packer_installs_the_pinned_nvr_from_the_local_repository() -> None:
     variables = _read(PACKER / "variables.pkr.hcl")
-    assert 'default     = "7.3.0-0.0.next.20261016.64.k8.680e037.fc44"' in variables
+    assert 'default     = "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"' in variables
     assert "file:///var/lib/k8labs-kernel-repo" in variables
 
 

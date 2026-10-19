@@ -11,8 +11,8 @@ stated otherwise.
 |---|---|---|
 | linux-next source | `kernel-campaign/src/linux` | `2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64`, tag `next-20261016` |
 | kernel-ark packaging | `kernel-campaign/src/kernel-ark` | `858721d1e05149394e01ae4f5ce3202484c22850` |
-| kernel SRPM | `kernel-campaign/src/linux/redhat/rpm/SRPMS/` | `kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44.src.rpm` |
-| runtime RPMs | `artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.680e037.fc44/` (Git LFS) | `kernel-core`, `kernel-modules`, `kernel-modules-core`, `kernel-modules-extra` |
+| kernel SRPM | `kernel-campaign/src/linux/redhat/rpm/SRPMS/` | `kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.src.rpm` |
+| runtime RPMs | `artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44/` (Git LFS) | `kernel-core`, `kernel-modules`, `kernel-modules-core`, `kernel-modules-extra` |
 | EDK2 source | `kernel-campaign/src/edk2` | `d46aa46c8361194521391aa581593e556c707c6e`, tag `edk2-stable202508` |
 | firmware | `kernel-campaign/out/firmware/CLOUDHV-k8labs-sb.fd` | `sha256 5a442b9f2aa5eee409d76ae8de3c040d52050ac6c4c5e4121b4ed1897088b9a2` |
 | trust anchor | `firmware/k8labs-uefi-db.crt` | SPKI `sha256 81b6f09f…`, DER `sha256 288586d4…` |
@@ -112,7 +112,7 @@ export K8LABS_SB_CERT="$PWD/firmware/k8labs-uefi-db.crt"
 make base-deps
 make base          # or: make bake-run with a var file that sets:
                    #   firmware_path        = "../build/CLOUDHV-k8labs-sb.fd"
-                   #   kernel_version       = "7.3.0-0.0.next.20261016.64.k8.680e037.fc44"
+                   #   kernel_version       = "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
                    #   kernel_repo_url      = "file:///var/lib/k8labs-kernel-repo"
                    #   kernel_rpm_source_dir= "../build/kernel-rpms"
                    #   uki_signing_key      = "<PKCS#11 URI or key path>"
@@ -165,7 +165,7 @@ kubectl --kubeconfig build/kubeconfig debug node/<worker-1> -- \
 ```
 
 Proceed only when `uname -r` reports
-`7.3.0-0.0.next.20261016.64.k8.680e037.fc44.x86_64` and Secure Boot is enabled.
+`7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.x86_64` and Secure Boot is enabled.
 
 Run the scheduler attach/progress/detach checks on the canary before touching
 the second worker. If any check fails, restore the previous image and uncordon.

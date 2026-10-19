@@ -5,7 +5,7 @@
 variable "kernel_version" {
   description = "Kernel version (full NVR) to pin during image baking"
   type        = string
-  default     = "7.3.0-0.0.next.20261016.64.k8.680e037.fc44"
+  default     = "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
 }
 
 variable "kernel_repo_url" {
@@ -17,7 +17,7 @@ variable "kernel_repo_url" {
 variable "kernel_rpm_source_dir" {
   description = "Host directory holding the four locked kernel runtime RPMs"
   type        = string
-  default     = "../artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.680e037.fc44"
+  default     = "../artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
 }
 
 # ---------------------------------------------------------------------------

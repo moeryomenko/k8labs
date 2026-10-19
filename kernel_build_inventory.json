@@ -3,8 +3,8 @@
   "kind": "kernel-build-inventory",
   "source_commit": "2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64",
   "ark_infra_commit": "858721d1e05149394e01ae4f5ce3202484c22850",
-  "config_fragment_sha256": "680e0375e8e21efbb88b6dbe8e8a39dc51dcc26c62aebd6d36fe75c5c658c2ea",
-  "nvr": "kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44",
+  "config_fragment_sha256": "46c58e1ac6d6a7162a38f31d42ffeda13e5820e800add2dff49dd03505b59497",
+  "nvr": "kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44",
   "runtime_rpms": [
     {
       "id": "kernel-core",
@@ -66,8 +66,8 @@
   "built_artifacts": {
     "build_dir": "/home/eryoma/kernel-campaign/out/rpms",
     "builder": "podman + mock, Fedora 44 (digest-pinned), rpmbuild opts from kernel_build_lock.yaml",
-    "srpm": "kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44.src.rpm",
-    "srpm_sha256": "recorded-by-operator",
+    "srpm": "kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.src.rpm",
+    "srpm_sha256": "1fb5c09b634250e349a780af5b3933f44f9f0e16090c0dd623c0a0033aa99cff",
     "runtime_rpms_built": true
   }
 }

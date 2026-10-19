@@ -145,7 +145,7 @@ PACKER_PROVISIONER = PROVISIONER
 #   <upstream build><ark build><dist localversion><dist>
 # and the values below reproduce exactly what `make dist-srpm` emits, verified
 # against the produced SRPM:
-#   kernel-7.3.0-0.0.next.20261016.64.k8.680e037.fc44.src.rpm
+#   kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.src.rpm
 NVR_VERSION_BASE = "7.3.0"
 # linux-next path: UPSTREAMBUILD = "0.0.next.<tag date>."
 NVR_NEXT_TAG_DATE = "20261016"

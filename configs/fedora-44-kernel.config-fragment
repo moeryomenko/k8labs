@@ -16,3 +16,8 @@ CONFIG_EFI_STUB=y
 # Module signatures so the signed release can be verified.
 CONFIG_MODULE_SIG=y
 CONFIG_MODULE_SIG_ALL=y
+# Fixed module-signing key: a generated key per build makes the module packages
+# and the embedded certificate differ between otherwise identical builds.
+# CONFIG_MODULE_SIG_FORCE is intentionally unset, so this key only has to be
+# stable, not secret.
+CONFIG_MODULE_SIG_KEY="certs/k8labs-module-signing.pem"
