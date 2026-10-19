@@ -45,3 +45,6 @@ research/linux-sched/experiments/data/
 research/linux-sched/analysis/output/
 research/kube-sched/experiments/data/
 research/kube-sched/analysis/output/
+
+# Local scratch bakes reference throwaway keys outside the repository.
+packer/vars.scratch.pkrvars.hcl
