@@ -1,0 +1,34 @@
+## @file
+#  Enroll the lab Secure Boot trust anchors on every boot.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x00010005
+  BASE_NAME      = K8LabsEnrollKeys
+  FILE_GUID      = 9f2c1f7a-3b4d-4e21-8c6a-5d0e7b9a1c33
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = K8LabsEnrollKeysEntryPoint
+
+[Sources]
+  K8LabsEnrollKeys.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  SecurityPkg/SecurityPkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  DebugLib
+  SecureBootVariableProvisionLib
+
+[Protocols]
+  gEfiVariableArchProtocolGuid
+  gEfiVariableWriteArchProtocolGuid
+
+[Depex]
+  gEfiVariableArchProtocolGuid AND
+  gEfiVariableWriteArchProtocolGuid
