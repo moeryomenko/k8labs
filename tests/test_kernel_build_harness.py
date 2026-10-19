@@ -135,6 +135,9 @@ def test_reproducible_recipe_pins_build_time_and_tar_metadata() -> None:
     assert f"--mtime=@{kbh.REPRODUCIBLE_BUILD_EPOCH}" in env["TAR_OPTIONS"]
     assert "--sort=name" in env["TAR_OPTIONS"]
     assert f"%_buildtime {kbh.REPRODUCIBLE_BUILD_EPOCH}" in macros
+    assert env["KBUILD_BUILD_TIMESTAMP"] == kbh.REPRODUCIBLE_BUILD_TIMESTAMP
+    assert env["KBUILD_BUILD_USER"] == "k8labs"
+    assert env["KBUILD_BUILD_HOST"] == "k8labs-build"
     kbh.assert_reproducible_recipe()
 
 

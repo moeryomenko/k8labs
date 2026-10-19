@@ -85,6 +85,9 @@ FORBIDDEN_RPMBUILD_OPTS = ("--without debuginfo",)
 # created with plain tar, so tar metadata is normalised through TAR_OPTIONS.
 # With these two settings two independent SRPM builds are byte-identical.
 REPRODUCIBLE_BUILD_EPOCH = 1792368000
+REPRODUCIBLE_BUILD_TIMESTAMP = "Mon Oct 19 00:00:00 UTC 2026"
+KBUILD_BUILD_USER = "k8labs"
+KBUILD_BUILD_HOST = "k8labs-build"
 RPM_MACROS_LINE = f"%_buildtime {REPRODUCIBLE_BUILD_EPOCH}"
 TAR_OPTIONS = (
     f"--mtime=@{REPRODUCIBLE_BUILD_EPOCH} --owner=0 --group=0 "
@@ -93,8 +96,18 @@ TAR_OPTIONS = (
 
 
 def reproducible_build_env() -> dict[str, str]:
-    """Environment that makes the SRPM and RPM payloads reproducible."""
-    return {"TAR_OPTIONS": TAR_OPTIONS}
+    """Environment that makes the SRPM and RPM payloads reproducible.
+
+    The kernel embeds its build timestamp and builder identity, so those must be
+    fixed too, not just rpm's header time.
+    """
+    return {
+        "SOURCE_DATE_EPOCH": str(REPRODUCIBLE_BUILD_EPOCH),
+        "KBUILD_BUILD_TIMESTAMP": REPRODUCIBLE_BUILD_TIMESTAMP,
+        "KBUILD_BUILD_USER": KBUILD_BUILD_USER,
+        "KBUILD_BUILD_HOST": KBUILD_BUILD_HOST,
+        "TAR_OPTIONS": TAR_OPTIONS,
+    }
 
 
 def reproducible_build_macros() -> str:
@@ -223,6 +236,9 @@ def assert_reproducible_recipe(
     for required in ("--mtime=@", "--owner=0", "--group=0", "--sort=name"):
         if required not in tar_options:
             raise ValueError(f"TAR_OPTIONS is missing {required!r}")
+    for key in ("KBUILD_BUILD_TIMESTAMP", "KBUILD_BUILD_USER", "KBUILD_BUILD_HOST"):
+        if not env.get(key):
+            raise ValueError(f"{key} is not pinned")
     if f"%_buildtime {REPRODUCIBLE_BUILD_EPOCH}" not in macros:
         raise ValueError("%_buildtime is not pinned in the rpm macros")
 

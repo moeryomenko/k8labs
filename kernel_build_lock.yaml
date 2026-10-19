@@ -84,5 +84,8 @@ non_lfs_artifacts:
 reproducible_build:
   build_epoch: 1792368000
   rpm_macro: "%_buildtime 1792368000"
+  kbuild_build_timestamp: "Mon Oct 19 00:00:00 UTC 2026"
+  kbuild_build_user: k8labs
+  kbuild_build_host: k8labs-build
   tar_options: "--mtime=@1792368000 --owner=0 --group=0 --numeric-owner --sort=name"
   srpm_sha256: "0fda80a724f22148a313e42970f2cacbd2f734dce1ee7a2f520c2df2916ede67"

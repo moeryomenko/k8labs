@@ -57,8 +57,30 @@ SRPM hash drifts between runs:
 
 ```sh
 printf '%%_buildtime 1792368000\n' >> ~/.rpmmacros
+export SOURCE_DATE_EPOCH=1792368000
+export KBUILD_BUILD_TIMESTAMP="Mon Oct 19 00:00:00 UTC 2026"
+export KBUILD_BUILD_USER=k8labs
+export KBUILD_BUILD_HOST=k8labs-build
 export TAR_OPTIONS="--mtime=@1792368000 --owner=0 --group=0 --numeric-owner --sort=name"
 ```
+
+For the mock build, the same values belong in the mock configuration:
+
+```python
+config_opts['macros']['_buildtime'] = '1792368000'
+config_opts['environment']['SOURCE_DATE_EPOCH'] = '1792368000'
+config_opts['environment']['KBUILD_BUILD_TIMESTAMP'] = 'Mon Oct 19 00:00:00 UTC 2026'
+config_opts['environment']['KBUILD_BUILD_USER'] = 'k8labs'
+config_opts['environment']['KBUILD_BUILD_HOST'] = 'k8labs-build'
+config_opts['environment']['TAR_OPTIONS'] = (
+    '--mtime=@1792368000 --owner=0 --group=0 --numeric-owner --sort=name'
+)
+```
+
+Module signing still uses a per-build generated key. For bit-identical
+`kernel-modules*` packages, place a fixed lab module-signing key at
+`certs/signing_key.pem` in the build tree before the build; the campaign runs
+with `CONFIG_MODULE_SIG_FORCE` unset, so any key is acceptable.
 
 With those two settings, two independent `make dist-srpm` runs produce the same
 SRPM: `sha256 0fda80a724f22148a313e42970f2cacbd2f734dce1ee7a2f520c2df2916ede67`.
