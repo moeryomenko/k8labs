@@ -49,6 +49,20 @@ openssl x509 -in firmware/k8labs-uefi-db.crt -pubkey -noout \
 The two digests must be equal and must match `81b6f09f…` from the manifest.
 Stop if they differ.
 
+## Step 1b — reproducible kernel build
+
+rpm 6 does not honour `SOURCE_DATE_EPOCH` for `%{BUILDTIME}`, and the kABI
+stablelists tarball is created with plain `tar`. Pin both before building or the
+SRPM hash drifts between runs:
+
+```sh
+printf '%%_buildtime 1792368000\n' >> ~/.rpmmacros
+export TAR_OPTIONS="--mtime=@1792368000 --owner=0 --group=0 --numeric-owner --sort=name"
+```
+
+With those two settings, two independent `make dist-srpm` runs produce the same
+SRPM: `sha256 0fda80a724f22148a313e42970f2cacbd2f734dce1ee7a2f520c2df2916ede67`.
+
 ## Step 2 — sign and bake the image
 
 The bake runs in the rootless bake container and fails closed if signing fails.

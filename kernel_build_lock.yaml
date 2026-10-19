@@ -76,3 +76,13 @@ non_lfs_artifacts:
   - id: debuginfo
     path: build/firmware/kernel-debuginfo.rpm
     sha256: null
+
+# rpm 6 does not honour SOURCE_DATE_EPOCH for %{BUILDTIME}; pin it through the
+# rpm macros, and normalise tar metadata for the kABI stablelists tarball.
+# Verified: two independent SRPM builds produced the same sha256
+# 0fda80a724f22148a313e42970f2cacbd2f734dce1ee7a2f520c2df2916ede67.
+reproducible_build:
+  build_epoch: 1792368000
+  rpm_macro: "%_buildtime 1792368000"
+  tar_options: "--mtime=@1792368000 --owner=0 --group=0 --numeric-owner --sort=name"
+  srpm_sha256: "0fda80a724f22148a313e42970f2cacbd2f734dce1ee7a2f520c2df2916ede67"

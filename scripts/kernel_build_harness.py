@@ -80,6 +80,27 @@ RPMBUILD_OPTS = (
 # the scheduler arms, so the build must fail closed instead of producing it.
 FORBIDDEN_RPMBUILD_OPTS = ("--without debuginfo",)
 
+# Reproducibility. rpm 6 does not honour SOURCE_DATE_EPOCH for %{BUILDTIME}, so
+# the build time is pinned through %_buildtime; the kABI stablelists tarball is
+# created with plain tar, so tar metadata is normalised through TAR_OPTIONS.
+# With these two settings two independent SRPM builds are byte-identical.
+REPRODUCIBLE_BUILD_EPOCH = 1792368000
+RPM_MACROS_LINE = f"%_buildtime {REPRODUCIBLE_BUILD_EPOCH}"
+TAR_OPTIONS = (
+    f"--mtime=@{REPRODUCIBLE_BUILD_EPOCH} --owner=0 --group=0 "
+    "--numeric-owner --sort=name"
+)
+
+
+def reproducible_build_env() -> dict[str, str]:
+    """Environment that makes the SRPM and RPM payloads reproducible."""
+    return {"TAR_OPTIONS": TAR_OPTIONS}
+
+
+def reproducible_build_macros() -> str:
+    """Content of ~/.rpmmacros required for a reproducible build."""
+    return RPM_MACROS_LINE + "\n"
+
 RUNTIME_RPMS = (
     "kernel-core",
     "kernel-modules",
@@ -189,6 +210,21 @@ def config_fragment_options(text: str) -> set[str]:
         if value.strip() == "y":
             enabled.add(name.strip())
     return enabled
+
+
+def assert_reproducible_recipe(
+    env: dict[str, str] | None = None,
+    macros: str | None = None,
+) -> None:
+    """Raise when the build recipe cannot produce reproducible artifacts."""
+    env = reproducible_build_env() if env is None else env
+    macros = reproducible_build_macros() if macros is None else macros
+    tar_options = env.get("TAR_OPTIONS", "")
+    for required in ("--mtime=@", "--owner=0", "--group=0", "--sort=name"):
+        if required not in tar_options:
+            raise ValueError(f"TAR_OPTIONS is missing {required!r}")
+    if f"%_buildtime {REPRODUCIBLE_BUILD_EPOCH}" not in macros:
+        raise ValueError("%_buildtime is not pinned in the rpm macros")
 
 
 def missing_required_options(
@@ -490,6 +526,11 @@ def check(
 
     try:
         assert_rpmbuild_opts()
+    except ValueError as exc:
+        errors.append(str(exc))
+
+    try:
+        assert_reproducible_recipe()
     except ValueError as exc:
         errors.append(str(exc))
 

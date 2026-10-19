@@ -127,3 +127,19 @@ def test_release_build_opts_keep_bpf_and_sched_ext_config() -> None:
     assert "--without debuginfo" not in kbh.RPMBUILD_OPTS
     # debug (the second kernel variant) is skipped; debuginfo packaging is not.
     assert "--without debug" in kbh.RPMBUILD_OPTS
+
+
+def test_reproducible_recipe_pins_build_time_and_tar_metadata() -> None:
+    env = kbh.reproducible_build_env()
+    macros = kbh.reproducible_build_macros()
+    assert f"--mtime=@{kbh.REPRODUCIBLE_BUILD_EPOCH}" in env["TAR_OPTIONS"]
+    assert "--sort=name" in env["TAR_OPTIONS"]
+    assert f"%_buildtime {kbh.REPRODUCIBLE_BUILD_EPOCH}" in macros
+    kbh.assert_reproducible_recipe()
+
+
+def test_reproducible_recipe_rejects_a_missing_pin() -> None:
+    with pytest.raises(ValueError, match="TAR_OPTIONS"):
+        kbh.assert_reproducible_recipe(env={"TAR_OPTIONS": ""})
+    with pytest.raises(ValueError, match="_buildtime"):
+        kbh.assert_reproducible_recipe(macros="")
