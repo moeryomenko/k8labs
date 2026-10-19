@@ -773,3 +773,10 @@ rejects any path outside the allow-list. Override with
 
 The observer DaemonSet and its node-native tooling are validated offline by
 `make linux-sched-observers-test` and `make linux-sched-observer-check`.
+
+## Kernel source
+
+Pinned immutable upstream linux-next commit (contains `BPF_F_ARENA_SCALAR`
+with x86 JIT support and `sched_ext_ops.sub_cid_sched_updated()`):
+`2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64` (tag `next-20261016`).
+Validated by `scripts/kernel_source_gate.py`; no private patches.
