@@ -183,8 +183,28 @@ node network and two CPUs available, three 400 rps probes still produced p99 of
 274/390/535) and no CPU throttling. The loss is therefore not in the CNI pod path
 either; it is on the virtual network below both the pod and host namespaces.
 
-Until that is fixed, `http` and `mixed` stay uncalibrated rather than frozen on a
-meaningless rate.
+The cause was host CPU oversubscription, not the virtual NIC. The hypervisor
+host was carrying four unrelated `scx-infinity` QEMU VMs and 13 orphaned root
+`yes` processes: load average 23.0 on 16 cores. After the `yes` processes were
+stopped (load 7.7), the same 400 rps study is clean, and the guest adapter was
+already at its maximum:
+
+| `txqueuelen` | Runs | p50 | p90 | p99 | retransmits load | retransmits server |
+|---|---|---|---|---|---|---|
+| 10000 | 1-3 | 1.0 | 1.6 | 3.0-3.4 | 0 | 7-12 |
+| 1000 (default) | 1-3 | 1.0 | 1.6 | 3.0 | 0 | 2-5 |
+
+The virtio NIC reports `RX: 256 TX: 256` as both the pre-set maximum and the
+current setting, matching the vhost-user `queue_size` the provider creates; the
+guest cannot raise it. `ethtool -G`/`-L` issued from the observer fail with
+`Operation not permitted` because the observer holds no `NET_ADMIN`, and the
+worker image's read-only `/usr` blocks installing `ethtool` on the node.
+`txqueuelen` is settable and has no measurable effect. The ring and queue knobs
+are therefore not the loss mechanism: CPU starvation of the vhost-user threads
+was.
+
+`http` and `mixed` can now be calibrated at 400 rps rather than left
+uncalibrated.
 
 Frozen quotas under the 500m request:
 

@@ -825,3 +825,42 @@ until the lab HSM signs its UKI, so `capi/cluster.yaml` keeps the custom-image
 path as the contract while any machine replacement must wait for that image to
 exist. The frozen pilot quotas and all campaign data live on the host and were
 unaffected.
+
+### Fresh-node runtime repairs
+
+The base image predates two observer fixes, so a rebuilt cluster needs them
+applied before any load run:
+
+- **`wrk2` panics** with `unprotected error in call to Lua API (attempt to index
+  a nil value)` because the image has the binary but not `wrk.lua`. Copy the
+  pinned module (`src/wrk.lua` at
+  `44a94c17d8e6a0bac8559b53da76848e430cb7a7`) to
+  `/var/tmp/linux-sched/wrk.lua` on each worker; the observer mounts that path
+  and its wrapper already puts it on `LUA_PATH`. Verify with
+  `wrk2 -t1 -c1 -d1 -R10 http://127.0.0.1:1/`, which must report
+  `Connection refused`, not a Lua panic.
+- **The observer holds no `NET_ADMIN`.** `ethtool -G`, `ethtool -L` and
+  `ip link set ... txqueuelen` all fail with `Operation not permitted` through
+  the observer, even though it can read the host netns with
+  `nsenter -t 1 -n`. Guest adapter changes need either `NET_ADMIN` on the
+  observer or root on the node.
+
+**Guest adapter is already at its ceiling.** `ens5` reports `RX: 256 TX: 256`
+as pre-set maximum and current setting; that is the vhost-user `queue_size`, so
+the ring cannot grow from the guest. `txqueuelen` can be raised (1000 to 10000)
+but has no measurable effect on loss.
+
+**SSH transport exists after all, via the control plane.** The provider's port
+map gives the control-plane guest SSH (for example `127.0.0.1:20016`) with the
+host-agent key, and from there the workers are reachable at `192.168.124.0/24`
+with the same key. That is the path for root-level node work: the worker image's
+`/usr` is read-only, so `dnf install` fails there, but `ip`, `sysctl` and files
+under `/var` are usable.
+
+**Host headroom decides the result.** Four unrelated `scx-infinity` QEMU VMs
+plus 13 orphaned root `yes` processes put the host at load 23 on 16 cores; under
+that load the control plane failed to bootstrap across three rebuilds and the
+400 rps study produced 3-2700 ms p99 tails. After the `yes` processes were
+stopped (load 7.7) the control plane bootstrapped and the study ran at 3 ms
+p99. Free host capacity is a precondition for the campaign, not an
+optimization.
