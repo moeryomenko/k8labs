@@ -170,8 +170,12 @@ tracks **server-side retransmissions**: nginx retransmits 90-296 segments while
 the client retransmits few or none. Cilium reports no TCP drops (only
 "Unsupported L3 protocol"), and raising the load generator from 100m/1 CPU to
 500m/2 CPU did not reduce the retransmissions. The loss is therefore below
-Cilium — the virtual NIC, bridge or qdisc on the lab host — and confirming it
-needs host-level counters the observer cannot read (`hostNetwork: false`).
+Cilium — the virtual NIC, bridge or qdisc on the hypervisor host.
+
+That host is not the workstation running these commands: it exposes no bridge or
+tap interfaces and the cluster is remote, so the next counters (`ip -s link`,
+`tc -s qdisc`, `ethtool -S`, `softnet_stat`) need access to the hypervisor host
+itself. The observer cannot supply them either, because it is not `hostNetwork`.
 
 Until that is fixed, `http` and `mixed` stay uncalibrated rather than frozen on a
 meaningless rate.
