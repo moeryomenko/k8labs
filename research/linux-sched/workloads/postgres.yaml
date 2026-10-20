@@ -74,7 +74,7 @@ spec:
         failureThreshold: 60
       resources:
         requests:
-          cpu: "1"
+          cpu: "100m"
         limits:
           cpu: "__CPU_LIMIT__"
 ---

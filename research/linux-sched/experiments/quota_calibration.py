@@ -65,3 +65,20 @@ def quota_calibration(*args, **kwargs):
 calibrate_cpu_quota = calibrate_cpu_limit
 eevdf_quota = calibrate_cpu_limit
 quota_calibrate = calibrate_cpu_limit
+
+
+def main(argv=None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Next CPU limit for the EEVDF pilot sweep.")
+    parser.add_argument("--current", required=True, help="current limit, e.g. 1 or 750m")
+    parser.add_argument("--observed", required=True, type=float, help="throttled period ratio")
+    parser.add_argument("--target", type=float, default=DEFAULT_TARGET_THROTTLED_RATIO)
+    parser.add_argument("--step", type=float, default=0.9)
+    args = parser.parse_args(argv)
+    print(calibrate_cpu_limit(args.current, args.observed, args.target, args.step))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -132,3 +132,27 @@ capture = capture_cpu_stat
 capture_cpu_stats = capture_cpu_stat
 delta_cpu_stat = delta
 cpu_stat_delta_result = delta
+
+
+def main(argv=None) -> int:
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="Compare two cgroup v2 cpu.stat snapshots.")
+    parser.add_argument("--before", required=True)
+    parser.add_argument("--after", required=True)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    before = parse_cpu_stat(open(args.before, encoding="utf-8").read())
+    after = parse_cpu_stat(open(args.after, encoding="utf-8").read())
+    measured = delta(before, after)
+    if args.json:
+        print(json.dumps(measured, sort_keys=True))
+    else:
+        print(f"{measured['throttled_period_ratio']:.6f}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

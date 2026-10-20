@@ -61,6 +61,7 @@ main() {
     local target_node="" duration="" out_dir="" arm="" load_node=""
     local manifest="" load_command="" raw="" podlog="" instrumentation="enabled"
     local await_completion=0 warmup_command="" warmup_seconds=0 load_ready_probe=""
+    local cpu_stat_before="" cpu_stat_after=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -78,6 +79,8 @@ main() {
             --warmup-command) warmup_command="$2"; shift 2 ;;
             --warmup-seconds) warmup_seconds="$2"; shift 2 ;;
             --load-ready-probe) load_ready_probe="$2"; shift 2 ;;
+            --cpu-stat-before) cpu_stat_before="$2"; shift 2 ;;
+            --cpu-stat-after) cpu_stat_after="$2"; shift 2 ;;
             -h|--help) usage 0 ;;
             *) die "unknown argument: $1" ;;
         esac
@@ -371,6 +374,45 @@ main() {
         fi
     fi
 
+    # Read the applied workload Pod's cgroup v2 counters. The quota campaign
+    # differences a snapshot before the measured load against one taken after it
+    # to obtain the throttled-period ratio; a plain "after" snapshot would carry
+    # the warmup.
+    read_workload_cpu_stat() {
+        local file="$1" quiet="${2:-}" pod uid escaped remote
+        [[ -n "$file" && -n "$manifest" && -n "$APPLIED_PODS" ]] || return 0
+        pod="${APPLIED_PODS%% *}"
+        [[ -n "$pod" ]] || return 0
+        : > "$file"
+
+        # The host cgroup tree is mounted only inside the observer Pod, so the
+        # lookup runs there. limits.cpu lands on the container cgroup, and a
+        # podlog-sourced workload has exited by the time its window ends, so
+        # exec into the workload container is not always possible.
+        uid="$(kubectl_wl get pod "$pod" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+        if [[ -n "$uid" ]]; then
+            escaped="${uid//-/_}"
+            remote="slice=\$(find /host-sys/fs/cgroup/kubepods.slice -maxdepth 3 -type d -name '*pod${escaped}.slice' 2>/dev/null | head -n1); "
+            remote+='[ -n "$slice" ] || exit 1; '
+            remote+='find "$slice" -maxdepth 1 -type d -name "crio-*.scope" 2>/dev/null | while read -r scope; do [ -r "$scope/cpu.stat" ] && cat "$scope/cpu.stat"; done | '
+            remote+="awk '{ sum[\$1] += \$2 } END { for (k in sum) printf \"%s %d\\n\", k, sum[k] }'"
+            local remote_err
+            if remote_err="$(kexec "$target_pod" sh -c "$remote" 2>&1 > "$file")"; then
+                [[ -s "$file" ]] && return 0
+                log "  cpu.stat probe produced no counters (${remote_err:-no output})"
+            else
+                log "  cpu.stat probe failed: ${remote_err:-no output}"
+            fi
+        fi
+
+        # Fallback for a still-running single-container pod.
+        if kubectl_wl exec "$pod" -- cat /sys/fs/cgroup/cpu.stat > "$file" 2>/dev/null; then
+            [[ -s "$file" ]] && return 0
+        fi
+        [[ -n "$quiet" ]] || log "  could not read cpu.stat for ${pod}; the quota delta will be unavailable"
+        : > "$file"
+    }
+
     # The declared warmup: run the same load for its length and discard the
     # result, so the measured window does not carry the cold start (JIT and
     # connection setup, page-cache warmup) that the scenarios declare a warmup
@@ -383,6 +425,25 @@ main() {
             kexec "$warm_pod" sh -c "$warmup_command" \
             > "${out_dir}/${arm}.warmup.txt" \
             || die "warmup load failed on ${load_node}"
+    fi
+
+    read_workload_cpu_stat "$cpu_stat_before"
+
+    # A podlog-sourced workload removes its cgroup when the container exits, so
+    # the closing snapshot has to be taken while it still runs. Sample once a
+    # second and keep the last non-empty reading.
+    local cpu_sampler_pid="" cpu_stop_file=""
+    if (( await_completion )) && [[ -n "$cpu_stat_after" && -n "$manifest" && -n "$APPLIED_PODS" ]]; then
+        cpu_stop_file="${out_dir}/.cpu-stat-stop"
+        rm -f "$cpu_stop_file"
+        (
+            while [[ ! -e "$cpu_stop_file" ]]; do
+                read_workload_cpu_stat "${cpu_stat_after}.tmp" quiet
+                [[ -s "${cpu_stat_after}.tmp" ]] && mv "${cpu_stat_after}.tmp" "$cpu_stat_after"
+                sleep 1
+            done
+        ) &
+        cpu_sampler_pid=$!
     fi
 
     # The trace and `perf sched` run inside the measured period and for bounded
@@ -418,6 +479,14 @@ main() {
     # workload has to have stopped before that log is taken.
     if (( await_completion )); then
         wait_workload_finished
+    fi
+
+    if [[ -n "$cpu_sampler_pid" ]]; then
+        : > "$cpu_stop_file"
+        wait "$cpu_sampler_pid" 2>/dev/null || true
+        rm -f "$cpu_stop_file" "${cpu_stat_after}.tmp"
+    else
+        read_workload_cpu_stat "$cpu_stat_after"
     fi
 
     if [[ -n "$manifest" ]]; then

@@ -72,3 +72,15 @@ def test_delta_rejects_zero_periods() -> None:
     )
     with pytest.raises(ValueError, match="no quota periods observed"):
         delta(before, after)
+
+
+def test_cli_compares_two_snapshots(tmp_path, capsys) -> None:
+    import cgroup_stats as cs
+
+    before = tmp_path / "before.stat"
+    after = tmp_path / "after.stat"
+    before.write_text("usage_usec 100\nnr_periods 100\nnr_throttled 10\nthrottled_usec 50\n")
+    after.write_text("usage_usec 200\nnr_periods 200\nnr_throttled 40\nthrottled_usec 90\n")
+    assert cs.main(["--before", str(before), "--after", str(after), "--json"]) == 0
+    out = capsys.readouterr().out
+    assert '"throttled_period_ratio": 0.3' in out

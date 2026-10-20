@@ -101,7 +101,46 @@ The rejected alternatives were: keeping 6×2 with pre-registered nulls (45 of 75
 contrasts could never reject and Holm was diluted), and implementing bandwidth in
 the other three schedulers upstream (out of scope for this series).
 
-## 6. Reproduction
+## 6. Quota calibration (EEVDF pilot)
+
+`make linux-sched-quota-calibrate SCENARIO=<name>` starts at 1 CPU on EEVDF and
+tightens by the frozen step (0.9) until the measured window reaches the 10%
+throttling target. The ratio comes from differencing the container's cgroup v2
+`cpu.stat` across the window (`nr_throttled / nr_periods`), not from a whole-pod
+snapshot that would include the warmup.
+
+Two facts shaped the implementation:
+
+* Kubernetes/CRI-O applies `limits.cpu` on the **pod sandbox scope**
+  (`crio-*.scope` under the pod slice), not on the container cgroup, and removes
+  it when the container exits. The observer therefore mounts the host
+  `/sys/fs/cgroup` read-only and reads the scope by pod UID; podlog-sourced
+  workloads are sampled once a second while they run, because their cgroup is
+  gone once they finish.
+* Workload manifests request 100m instead of 1 CPU. A request above the quota is
+  illegal (`requests <= limits`), and keeping it fixed at a low value lets the
+  sweep test quotas below one CPU while holding the cgroup weight constant
+  across both policies.
+
+Measured on the live 7.3 cluster:
+
+| Workload | Limit | Throttled periods | Result |
+|---|---|---|---|
+| `ffmpeg` | 1 | 73.2% | frozen |
+| `postgres` | 1 | 11.6% | frozen |
+
+Still blocked:
+
+* `http` and `mixed` need an offered rate, and the rate calibration cannot hold
+  the 10 ms p99 target: the mean is ~5 ms but roughly 1% of requests land near
+  200 ms at both 100 and 500 rps. That tail is consistent with TCP
+  retransmission, not quota, and needs its own investigation before those quotas
+  can be frozen.
+* `stress-ng` is a saturation control: any limit below demand throttles near
+  100%, so the 90% healthy cap rejects it. Decide whether the control is exempt
+  from the cap or the cap is relaxed for it.
+
+## 7. Reproduction
 
 ```sh
 # capability per arm at the pinned commit

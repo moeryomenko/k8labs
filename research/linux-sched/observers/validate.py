@@ -28,6 +28,10 @@ ALLOWED_HOST_PATHS = {
     # load generators the observer runs.
     "/var/lib/linux-sched/fixtures",
     "/var/lib/linux-sched/bin",
+    # Read-only: the quota campaign differences container cpu.stat across the
+    # measured window. Podlog-sourced workloads exit before an exec could read
+    # it, and limits.cpu lands on the container cgroup, not the pod slice.
+    "/sys/fs/cgroup",
 }
 # /var/tmp/linux-sched is the artifact spool; it must be writable. Every other
 # host path is read-only input.

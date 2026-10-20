@@ -44,3 +44,21 @@ def test_capture_uses_the_policy_renderer() -> None:
     assert "cpu_limit_policy.py" in capture
     assert "--policy" in capture
     assert 'LINUX_SCHED_CPU_POLICY' in capture
+
+
+def test_quota_calibration_sweeps_eevdf_and_records_both_snapshots() -> None:
+    runner = _read(RUNNER)
+    assert "quota-calibrate)" in runner
+    assert "cmd_quota_calibrate()" in runner
+    assert "quota_calibration.py" in runner
+    assert "calibration.csv" in runner
+    capture = _read(CAPTURE)
+    assert "--cpu-stat-before" in capture
+    assert "--cpu-stat-after" in capture
+
+
+def test_quota_calibration_writes_one_row_per_workload() -> None:
+    runner = _read(RUNNER)
+    # A re-run must replace the workload's row, not duplicate it: freeze_quota
+    # rejects duplicates.
+    assert 'r.get("workload") != workload' in runner

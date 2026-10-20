@@ -122,6 +122,9 @@ spec:
               readOnly: true
             - name: work
               mountPath: /var/tmp/linux-sched
+            - name: host-cgroup
+              mountPath: /host-sys/fs/cgroup
+              readOnly: true
             # Baked workload fixtures and load generators. The FFmpeg input
             # clip and the PostgreSQL snapshot live here, and the Pods mount
             # the same host path, so every arm reads byte-identical inputs.
@@ -158,6 +161,14 @@ spec:
         - name: work
           hostPath:
             path: /var/tmp/linux-sched
+        # The quota campaign differences a container's cpu.stat across the
+        # measured window. Podlog-sourced workloads exit before an exec can read
+        # it, and Kubernetes applies limits.cpu on the container cgroup, so the
+        # host cgroup tree is mounted read-only instead.
+        - name: host-cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
             type: DirectoryOrCreate
         # Baked at image-bake time. `Directory`, not `DirectoryOrCreate`: an
         # observer without fixtures cannot measure anything, so it should fail

@@ -329,6 +329,8 @@ run_block() {
         "${warmup_args[@]}" \
         --load-ready-probe "${LOAD_READY_PROBE:-}" \
         --raw "$load_raw" --podlog "$podlog_raw" \
+        --cpu-stat-before "${raw_dir}/${arm}${suffix}.cpu-before.stat" \
+        --cpu-stat-after "${raw_dir}/${arm}${suffix}.cpu-after.stat" \
         || die "capture failed for block ${block} arm ${arm}"
 
     # Stop the scheduler so the next arm starts from a clean scheduler state.
@@ -488,6 +490,95 @@ cmd_run() {
     fi
 }
 
+# cmd_quota_calibrate SCENARIO DIR DATA_ROOT - EEVDF limit sweep for one workload.
+#
+# Starts at LINUX_SCHED_QUOTA_START (default 1 CPU) and tightens by the frozen
+# calibration step until the workload reaches the throttling target. Each step is
+# a normal measured block on the control arm under the limited policy, so the
+# ratio comes from the same cpu.stat counters the confirmatory analysis uses.
+cmd_quota_calibrate() {
+    local scenario="$1" dir="$2" data_root="$3"
+    load_scenario "$dir" "$scenario"
+    require_cmd kubectl python3
+    resolve_hosts
+
+    local phase_root="${data_root}/pilot"
+    mkdir -p "$phase_root"
+    RAW_DATA_ROOT="$data_root"
+    DATA_ROOT="$phase_root"
+
+    local steps_csv="${phase_root}/quota-sweep-${SCENARIO_NAME}.csv"
+    printf 'step,cpu_limit,throttled_period_ratio,healthy\n' > "$steps_csv"
+    local calibration="${phase_root}/calibration.csv"
+    local quota_file="${phase_root}/.sweep-quota-${SCENARIO_NAME}.yaml"
+    export LINUX_SCHED_FROZEN_QUOTA_FILE="$quota_file"
+
+    local limit="${LINUX_SCHED_QUOTA_START:-1}"
+    local max_steps="${LINUX_SCHED_QUOTA_STEPS:-6}"
+    local target="${LINUX_SCHED_QUOTA_TARGET:-0.10}"
+    local max_ratio="${LINUX_SCHED_QUOTA_MAX:-0.90}"
+
+    scx_reset "$TARGET_NODE"
+    wait_quiescent "$TARGET_NODE" || die "guest ${TARGET_NODE} never became quiescent"
+
+    local step block=0
+    for (( step = 1; step <= max_steps; step++ )); do
+        block=$(( block + 1 ))
+        printf 'schema_version: 1\nkind: frozen-cpu-quotas\nquotas:\n  - workload: %s\n    cpu_limit: "%s"\n' \
+            "$SCENARIO_NAME" "$limit" > "$quota_file"
+
+        local raw_dir="${phase_root}/${SCENARIO_NAME}/quota-sweep-$(printf '%02d' "$step")"
+        mkdir -p "$raw_dir"
+        BLOCKS_CSV="${raw_dir}/blocks.csv"
+
+        log "quota sweep ${SCENARIO_NAME}: step ${step}, limit ${limit}"
+        run_block "$SCENARIO_NAME" "$LINUX_SCHED_CONTROL" "$block" "$raw_dir" limited
+
+        local before="${raw_dir}/${LINUX_SCHED_CONTROL}-limited.cpu-before.stat"
+        local after="${raw_dir}/${LINUX_SCHED_CONTROL}-limited.cpu-after.stat"
+        [[ -s "$before" && -s "$after" ]] || die "no cpu.stat snapshots for step ${step}"
+        local measured ratio
+        measured="$(python3 "${SCRIPT_DIR}/cgroup_stats.py" --before "$before" --after "$after" --json)" \
+            || die "could not compute the throttled ratio for step ${step}"
+        ratio="$(printf '%s' "$measured" | python3 -c 'import json,sys; print(json.load(sys.stdin)["throttled_period_ratio"])')"
+
+        printf '%s,%s,%s,true\n' "$step" "$limit" "$ratio" >> "$steps_csv"
+        log "  throttled_period_ratio=${ratio} at ${limit}"
+
+        if awk -v r="$ratio" -v hi="$max_ratio" 'BEGIN { exit !(r > hi) }'; then
+            die "${SCENARIO_NAME}: ${ratio} throttling at ${limit} exceeds the healthy maximum ${max_ratio}"
+        fi
+        if awk -v r="$ratio" -v t="$target" 'BEGIN { exit !(r >= t) }'; then
+            python3 - "$calibration" "$SCENARIO_NAME" "$limit" "$ratio" <<'PYCAL'
+import csv
+import pathlib
+import sys
+
+path, workload, limit, ratio = sys.argv[1:5]
+rows = []
+if pathlib.Path(path).exists():
+    with open(path, newline="", encoding="utf-8") as handle:
+        rows = [r for r in csv.DictReader(handle) if r.get("workload") != workload]
+with open(path, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(
+        handle, fieldnames=["workload", "cpu_limit", "throttled_period_ratio", "healthy"]
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    writer.writerow(
+        {"workload": workload, "cpu_limit": limit, "throttled_period_ratio": ratio, "healthy": "true"}
+    )
+PYCAL
+            log "frozen quota ${SCENARIO_NAME}: ${limit} (${ratio} throttled)"
+            return 0
+        fi
+
+        limit="$(python3 "${SCRIPT_DIR}/quota_calibration.py" --current "$limit" --observed "$ratio" --target "$target")"
+    done
+
+    die "${SCENARIO_NAME}: no limit reached ${target} throttling within ${max_steps} steps"
+}
+
 cmd_overhead() {
     local scenario="$1" dir="$2" data_root="$3"
     load_scenario "$dir" "$scenario"
@@ -495,6 +586,8 @@ cmd_overhead() {
     resolve_hosts
     RAW_DATA_ROOT="$data_root"
     DATA_ROOT="$data_root"
+    export LINUX_SCHED_CPU_POLICY=unlimited
+    unset LINUX_SCHED_CPU_LIMIT || true
     local out="${data_root}/${SCENARIO_NAME}/overhead"
     mkdir -p "$out"
 
@@ -578,6 +671,7 @@ calibration_probe() {
         --load-command "$(render_load_command "$rate" "$LINUX_SCHED_RATE_PROBE_S")" \
         "${warm_args[@]}" \
         --load-ready-probe "${LOAD_READY_PROBE:-}" \
+        --instrumentation disabled \
         --raw "${probe_dir}/load.txt" --podlog "${probe_dir}/pod.log" \
         || die "calibration probe at ${rate} rps failed"
     collect_metric "${probe_dir}/load.txt" "$METRIC_COMMAND" \
@@ -612,6 +706,11 @@ cmd_calibrate() {
     require_cmd kubectl python3
     resolve_hosts
     DATA_ROOT="$data_root"
+
+    # The offered rate is a property of the workload, not of the quota: calibrate
+    # it with no CPU limit, exactly as the confirmatory unlimited policy runs.
+    export LINUX_SCHED_CPU_POLICY=unlimited
+    unset LINUX_SCHED_CPU_LIMIT || true
 
     local out="${data_root}/${SCENARIO_NAME}/calibration"
     mkdir -p "$out"
@@ -680,7 +779,7 @@ main() {
             --help|-h) usage 0 ;;
             --validate) subcmd="validate"; shift ;;
             --list) subcmd="list"; shift ;;
-            plan|run|overhead|calibrate) subcmd="$1"; shift ;;
+            plan|run|overhead|calibrate|quota-calibrate) subcmd="$1"; shift ;;
             --scenario) scenario="$2"; shift 2 ;;
             --mode) run_mode="$2"; shift 2 ;;
             --configs-dir) dir="$2"; shift 2 ;;
@@ -701,6 +800,11 @@ main() {
             [[ -n "$scenario" ]] || die "--scenario is required"
             [[ -n "$data_root" ]] || die "--data-root is required"
             cmd_run "$scenario" "$run_mode" "$dir" "$data_root"
+            ;;
+        quota-calibrate)
+            [[ -n "$scenario" ]] || die "--scenario is required"
+            [[ -n "$data_root" ]] || die "--data-root is required"
+            cmd_quota_calibrate "$scenario" "$dir" "$data_root"
             ;;
         overhead)
             [[ -n "$scenario" ]] || die "--scenario is required"

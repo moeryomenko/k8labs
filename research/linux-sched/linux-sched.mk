@@ -241,6 +241,16 @@ linux-sched-otel-validate: ## Validate the OTel manifests and configs offline
 
 
 # ---- Factorial cgroup-v2 quota campaign (versioned) ----
+.PHONY: linux-sched-quota-rate
+linux-sched-quota-rate: ## Freeze a scenario's offered rate in the quota campaign tree (SCENARIO=<name>)
+	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name>" >&2; exit 1; fi
+	$(LINUX_SCHED_RUNNER) calibrate --scenario $(SCENARIO) --configs-dir $(LINUX_SCHED_CONFIGS_DIR) --data-root $(LINUX_SCHED_QUOTA_DATA_ROOT)
+
+.PHONY: linux-sched-quota-calibrate
+linux-sched-quota-calibrate: ## Sweep EEVDF limits and freeze one workload's quota (SCENARIO=<name>)
+	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name>" >&2; exit 1; fi
+	$(LINUX_SCHED_RUNNER) quota-calibrate --scenario $(SCENARIO) --configs-dir $(LINUX_SCHED_CONFIGS_DIR) --data-root $(LINUX_SCHED_QUOTA_DATA_ROOT)
+
 .PHONY: linux-sched-quota-pilot
 linux-sched-quota-pilot: ## EEVDF pilot into the quota campaign data tree (SCENARIO=<name>)
 	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name>" >&2; exit 1; fi

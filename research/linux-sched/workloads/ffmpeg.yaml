@@ -23,7 +23,7 @@ spec:
           rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ] || exit "$rc"
       resources:
         requests:
-          cpu: "1"
+          cpu: "100m"
         limits:
           cpu: "__CPU_LIMIT__"
       volumeMounts:
