@@ -19,3 +19,19 @@ def test_calibrate_tightens_when_low_throttle() -> None:
 
 def test_target_ratio() -> None:
     assert qc.DEFAULT_TARGET_THROTTLED_RATIO >= 0.10
+
+
+def test_cli_refuses_to_go_below_the_request_floor(capsys) -> None:
+    import quota_calibration as qc
+
+    assert qc.main(["--current", "500m", "--observed", "0.04",
+                    "--target", "0.10", "--floor", "500m"]) == 3
+    assert "cannot reach the target" in capsys.readouterr().err
+
+
+def test_cli_returns_the_next_limit_above_the_floor(capsys) -> None:
+    import quota_calibration as qc
+
+    assert qc.main(["--current", "1", "--observed", "0.04",
+                    "--target", "0.10", "--floor", "500m"]) == 0
+    assert capsys.readouterr().out.strip() == "900m"

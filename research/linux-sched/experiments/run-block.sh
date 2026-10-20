@@ -517,6 +517,11 @@ cmd_quota_calibrate() {
     local max_steps="${LINUX_SCHED_QUOTA_STEPS:-6}"
     local target="${LINUX_SCHED_QUOTA_TARGET:-0.10}"
     local max_ratio="${LINUX_SCHED_QUOTA_MAX:-0.90}"
+    local floor="${LINUX_SCHED_QUOTA_FLOOR:-500m}"
+    # stress-ng is a saturation control: it is expected to be throttled hard.
+    if [[ "$SCENARIO_NAME" == "stress-ng" ]]; then
+        max_ratio=1.0
+    fi
 
     scx_reset "$TARGET_NODE"
     wait_quiescent "$TARGET_NODE" || die "guest ${TARGET_NODE} never became quiescent"
@@ -573,7 +578,9 @@ PYCAL
             return 0
         fi
 
-        limit="$(python3 "${SCRIPT_DIR}/quota_calibration.py" --current "$limit" --observed "$ratio" --target "$target")"
+        limit="$(python3 "${SCRIPT_DIR}/quota_calibration.py" \
+            --current "$limit" --observed "$ratio" --target "$target" --floor "$floor")" \
+            || die "${SCENARIO_NAME}: no quota reached ${target} throttling above the request floor ${floor}"
     done
 
     die "${SCENARIO_NAME}: no limit reached ${target} throttling within ${max_steps} steps"

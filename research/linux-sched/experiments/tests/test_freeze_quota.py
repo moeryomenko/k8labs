@@ -92,7 +92,7 @@ def test_unhealthy_workload_is_rejected(tmp_path: Path) -> None:
 
 def test_over_throttled_is_rejected(tmp_path: Path) -> None:
     rows = _good_rows()
-    rows[3]["throttled_period_ratio"] = "0.97"
+    rows[0]["throttled_period_ratio"] = "0.97"   # http, a production workload
     path = _write(tmp_path / "cal.csv", rows)
     with pytest.raises(ValueError, match="over-throttled"):
         fq.freeze(fq.read_calibrations(path))
@@ -121,3 +121,20 @@ def test_manifest_fingerprint_is_stable() -> None:
     second = fq.freeze(list(reversed(rows)))
     assert fq.fingerprint(first) == fq.fingerprint(second)
     assert len(fq.fingerprint(first)) == 64
+
+
+def test_saturation_control_may_exceed_the_healthy_band(tmp_path: Path) -> None:
+    rows = _good_rows()
+    rows[3]["throttled_period_ratio"] = "0.98"   # stress-ng
+    path = _write(tmp_path / "cal.csv", rows)
+    manifest = fq.freeze(fq.read_calibrations(path))
+    stress = [q for q in manifest["quotas"] if q["workload"] == "stress-ng"][0]
+    assert stress["observed_throttled_period_ratio"] == 0.98
+
+
+def test_production_workload_still_rejects_over_throttling(tmp_path: Path) -> None:
+    rows = _good_rows()
+    rows[0]["throttled_period_ratio"] = "0.98"   # http
+    path = _write(tmp_path / "cal.csv", rows)
+    with pytest.raises(ValueError, match="http: throttled_period_ratio"):
+        fq.freeze(fq.read_calibrations(path))

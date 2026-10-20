@@ -140,35 +140,38 @@ Still blocked:
   100%, so the 90% healthy cap rejects it. Decide whether the control is exempt
   from the cap or the cap is relaxed for it.
 
-### The request/weight trade-off (measured)
+### Request, weight and the latency tail
 
-Sub-CPU quotas require the request to be at or below the quota, because Kubernetes
-rejects `requests > limits`. A low request also lowers the cgroup CPU weight, and
-on a shared node that shows up as a latency tail:
+Sub-CPU quotas require `requests <= limits`, and the request also sets the cgroup
+CPU weight. The chosen policy is a fixed **500m request** for every workload,
+with quotas calibrated down to a 500m floor. That is high enough to carry a real
+share of CPU on a shared node and low enough to test the quotas that matter.
 
-| nginx request | Limit | Retransmits / segments | Max latency |
+Measured before the change, at 100 rps with a 1 CPU limit:
+
+| nginx request | Retransmits / segments | Max latency |
+|---|---|---|
+| 100m (weight 102) | 99 / 6379 (~1.5%) | 954 ms |
+| 1 CPU (weight 1024) | 0 / 6249 | 31.9 ms |
+
+At a 500m request the single 500 rps probe reported p99 13.26 ms, but repeated
+probes are not stable: 400 rps reported 1660 ms and 300 rps 797 ms for the same
+manifest and limit. A latency tail of that size cannot be attributed to the
+scheduler, so `http` and `mixed` stay uncalibrated until the instability is
+explained. The likely cause remains occasional retransmission on the lab network;
+it needs a dedicated investigation (client stat counter, observer CPU headroom,
+Cilium datapath) rather than a protocol tweak.
+
+Frozen quotas under the 500m request:
+
+| Workload | Limit | Throttled periods | Note |
 |---|---|---|---|
-| 100m (weight 102) | 1 CPU | 99 / 6379 (~1.5%) | 954 ms |
-| 1 CPU (weight 1024) | 1 CPU | 0 / 6249 | 31.9 ms |
+| `ffmpeg` | 1 | 81.9% | frozen |
+| `postgres` | 900m | 25.2% | one tightening step |
+| `stress-ng` | 1 | 93.5% | saturation control, exempt from the 90% band |
 
-The tail is TCP retransmission after ACK delays on a starved server, not quota.
-It matters because p99 latency is the primary metric for `http` and `mixed`: a
-1% retransmit tail dominates it and would be read as scheduler behaviour.
-
-So the campaign must choose one of:
-
-1. **High request (1 CPU)**: clean latency and quotas at or above one CPU. Light
-   workloads may not reach 10% throttling at a healthy offered rate, so their
-   quota arm may be untestable.
-2. **Low request (100m)**: sub-CPU quotas are possible, but latency workloads
-   carry a retransmit tail that must be handled (for example by excluding
-   retransmitted requests from p99, which changes the metric definition).
-3. **Run the workload outside Kubernetes** with an explicit high `cpu.weight`
-   and a variable `cpu.max`, decoupling weight from quota. That is a harness
-   change, not a manifest tweak.
-
-`ffmpeg` and `postgres` are throughput/CPU workloads and are unaffected: their
-frozen quotas came from the 100m-request manifests without a latency tail.
+`stress-ng` is exempt from the healthy band because it makes progress under any
+quota; the exemption is recorded in `freeze_quota.py` and the sweep.
 
 ## 7. Reproduction
 

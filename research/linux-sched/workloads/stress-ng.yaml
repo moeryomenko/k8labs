@@ -27,6 +27,6 @@ spec:
         - --metrics-brief
       resources:
         requests:
-          cpu: "100m"
+          cpu: "500m"
         limits:
           cpu: "__CPU_LIMIT__"

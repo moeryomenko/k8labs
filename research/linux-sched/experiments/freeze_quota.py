@@ -22,6 +22,9 @@ from pathlib import Path
 
 TARGET_THROTTLED_RATIO = 0.10
 HEALTHY_MAX_THROTTLED_RATIO = 0.90
+# Saturation controls are meant to be throttled hard: stress-ng makes progress
+# under any quota, so the production healthy band does not apply to it.
+SATURATION_WORKLOADS = ("stress-ng",)
 CONFIRMATORY_WORKLOADS = (
     "http",
     "ffmpeg",
@@ -102,10 +105,11 @@ def freeze(
                 f"{workload}: throttled_period_ratio {row.throttled_period_ratio:.4f} "
                 f"< {target_ratio:.2f}; tighten the limit and rerun the pilot"
             )
-        if row.throttled_period_ratio > max_ratio:
+        row_max = 1.0 if workload in SATURATION_WORKLOADS else max_ratio
+        if row.throttled_period_ratio > row_max:
             errors.append(
                 f"{workload}: throttled_period_ratio {row.throttled_period_ratio:.4f} "
-                f"> {max_ratio:.2f}; the workload is over-throttled"
+                f"> {row_max:.2f}; the workload is over-throttled"
             )
 
     unknown = sorted(set(seen) - set(CONFIRMATORY_WORKLOADS))

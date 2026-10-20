@@ -69,14 +69,27 @@ quota_calibrate = calibrate_cpu_limit
 
 def main(argv=None) -> int:
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(description="Next CPU limit for the EEVDF pilot sweep.")
     parser.add_argument("--current", required=True, help="current limit, e.g. 1 or 750m")
     parser.add_argument("--observed", required=True, type=float, help="throttled period ratio")
     parser.add_argument("--target", type=float, default=DEFAULT_TARGET_THROTTLED_RATIO)
     parser.add_argument("--step", type=float, default=0.9)
+    parser.add_argument(
+        "--floor",
+        default=None,
+        help="refuse to tighten below this limit (the workload's CPU request)",
+    )
     args = parser.parse_args(argv)
-    print(calibrate_cpu_limit(args.current, args.observed, args.target, args.step))
+    next_limit = calibrate_cpu_limit(args.current, args.observed, args.target, args.step)
+    if args.floor is not None and parse_cpu_quantity(next_limit) < parse_cpu_quantity(args.floor):
+        print(
+            f"cannot reach the target above the request floor {args.floor}",
+            file=sys.stderr,
+        )
+        return 3
+    print(next_limit)
     return 0
 
 
