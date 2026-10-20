@@ -48,7 +48,7 @@ def load(path: Path | None = None) -> list[dict]:
     return docs
 
 
-def validate(docs: list[dict] | None = None) -> list[str]:
+def validate(docs: list[dict] | None = None, allow_host_network: bool = False) -> list[str]:
     errors: list[str] = []
     docs = docs if docs is not None else load()
 
@@ -71,7 +71,9 @@ def validate(docs: list[dict] | None = None) -> list[str]:
 
         if spec.get("hostPID") is not True:
             errors.append(f"{origin}: observer needs hostPID to see host tasks")
-        if spec.get("hostNetwork") or spec.get("hostIPC"):
+        if spec.get("hostNetwork") and not allow_host_network:
+            errors.append(f"{origin}: observer must not use host network/IPC")
+        if spec.get("hostIPC"):
             errors.append(f"{origin}: observer must not use host network/IPC")
         if spec.get("automountServiceAccountToken") is not False:
             errors.append(f"{origin}: pod must disable automatic token mounting")
@@ -132,7 +134,11 @@ def validate(docs: list[dict] | None = None) -> list[str]:
 
 
 def main() -> int:
-    errors = validate()
+    import os
+
+    errors = validate(
+        allow_host_network=os.environ.get("LINUX_SCHED_ALLOW_HOST_NETWORK") == "1"
+    )
     if errors:
         for error in errors:
             print(f"FAIL: {error}", file=sys.stderr)

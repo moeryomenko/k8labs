@@ -175,7 +175,13 @@ Cilium — the virtual NIC, bridge or qdisc on the hypervisor host.
 That host is not the workstation running these commands: it exposes no bridge or
 tap interfaces and the cluster is remote, so the next counters (`ip -s link`,
 `tc -s qdisc`, `ethtool -S`, `softnet_stat`) need access to the hypervisor host
-itself. The observer cannot supply them either, because it is not `hostNetwork`.
+itself.
+
+Moving the load generator to `hostNetwork` did not help: with the observer on the
+node network and two CPUs available, three 400 rps probes still produced p99 of
+240, 768 and 1490 ms, with retransmits on both sides (load 123/38/279, server
+274/390/535) and no CPU throttling. The loss is therefore not in the CNI pod path
+either; it is on the virtual network below both the pod and host namespaces.
 
 Until that is fixed, `http` and `mixed` stay uncalibrated rather than frozen on a
 meaningless rate.
