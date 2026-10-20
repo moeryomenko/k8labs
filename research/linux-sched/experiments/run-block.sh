@@ -227,28 +227,55 @@ collect_metric() {
 # the primary verdict, not as part of it, so it lives in its own file rather
 # than in blocks.csv where the decision rule would pick it up as a contrast.
 collect_secondary() {
-    local scenario="$1" arm="$2" raw_dir="$3" block="$4"
+    local scenario="$1" arm="$2" raw_dir="$3" block="$4" policy="${5:-}"
     [[ -n "${SECONDARY_METRIC_COMMAND:-}" ]] || return 0
-    local source="${raw_dir}/${arm}.log"
-    [[ "${SECONDARY_SOURCE:-podlog}" == "load" ]] && source="${raw_dir}/${arm}.txt"
+    local suffix=""
+    [[ -n "$policy" ]] && suffix="-${policy}"
+    local source="${raw_dir}/${arm}${suffix}.log"
+    [[ "${SECONDARY_SOURCE:-podlog}" == "load" ]] && source="${raw_dir}/${arm}${suffix}.txt"
     local csv="${DATA_ROOT}/secondary-${scenario}.csv"
     if [[ ! -s "$csv" ]]; then
-        printf 'block_id,scheduler,workload,metric,value,direction\n' > "$csv"
+        printf 'block_id,scheduler,workload,metric,value,direction,policy\n' > "$csv"
     fi
     local value
     value="$(python3 "${SCRIPT_DIR}/metrics.py" \
         --metric-command "$SECONDARY_METRIC_COMMAND" --raw "$source" \
         --duration-s "$DURATION_S" --warmup-s "${WARMUP_S:-0}")" \
         || die "could not extract secondary metric for block ${block} arm ${arm}"
-    printf '%s,%s,%s,%s,%s,%s\n' \
+    printf '%s,%s,%s,%s,%s,%s,%s\n' \
         "$block" "$arm" "$scenario" "$SECONDARY_METRIC_COMMAND" "$value" \
-        "${SECONDARY_DIRECTION:-higher-is-better}" >> "$csv"
+        "${SECONDARY_DIRECTION:-higher-is-better}" "$policy" >> "$csv"
 }
 
-# run_block SCENARIO ARM BLOCK DIR — one arm of one paired block.
+# run_block SCENARIO ARM BLOCK DIR [POLICY] — one arm of one paired block.
+#
+# POLICY is empty for the scheduler-only series. For the quota campaign it is
+# "unlimited" or "limited"; the limited run reads the frozen quota for the
+# workload and fails closed when the manifest is missing.
 run_block() {
-    local scenario="$1" arm="$2" block="$3" raw_dir="$4"
+    local scenario="$1" arm="$2" block="$3" raw_dir="$4" policy="${5:-}"
     SCX_PID=""
+    local suffix=""
+    [[ -n "$policy" ]] && suffix="-${policy}"
+
+    export LINUX_SCHED_CPU_POLICY="$policy"
+    case "$policy" in
+        "")
+            ;;
+        unlimited)
+            unset LINUX_SCHED_CPU_LIMIT || true
+            log "  policy unlimited: no cpu.max"
+            ;;
+        limited)
+            LINUX_SCHED_CPU_LIMIT="$(frozen_quota_for "$scenario")" \
+                || die "no frozen quota for ${scenario}"
+            export LINUX_SCHED_CPU_LIMIT
+            log "  policy limited: cpu.max=${LINUX_SCHED_CPU_LIMIT}"
+            ;;
+        *)
+            die "unknown policy: ${policy}"
+            ;;
+    esac
 
     log "block ${block} arm ${arm}: resetting ${TARGET_NODE}"
     # No reboot: SSH is unavailable and the lab has no other way to restart a
@@ -291,8 +318,8 @@ run_block() {
         await_completion=(--await-workload-completion)
     fi
 
-    local load_raw="${raw_dir}/${arm}.txt"
-    local podlog_raw="${raw_dir}/${arm}.log"
+    local load_raw="${raw_dir}/${arm}${suffix}.txt"
+    local podlog_raw="${raw_dir}/${arm}${suffix}.log"
     "${SCRIPT_DIR}/../capture/capture-block.sh" \
         --target-node "$TARGET_NODE" --duration "$DURATION_S" --out-dir "$raw_dir" \
         --arm "$arm" --load-node "${LOAD_NODE:-}" \
@@ -317,13 +344,13 @@ run_block() {
     esac
 
     collect_metric "$metric_source" "$METRIC_COMMAND" "$DURATION_S" \
-        "${raw_dir}/${arm}.metric" \
+        "${raw_dir}/${arm}${suffix}.metric" \
         || die "could not extract primary metric for block ${block} arm ${arm}"
 
     append_block_row "$BLOCKS_CSV" "$block" "$SCENARIO_NAME" "$PRIMARY_METRIC" \
-        "$arm" "$(cat "${raw_dir}/${arm}.metric")" "$PRIMARY_DIRECTION"
+        "$arm" "$(cat "${raw_dir}/${arm}${suffix}.metric")" "$PRIMARY_DIRECTION" "$policy"
 
-    collect_secondary "$SCENARIO_NAME" "$arm" "$raw_dir" "$block"
+    collect_secondary "$SCENARIO_NAME" "$arm" "$raw_dir" "$block" "$policy"
 }
 
 cmd_plan() {
@@ -400,7 +427,21 @@ cmd_run() {
     local observed=()
     local completed=0 cap_hit=0 worst_s=0
 
-    local b arm seed
+    # The quota campaign crosses schedulers with two CPU policies per block.
+    # The scheduler-only series has no policy dimension: an empty list keeps one
+    # run per arm and writes an empty policy column.
+    local -a policies=()
+    mapfile -t policies < <(split_words "${LINUX_SCHED_POLICIES:-}")
+    if (( ${#policies[@]} == 0 )) && [[ "$mode" == "confirmatory" ]] \
+            && [[ "$LINUX_SCHED_PROTOCOL_VERSION" == "v3" ]]; then
+        policies=(unlimited limited)
+    fi
+    if (( ${#policies[@]} == 0 )); then
+        policies=("")
+    fi
+    log "${SCENARIO_NAME}: policies = ${policies[*]:-none}"
+
+    local b arm seed policy
     for (( b = first_block; b <= last_block; b++ )); do
         local elapsed=$(( $(date -u +%s) - started_at ))
         if ! within_wall_clock_cap "$elapsed" "$estimate_s" "$cap_s"; then
@@ -412,14 +453,19 @@ cmd_run() {
         seed=$(( LINUX_SCHED_PLAN_SEED + b ))
         local raw_dir="${phase_root}/${SCENARIO_NAME}/block-$(printf '%02d' "$b")"
         mkdir -p "$raw_dir"
-        printf '{"scenario":"%s","block":%s,"phase":"%s","protocol":"%s","duration_s":%s,"warmup_s":%s,"seed":%s,"order":"%s"}\n' \
-            "$SCENARIO_NAME" "$b" "$mode" "$LINUX_SCHED_PROTOCOL_VERSION" \
+        printf '{"scenario":"%s","block":%s,"phase":"%s","protocol":"%s","policies":"%s","duration_s":%s,"warmup_s":%s,"seed":%s,"order":"%s"}\n' \
+            "$SCENARIO_NAME" "$b" "$mode" "$LINUX_SCHED_PROTOCOL_VERSION" "${policies[*]}" \
             "$DURATION_S" "${WARMUP_S:-0}" "$seed" \
             "$(balanced_block_order "$b" | tr '\n' ' ')" > "${raw_dir}/metadata.json"
         # IFS excludes the space, so the arm order must be split explicitly.
         mapfile -t arms < <(balanced_block_order "$b")
+        # Arm outer, policy inner: the two quota treatments of one arm run
+        # back-to-back so a slow drift on the worker cannot masquerade as an
+        # interaction between scheduler and quota.
         for arm in "${arms[@]}"; do
-            run_block "$SCENARIO_NAME" "$arm" "$b" "$raw_dir"
+            for policy in "${policies[@]}"; do
+                run_block "$SCENARIO_NAME" "$arm" "$b" "$raw_dir" "$policy"
+            done
         done
         completed=$(( completed + 1 ))
         local block_seconds=$(( $(date -u +%s) - block_started ))

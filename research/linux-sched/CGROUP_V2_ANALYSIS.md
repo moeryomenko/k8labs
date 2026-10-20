@@ -60,25 +60,25 @@ null **by construction**, not by measurement. Under a single global Holm family
 that also inflates the correction applied to the contrasts that can show an
 effect.
 
-## 4. Execution gaps found in the campaign runner
+## 4. Execution path (protocol v3)
 
-1. `append_block_row` writes `block_id,scheduler,workload,metric,value,direction`
-   — no `policy` column. The factorial analyser reads `policy` and treats a
-   missing value as `None`, so no interaction contrast can be formed from data
-   the runner currently produces. **Still open**: the runner must write the
-   policy and run both policies per block before confirmatory data is valid.
-2. `activate_arm` started `scx_lavd` and `scx_mavd` without `--enable-cpu-bw`,
-   so even those two would have ignored the quota. **Fixed**: the flag is now
-   passed when `kernel_cgroup_bw_supported` finds the callback in the node's BTF.
-   The analyser now records the split families and the runner test suite asserts
-   the flag is capability-gated.
-3. The quota itself is rendered from a single `LINUX_SCHED_CPU_LIMIT`
-   (default `500m`) in `capture/capture-block.sh`; nothing varies it per policy
-   or per workload, and nothing reads the frozen quota manifest.
-4. Run on the current 7.3 cluster, every sched_ext arm would report zero quota
-   effect regardless of scheduler behaviour, because the kernel has no ext
-   cgroup support. The EEVDF pilot is unaffected: EEVDF enforces `cpu.max`
-   through the fair class.
+The runner now produces the data the analyser needs:
+
+1. `append_block_row` writes `block_id,scheduler,workload,metric,value,direction,policy`.
+2. `run_block SCENARIO ARM BLOCK DIR POLICY` sets `LINUX_SCHED_CPU_POLICY` and,
+   for `limited`, reads the workload's quota from the frozen manifest through
+   `frozen_quota_for`; a missing manifest or workload is fatal.
+3. `capture/capture-block.sh` renders the manifest through
+   `experiments/cpu_limit_policy.py`: `unlimited` removes `limits.cpu`, `limited`
+   applies the frozen quantity. One rendered manifest is kept per policy.
+4. Confirmatory v3 runs every arm under both policies, arm outer and policy
+   inner, with the same `block_id` so the analyser can pair them.
+5. The quota campaign writes to its own tree and protocol version (`v3`).
+
+Known property: a block interrupted between its two policy runs leaves a partial
+pair. Resume numbering continues after the highest block id, so the partial pair
+is not retried; its contrasts are reported as incomplete rather than silently
+treated as measured.
 
 ## 5. Decision: split the family (adopted)
 

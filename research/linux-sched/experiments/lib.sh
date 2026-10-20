@@ -523,11 +523,35 @@ scx_start() {
 # re-derive it from the metric name.
 append_block_row() {
     local file="$1" block="$2" workload="$3" metric="$4" scheduler="$5" value="$6" direction="$7"
+    local policy="${8:-}"
     if [[ ! -f "$file" ]]; then
-        printf 'block_id,scheduler,workload,metric,value,direction\n' > "$file"
+        printf 'block_id,scheduler,workload,metric,value,direction,policy\n' > "$file"
     fi
-    printf '%s,%s,%s,%s,%s,%s\n' \
-        "$block" "$scheduler" "$workload" "$metric" "$value" "$direction" >> "$file"
+    printf '%s,%s,%s,%s,%s,%s,%s\n' \
+        "$block" "$scheduler" "$workload" "$metric" "$value" "$direction" "$policy" >> "$file"
+}
+
+# frozen_quota_for WORKLOAD - the CPU limit frozen for this workload.
+#
+# The quota is a property of the workload, not of the phase, so it is read from
+# the quota campaign root. Missing or malformed input is fatal: a confirmatory
+# run must never guess a quota.
+frozen_quota_for() {
+    local workload="$1"
+    local file="${LINUX_SCHED_FROZEN_QUOTA_FILE:-${RAW_DATA_ROOT}/frozen-quotas.yaml}"
+    [[ -f "$file" ]] || die "no frozen quota manifest at ${file}; run make linux-sched-freeze-quota"
+    python3 - "$file" "$workload" <<'PYQUOTA'
+import sys
+import yaml
+
+manifest = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+for entry in manifest.get("quotas", []):
+    if entry.get("workload") == sys.argv[2]:
+        print(entry["cpu_limit"])
+        break
+else:
+    raise SystemExit(f"no frozen quota for workload {sys.argv[2]!r}")
+PYQUOTA
 }
 
 # split_arms ORDER_STRING — print one whitespace-separated token per line.

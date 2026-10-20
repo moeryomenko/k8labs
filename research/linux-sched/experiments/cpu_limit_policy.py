@@ -81,3 +81,32 @@ apply_limits = apply_cpu_limit
 inject_limits = inject_cpu_limit
 set_cpu_limit = apply_cpu_limit
 cpu_limit_policy = render_cpu_limit_policy
+
+
+def main(argv=None) -> int:
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--policy", choices=POLICIES, default="limited")
+    parser.add_argument("--cpu-limit", default=None)
+    parser.add_argument("--output", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    rendered = render_cpu_limit_policy(
+        args.manifest.read_text(encoding="utf-8"),
+        policy=args.policy,
+        cpu_limit=args.cpu_limit,
+    )
+    if args.output is not None:
+        args.output.write_text(rendered, encoding="utf-8")
+    else:
+        import sys
+
+        sys.stdout.write(rendered)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

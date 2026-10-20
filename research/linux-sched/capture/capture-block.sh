@@ -328,10 +328,20 @@ main() {
         fi
 
         log "applying workload manifest ${manifest}"
-        local rendered="${out_dir}/workload-${arm}.yaml"
-        sed -e "s|__NODE_NAME__|${target_node}|g" -e "s|__ARM__|${arm}|g" \
-            -e "s|__CPU_LIMIT__|${LINUX_SCHED_CPU_LIMIT:-500m}|g" \
-            "$manifest" > "$rendered"
+        # Keep one rendered manifest per policy: the same arm runs twice and the
+        # applied limit is part of the evidence.
+        local render_suffix=""
+        [[ -n "${LINUX_SCHED_CPU_POLICY:-}" ]] && render_suffix="-${LINUX_SCHED_CPU_POLICY}"
+        local rendered="${out_dir}/workload-${arm}${render_suffix}.yaml"
+        # The policy renderer owns the cpu.max decision: "unlimited" must remove
+        # resources.limits.cpu entirely, not render an empty quantity.
+        local cpu_policy="${LINUX_SCHED_CPU_POLICY:-limited}"
+        local -a limit_args=(--policy "${cpu_policy}")
+        [[ -n "${LINUX_SCHED_CPU_LIMIT:-}" ]] && limit_args+=(--cpu-limit "${LINUX_SCHED_CPU_LIMIT}")
+        python3 "${LINUX_SCHED_DIR}/experiments/cpu_limit_policy.py" \
+            --manifest "$manifest" "${limit_args[@]}" \
+            | sed -e "s|__NODE_NAME__|${target_node}|g" -e "s|__ARM__|${arm}|g" \
+            > "$rendered"
         # Delete any leftover first. The workload Pod name is fixed per scenario
         # and `spec.nodeName` is immutable, so a Pod left behind by an earlier
         # run — including one pinned to a different target node — makes the
@@ -430,7 +440,7 @@ main() {
                 log "  could not collect the workload log from ${pod}; the metric does not need it"
             fi
         done
-        kubectl_wl delete -f "${out_dir}/workload-${arm}.yaml" \
+        kubectl_wl delete -f "${rendered}" \
             --ignore-not-found --wait=true --timeout=120s >/dev/null \
             || die "failed to delete workload for arm ${arm}; refusing to leave it running"
     else
