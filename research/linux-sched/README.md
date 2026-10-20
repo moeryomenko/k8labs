@@ -11,6 +11,11 @@ the pinned linux-next source `next-20261016`
 (`2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64`), so the custom kernel build needs no
 private patches. See `GATES.md`.
 
+Quota enforcement differs per arm: the fair class enforces `cpu.max`, while a
+sched_ext scheduler honours it only if it implements
+`ops.cgroup_set_bandwidth`. `CGROUP_V2_ANALYSIS.md` maps that per arm and
+records what it means for the confirmatory family.
+
 This series owns *in-guest* CPU scheduling only. Kubernetes pod placement is
 studied separately in the sibling `kube-sched` series.
 

@@ -475,6 +475,21 @@ scx_stage() {
 
 # scx_start NODE NAME — start a scheduler and verify it attached; prints the pid
 # of the supervising local `kubectl exec`.
+# kernel_cgroup_bw_supported NODE — does the running kernel deliver
+# ops.cgroup_set_bandwidth to sched_ext? The fair class enforces cpu.max itself,
+# but sched_ext schedulers only see the setting through that callback. On a
+# kernel without it, passing --enable-cpu-bw makes the scheduler refuse to start,
+# so the capability is probed before the flag is used.
+kernel_cgroup_bw_supported() {
+    local node="$1" pod
+    pod="$(observer_pod_for_node "$node")"
+    [[ -n "$pod" ]] || return 1
+    kubectl --kubeconfig "$(workload_kubeconfig)" -n "$OBSERVER_NAMESPACE" \
+        exec "$pod" -- sh -c \
+        'bpftool btf dump file /sys/kernel/btf/vmlinux format c 2>/dev/null | grep -q cgroup_set_bandwidth' \
+        >/dev/null 2>&1
+}
+
 scx_start() {
     local node="$1" name="$2" pod log pid
     shift 2

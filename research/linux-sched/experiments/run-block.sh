@@ -180,8 +180,23 @@ activate_arm() {
         eevdf)
             scx_reset "$TARGET_NODE"
             ;;
-        scx_bpfland|scx_lavd|scx_mavd|scx_mlfq)
+        scx_bpfland|scx_mlfq)
             SCX_PID="$(scx_start "$TARGET_NODE" "$arm")"
+            log "started ${arm} (pid ${SCX_PID}) on ${TARGET_NODE}"
+            ;;
+        scx_lavd|scx_mavd)
+            # These two honour cpu.max only when asked, and only if the kernel
+            # forwards ops.cgroup_set_bandwidth. Without the flag they ignore the
+            # quota treatment entirely, which would make the limited policy a
+            # no-op for the arm.
+            local bw_args=()
+            if kernel_cgroup_bw_supported "$TARGET_NODE"; then
+                bw_args+=(--enable-cpu-bw)
+                log "  ${arm}: cpu.max support present, enabling bandwidth"
+            else
+                log "  ${arm}: kernel has no ops.cgroup_set_bandwidth; cpu.max will be ignored"
+            fi
+            SCX_PID="$(scx_start "$TARGET_NODE" "$arm" "${bw_args[@]}")"
             log "started ${arm} (pid ${SCX_PID}) on ${TARGET_NODE}"
             ;;
         scx_nitosis)
