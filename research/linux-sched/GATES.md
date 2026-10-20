@@ -798,3 +798,30 @@ Pinned immutable upstream linux-next commit (contains `BPF_F_ARENA_SCALAR`
 with x86 JIT support and `sched_ext_ops.sub_cid_sched_updated()`):
 `2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64` (tag `next-20261016`).
 Validated by `scripts/kernel_source_gate.py`; no private patches.
+
+## Cluster rebuild after the control plane failed (2026-10-20)
+
+The control-plane VM stopped answering during a network investigation. A graceful
+ACPI reboot succeeded at the guest level (DHCP lease, DNS resumed) but the API,
+etcd and SSH never returned. Deleting and recreating the machine did not help:
+the provider generated the cloud-init seed before the bootstrap secret existed,
+and the replacement booted as a plain node.
+
+The rebuild that worked:
+
+1. `make cluster-down`, then stop the hypervisor agent;
+2. kill leftover `cloud-hypervisor` and `passt` processes;
+3. clear the host-agent inventory (`vms`, `network_resources`,
+   `published_ports`) and the per-VM artifacts;
+4. restart `k8netd` (stale `passt` processes were holding ports 20000-20005);
+5. `make cluster-up`, `make addons-up`, `make kubeconfig`.
+
+The provider then allocated port 20009 and the control plane bootstrapped
+normally. All three nodes, both observers and the research labels are restored.
+
+**Image caveat.** The rebuilt cluster runs
+`/host-state/images/k8labs-base.qcow2`. The custom-kernel image is not staged
+until the lab HSM signs its UKI, so `capi/cluster.yaml` keeps the custom-image
+path as the contract while any machine replacement must wait for that image to
+exist. The frozen pilot quotas and all campaign data live on the host and were
+unaffected.
