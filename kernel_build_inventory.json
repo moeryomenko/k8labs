@@ -8,27 +8,27 @@
   "runtime_rpms": [
     {
       "id": "kernel-core",
-      "path": "build/firmware/rpms/kernel-core.rpm",
-      "sha256": "cd318c56f5107a5d852515a21eea7436afdad339c37ec6b366007f4740bebd01",
-      "size_bytes": 22322553
+      "path": "artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44/kernel-core-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.x86_64.rpm",
+      "sha256": "264afcd86da7140dec7faca7824e657f0753e4d07402366ba742e4585e41a08d",
+      "size_bytes": 22315965
     },
     {
       "id": "kernel-modules",
-      "path": "build/firmware/rpms/kernel-modules.rpm",
-      "sha256": "c43f8ed9f7fa5466af463c480fbbe10ad6dddd4ed4ad85f07b2c9fca8d948700",
-      "size_bytes": 86430237
+      "path": "artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44/kernel-modules-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.x86_64.rpm",
+      "sha256": "d327c87529cdb2267f8ec3bbe809fe599851affe8d745afaa523cb5b9c3143b2",
+      "size_bytes": 74885909
     },
     {
       "id": "kernel-modules-core",
-      "path": "build/firmware/rpms/kernel-modules-core.rpm",
-      "sha256": "db886f9cfd0e844950242528e262f28d814ae677593f2e8ca90f46201c41e7a6",
-      "size_bytes": 56780633
+      "path": "artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44/kernel-modules-core-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.x86_64.rpm",
+      "sha256": "16a6143be035ed25ea7eeaa775acdc7bf5023b9c70f8c0e9acfd2bbee760bed4",
+      "size_bytes": 46271773
     },
     {
       "id": "kernel-modules-extra",
-      "path": "build/firmware/rpms/kernel-modules-extra.rpm",
-      "sha256": "722df6621c73e7b25157ffe2edf8f1c563923cb474e150ade4d62c9c72f2ebdf",
-      "size_bytes": 3278209
+      "path": "artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44/kernel-modules-extra-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.x86_64.rpm",
+      "sha256": "7d37dd00bd0a3d87ceb612a1f85c57d042612f083c841f696821dfe7596c6eee",
+      "size_bytes": 2830193
     }
   ],
   "non_lfs_artifacts": [
@@ -55,7 +55,8 @@
       "CONFIG_DEBUG_INFO_NONE": "not set",
       "CONFIG_CFS_BANDWIDTH": "y",
       "CONFIG_EFI_STUB": "y",
-      "CONFIG_MODULE_SIG": "y"
+      "CONFIG_MODULE_SIG": "y",
+      "CONFIG_MODULE_SIG_KEY": "certs/k8labs-module-signing.pem"
     },
     "vmlinux_btf_sections": [
       ".BTF",
@@ -64,10 +65,20 @@
     "note": "Verified by extracting kernel-core and running extract-vmlinux + readelf on the built image."
   },
   "built_artifacts": {
-    "build_dir": "/home/eryoma/kernel-campaign/out/rpms",
+    "build_dir": "/home/eryoma/kernel-campaign/out/rpms-fix-a",
     "builder": "podman + mock, Fedora 44 (digest-pinned), rpmbuild opts from kernel_build_lock.yaml",
     "srpm": "kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.src.rpm",
-    "srpm_sha256": "1fb5c09b634250e349a780af5b3933f44f9f0e16090c0dd623c0a0033aa99cff",
-    "runtime_rpms_built": true
+    "srpm_sha256": "89714c11f65492c86c76d41390c02f44f459d829b8c273e9d7440a6183769c9a",
+    "runtime_rpms_built": true,
+    "reproducibility": {
+      "builds_compared": 2,
+      "identical": [
+        "kernel-modules",
+        "kernel-modules-core",
+        "kernel-modules-extra"
+      ],
+      "kernel_core_variance": "identical size; the only differing bytes are inside the appended PKCS#7 signature, whose signing time is per build; System.map, config, modules.builtin and symvers.xz are identical",
+      "release_string": "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.x86_64"
+    }
   }
 }

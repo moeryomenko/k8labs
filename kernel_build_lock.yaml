@@ -88,11 +88,11 @@ reproducible_build:
   kbuild_build_user: k8labs
   kbuild_build_host: k8labs-build
   tar_options: "--mtime=@1792368000 --owner=0 --group=0 --numeric-owner --sort=name"
-  srpm_sha256: "1fb5c09b634250e349a780af5b3933f44f9f0e16090c0dd623c0a0033aa99cff"
+  srpm_sha256: "89714c11f65492c86c76d41390c02f44f459d829b8c273e9d7440a6183769c9a"
   # The module-signing key is fixed through CONFIG_MODULE_SIG_KEY and shipped in
   # the source tree, so module packages and the embedded certificate are stable.
   # The key pair lives outside the repository (no private key material in Git);
   # the source package embeds it, so the SRPM hash commits to the key.
   module_signing_key: kernel-campaign/keys/k8labs-module-signing.pem
   module_signing_cert_sha256: "23e04b0d4c316e4cfacbec054a882071191f0f86a23bf11fc920aee682f88999"
-  remaining_variance: none-expected
+  remaining_variance: "kernel-core: PKCS#7 signature signing time only"
