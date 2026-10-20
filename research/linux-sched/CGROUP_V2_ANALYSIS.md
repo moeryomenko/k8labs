@@ -154,13 +154,27 @@ Measured before the change, at 100 rps with a 1 CPU limit:
 | 100m (weight 102) | 99 / 6379 (~1.5%) | 954 ms |
 | 1 CPU (weight 1024) | 0 / 6249 | 31.9 ms |
 
-At a 500m request the single 500 rps probe reported p99 13.26 ms, but repeated
+At a 500m request a single 500 rps probe reported p99 13.26 ms, but repeated
 probes are not stable: 400 rps reported 1660 ms and 300 rps 797 ms for the same
-manifest and limit. A latency tail of that size cannot be attributed to the
-scheduler, so `http` and `mixed` stay uncalibrated until the instability is
-explained. The likely cause remains occasional retransmission on the lab network;
-it needs a dedicated investigation (client stat counter, observer CPU headroom,
-Cilium datapath) rather than a protocol tweak.
+manifest and limit. A controlled study at 400 rps, 1 CPU limit and no quota
+isolated the cause:
+
+| Run | p50 | p90 | p99 | retransmits load | retransmits server | CPU throttled (load/server) |
+|---|---|---|---|---|---|---|
+| 1 | 1.1 | 670 | 2700 | 0 | 118 | 0 / 0 |
+| 2 | 1.0 | 2.2 | 279 | 42 | 296 | 0 / 0 |
+| 3 | 1.1 | 1.8 | 12 | 0 | 90 | 0 / 0 |
+
+Neither pod hit its CPU quota, so this is not quota or CPU starvation. The tail
+tracks **server-side retransmissions**: nginx retransmits 90-296 segments while
+the client retransmits few or none. Cilium reports no TCP drops (only
+"Unsupported L3 protocol"), and raising the load generator from 100m/1 CPU to
+500m/2 CPU did not reduce the retransmissions. The loss is therefore below
+Cilium — the virtual NIC, bridge or qdisc on the lab host — and confirming it
+needs host-level counters the observer cannot read (`hostNetwork: false`).
+
+Until that is fixed, `http` and `mixed` stay uncalibrated rather than frozen on a
+meaningless rate.
 
 Frozen quotas under the 500m request:
 
