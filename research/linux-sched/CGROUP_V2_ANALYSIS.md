@@ -140,6 +140,36 @@ Still blocked:
   100%, so the 90% healthy cap rejects it. Decide whether the control is exempt
   from the cap or the cap is relaxed for it.
 
+### The request/weight trade-off (measured)
+
+Sub-CPU quotas require the request to be at or below the quota, because Kubernetes
+rejects `requests > limits`. A low request also lowers the cgroup CPU weight, and
+on a shared node that shows up as a latency tail:
+
+| nginx request | Limit | Retransmits / segments | Max latency |
+|---|---|---|---|
+| 100m (weight 102) | 1 CPU | 99 / 6379 (~1.5%) | 954 ms |
+| 1 CPU (weight 1024) | 1 CPU | 0 / 6249 | 31.9 ms |
+
+The tail is TCP retransmission after ACK delays on a starved server, not quota.
+It matters because p99 latency is the primary metric for `http` and `mixed`: a
+1% retransmit tail dominates it and would be read as scheduler behaviour.
+
+So the campaign must choose one of:
+
+1. **High request (1 CPU)**: clean latency and quotas at or above one CPU. Light
+   workloads may not reach 10% throttling at a healthy offered rate, so their
+   quota arm may be untestable.
+2. **Low request (100m)**: sub-CPU quotas are possible, but latency workloads
+   carry a retransmit tail that must be handled (for example by excluding
+   retransmitted requests from p99, which changes the metric definition).
+3. **Run the workload outside Kubernetes** with an explicit high `cpu.weight`
+   and a variable `cpu.max`, decoupling weight from quota. That is a harness
+   change, not a manifest tweak.
+
+`ffmpeg` and `postgres` are throughput/CPU workloads and are unaffected: their
+frozen quotas came from the 100m-request manifests without a latency tail.
+
 ## 7. Reproduction
 
 ```sh
