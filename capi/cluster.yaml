@@ -84,8 +84,11 @@ spec:
   template:
     spec:
       images:
+        # The custom-kernel image is not staged until the lab HSM signs it;
+        # a rebuild must therefore use the base image. Switch this back to
+        # /host-state/images/k8labs-custom-kernel.qcow2 once that image exists.
         - version: v1.37.0
-          path: /host-state/images/k8labs-custom-kernel.qcow2
+          path: /host-state/images/k8labs-base.qcow2
       network:
         cidr: 192.168.124.0/24
         gateway: 192.168.124.1
