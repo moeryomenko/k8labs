@@ -20,8 +20,9 @@ set -eux
 KERNEL_VERSION="${KERNEL_VERSION:?}"
 K8LABS_UKI_CMDLINE="${K8LABS_UKI_CMDLINE:-}"
 K8LABS_SB_KEY="${K8LABS_SB_KEY:-}"
-K8LABS_SB_CERT="${K8LABS_SB_CERT:-}"
-K8LABS_UKI_SIGNING_TOOL="${K8LABS_UKI_SIGNING_TOOL:-systemd-sbsign}"
+K8LABS_PKCS11_MODULE="${K8LABS_PKCS11_MODULE:-/usr/lib64/pkcs11/libsofthsm2.so}"
+K8LABS_UKI_SIGNING_TOOL="${K8LABS_UKI_SIGNING_TOOL:-sbsign}"
+SIGNING_CERT="/root/uki-material/cert.pem"
 
 ESP_MOUNT="/boot/efi"
 UKI_DIR="${ESP_MOUNT}/EFI/BOOT"
@@ -33,8 +34,25 @@ fail() {
 }
 
 [ -n "${K8LABS_SB_KEY}" ] || fail "K8LABS_SB_KEY is required: the image must be signed by the lab key"
-[ -n "${K8LABS_SB_CERT}" ] || fail "K8LABS_SB_CERT is required: sbverify needs the matching certificate"
-[ -f "${K8LABS_SB_CERT}" ] || fail "signing certificate not found: ${K8LABS_SB_CERT}"
+[ -f "${SIGNING_CERT}" ] || fail "signing certificate not found: ${SIGNING_CERT}"
+
+# A pkcs11: URI names a key inside a token; a plain string names an uploaded
+# key file. Both end up as --secureboot-private-key, but only the token needs
+# the OpenSSL PKCS#11 engine and a copied token store.
+SIGNING_MODE="file"
+case "${K8LABS_SB_KEY}" in
+    pkcs11:*)
+        [ -d /root/uki-material/tokens ] || fail "PKCS#11 key requested but no token store was uploaded"
+        mkdir -p /var/lib/softhsm/tokens
+        cp -a /root/uki-material/tokens/. /var/lib/softhsm/tokens/
+        [ -f "${K8LABS_PKCS11_MODULE}" ] || fail "PKCS#11 module not found: ${K8LABS_PKCS11_MODULE}"
+        export PKCS11_MODULE_PATH="${K8LABS_PKCS11_MODULE}"
+        SIGNING_MODE="pkcs11"
+        ;;
+    *)
+        [ -f /root/uki-material/key.pem ] || fail "signing key not found: /root/uki-material/key.pem"
+        ;;
+esac
 command -v ukify >/dev/null 2>&1 || fail "ukify is required to build the UKI"
 command -v sbverify >/dev/null 2>&1 || fail "sbverify is required to verify the signed UKI"
 
@@ -90,22 +108,32 @@ fi
 
 mkdir -p "${UKI_DIR}"
 
+set --
+[ "${SIGNING_MODE}" = "pkcs11" ] && set -- --signing-engine pkcs11
+
+if [ "${SIGNING_MODE}" = "pkcs11" ]; then
+    SIGNING_KEY="${K8LABS_SB_KEY}"
+else
+    SIGNING_KEY=/root/uki-material/key.pem
+fi
+
 ukify build \
     --linux "${KERNEL_IMAGE}" \
     --initrd "${INITRAMFS}" \
     --cmdline "${K8LABS_UKI_CMDLINE}" \
     --uname "${KERNEL_RELEASE}" \
     --signtool "${K8LABS_UKI_SIGNING_TOOL}" \
-    --secureboot-private-key "${K8LABS_SB_KEY}" \
-    --secureboot-certificate "${K8LABS_SB_CERT}" \
+    "$@" \
+    --secureboot-private-key "${SIGNING_KEY}" \
+    --secureboot-certificate "${SIGNING_CERT}" \
     --output "${UKI_PATH}"
 
 [ -s "${UKI_PATH}" ] || fail "ukify produced no output at ${UKI_PATH}"
 
 # Never ship a UKI the firmware would reject: verify the signature with the
 # same certificate that is enrolled in the firmware's db.
-sbverify --cert "${K8LABS_SB_CERT}" "${UKI_PATH}" \
-    || fail "the UKI signature does not verify against ${K8LABS_SB_CERT}"
+sbverify --cert "${SIGNING_CERT}" "${UKI_PATH}" \
+    || fail "the UKI signature does not verify against ${SIGNING_CERT}"
 
 sync
 echo "==> signed UKI installed at ${UKI_PATH}"

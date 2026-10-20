@@ -156,23 +156,20 @@ build {
   # Build the signed Unified Kernel Image and install it as the UEFI fallback
   # boot entry. The firmware trusts the lab certificate and boots only signed
   # images, so this step fails closed when the signing key is unavailable.
-  # The signing key never lives in the repository; it is uploaded for the bake
-  # and used only by 04-uki.sh.
+  # Signing material never lives in the repository. The directory carries
+  # cert.pem, an optional key.pem, and an optional tokens/ store for the
+  # PKCS#11 simulation; 04-uki.sh picks what the key specification needs.
   provisioner "file" {
-    source      = var.uki_signing_key
-    destination = "/root/uki-signing.key"
-  }
-  provisioner "file" {
-    source      = var.uki_signing_cert
-    destination = "/root/uki-signing.crt"
+    source      = var.uki_material_dir
+    destination = "/root/uki-material"
   }
 
   provisioner "shell" {
     environment_vars = [
       "KERNEL_VERSION=${var.kernel_version}",
       "K8LABS_UKI_CMDLINE=${var.uki_cmdline}",
-      "K8LABS_SB_KEY=/root/uki-signing.key",
-      "K8LABS_SB_CERT=/root/uki-signing.crt",
+      "K8LABS_SB_KEY=${var.uki_signing_key}",
+      "K8LABS_PKCS11_MODULE=${var.uki_pkcs11_module}",
       "K8LABS_UKI_SIGNING_TOOL=${var.uki_signing_tool}",
     ]
     scripts = [

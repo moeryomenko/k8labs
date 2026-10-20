@@ -228,6 +228,18 @@ variable "uki_cmdline" {
   default     = ""
 }
 
+variable "uki_material_dir" {
+  description = "Directory uploaded into the guest: cert.pem, optional key.pem, optional tokens/"
+  type        = string
+  default     = "../build/uki-material"
+}
+
+variable "uki_pkcs11_module" {
+  description = "PKCS#11 module the signing engine loads (used when the key is a pkcs11: URI)"
+  type        = string
+  default     = "/usr/lib64/pkcs11/libsofthsm2.so"
+}
+
 variable "uki_signing_key" {
   description = "PKCS#11 URI or path of the lab Secure Boot signing key"
   type        = string

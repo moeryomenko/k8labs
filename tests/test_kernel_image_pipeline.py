@@ -34,7 +34,8 @@ def test_uki_step_fails_closed_without_a_signing_key() -> None:
     script = _read(PACKER / "scripts" / "04-uki.sh")
     assert "K8LABS_SB_KEY" in script
     assert 'fail "K8LABS_SB_KEY is required' in script
-    assert 'fail "K8LABS_SB_CERT is required' in script
+    assert 'fail "signing certificate not found' in script
+    assert 'fail "signing key not found' in script
 
 
 def test_uki_step_installs_the_firmware_fallback_entry() -> None:
@@ -53,7 +54,7 @@ def test_uki_step_verifies_the_signature_before_shipping() -> None:
 def test_uki_step_is_wired_into_the_build() -> None:
     base = _read(PACKER / "base.pkr.hcl")
     assert "scripts/04-uki.sh" in base
-    assert 'destination = "/root/uki-signing.key"' in base
+    assert 'destination = "/root/uki-material"' in base
 
 
 def test_uki_tooling_is_installed_in_the_image() -> None:
@@ -93,3 +94,21 @@ def test_uki_reuses_the_installed_kernel_cmdline() -> None:
     assert "BLS_ENTRY" in script
     assert "loader/entries/*-" in script
     assert "sed -n 's/^options" in script
+
+
+def test_uki_supports_pkcs11_uris() -> None:
+    script = _read(PACKER / "scripts" / "04-uki.sh")
+    assert "pkcs11:*" in script
+    assert "--signing-engine pkcs11" in script
+    assert "PKCS11_MODULE_PATH" in script
+    assert "uki-material/tokens" in script
+    variables = _read(PACKER / "variables.pkr.hcl")
+    assert "uki_pkcs11_module" in variables
+    assert "/usr/lib64/pkcs11/libsofthsm2.so" in variables
+
+
+def test_uki_step_uploads_material_directory_not_a_bare_key() -> None:
+    base = _read(PACKER / "base.pkr.hcl")
+    assert "var.uki_material_dir" in base
+    script = _read(PACKER / "scripts" / "04-uki.sh")
+    assert "/root/uki-material/cert.pem" in script
