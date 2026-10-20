@@ -236,6 +236,16 @@ linux-sched-otel-validate: ## Validate the OTel manifests and configs offline
 
 
 # ---- Factorial cgroup-v2 quota campaign (versioned) ----
+.PHONY: linux-sched-dry-run
+linux-sched-dry-run: ## Dry-run the factorial analysis on synthetic data (no cluster needed)
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/dry_run.py
+
+.PHONY: linux-sched-freeze-quota
+linux-sched-freeze-quota: ## Freeze per-workload CPU quotas from EEVDF pilot calibration
+	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/pilot/calibration.csv" ]; then echo "No pilot calibration.csv under $(LINUX_SCHED_DATA_ROOT)/pilot; run the EEVDF calibration first."; exit 1; fi
+	python3 $(LINUX_SCHED_EXPERIMENTS_DIR)/freeze_quota.py --calibrations $(LINUX_SCHED_DATA_ROOT)/pilot/calibration.csv --output $(LINUX_SCHED_DATA_ROOT)/frozen-quotas.yaml
+	@echo "  Frozen quotas: $(LINUX_SCHED_DATA_ROOT)/frozen-quotas.yaml"
+
 
 .PHONY: linux-sched-factorial-sample-size
 linux-sched-factorial-sample-size: ## Freeze confirmatory block counts for the factorial quota campaign
