@@ -101,7 +101,7 @@ LINUX_SCHED_CLEANUP_ALLOWANCE_S="${LINUX_SCHED_CLEANUP_ALLOWANCE_S:-120}"
 
 # Names the measurement protocol a block belongs to, so data from an earlier
 # window length is never pooled with data from this one.
-LINUX_SCHED_PROTOCOL_VERSION="${LINUX_SCHED_PROTOCOL_VERSION:-v2}"
+LINUX_SCHED_PROTOCOL_VERSION="${LINUX_SCHED_PROTOCOL_VERSION:-v3}"
 
 OBSERVER_NAMESPACE="${OBSERVER_NAMESPACE:-linux-sched}"
 

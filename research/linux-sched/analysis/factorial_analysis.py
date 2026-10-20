@@ -53,10 +53,33 @@ BOOTSTRAP_SEED = 20261015
 POLICIES = ("unlimited", "limited")
 PERFORMANCE_POLICIES = ("unlimited", "limited")
 
-# Six arms, five workloads, two contrast families:
-#   5 non-control schedulers x 5 workloads = 25 interaction contrasts
-#   5 non-control schedulers x 5 workloads x 2 throttle outcomes = 50
-PRIMARY_CONTRASTS = 75
+# cgroup v2 cpu.max is enforced by the fair class; a sched_ext scheduler only
+# honours it through ops.cgroup_set_bandwidth. At the pinned scx commit only
+# scx_lavd and scx_mavd implement that callback, and both need
+# --enable-cpu-bw. The other arms cannot show a quota interaction, so the
+# confirmatory protocol splits into three pre-registered families:
+#
+#   scheduler_unlimited   5 non-control schedulers x 5 workloads = 25
+#   quota_interaction     2 quota-capable schedulers x 5 workloads = 10
+#   throttling            2 quota-capable schedulers x 5 workloads x 2 outcomes = 20
+QUOTA_CAPABLE_SCHEDULERS = ("scx_lavd", "scx_mavd")
+FAMILY_SCHEDULER_UNLIMITED = "scheduler_unlimited"
+FAMILY_QUOTA_INTERACTION = "quota_interaction"
+FAMILY_THROTTLING = "throttling"
+FAMILY_SIZES = {
+    FAMILY_SCHEDULER_UNLIMITED: 25,
+    FAMILY_QUOTA_INTERACTION: 10,
+    FAMILY_THROTTLING: 20,
+}
+PRIMARY_CONTRASTS = sum(FAMILY_SIZES.values())
+
+
+def honours_quota(scheduler: str) -> bool:
+    """True when the scheduler can enforce cpu.max at all."""
+    name = scheduler.strip().lower()
+    if name in QUOTA_CAPABLE_SCHEDULERS:
+        return True
+    return name in {s.removeprefix("scx_") for s in QUOTA_CAPABLE_SCHEDULERS}
 
 MIN_BLOCKS_FOR_VERDICT = 3
 DESCRIPTIVE_WORKLOADS: tuple[str, ...] = ()
@@ -117,6 +140,7 @@ class Verdict:
     descriptive: bool = False
     contrast: str = "performance"
     policy: str | None = None
+    family: str = ""
 
 
 @dataclass
@@ -285,11 +309,29 @@ def holm_decisions(comparisons, alpha=DEFAULT_ALPHA):
     ]
     if not tested:
         return decisions
-    dfs = [comparisons[i]["df"] for i in tested]
-    abs_t = [abs(comparisons[i]["t_two"]) for i in tested]
-    tost = [min(comparisons[i]["t_lower"], -comparisons[i]["t_upper"]) for i in tested]
-    rejects_no_effect = _holm_step_down(abs_t, dfs, alpha, 2, family_size=PRIMARY_CONTRASTS)
-    rejects_tost = _holm_step_down(tost, dfs, alpha, 1, family_size=PRIMARY_CONTRASTS)
+
+    # Holm within each pre-registered family. The family size is the planned
+    # size, not the number of contrasts that happened to produce data: a
+    # missing contrast must not make the others easier to reject.
+    rejects_no_effect = [False] * len(tested)
+    rejects_tost = [False] * len(tested)
+    families: dict[str, list[int]] = {}
+    for position, index in enumerate(tested):
+        families.setdefault(comparisons[index].get("family", ""), []).append(position)
+
+    for family, positions in families.items():
+        dfs = [comparisons[tested[p]]["df"] for p in positions]
+        abs_t = [abs(comparisons[tested[p]]["t_two"]) for p in positions]
+        tost = [
+            min(comparisons[tested[p]]["t_lower"], -comparisons[tested[p]]["t_upper"])
+            for p in positions
+        ]
+        size = FAMILY_SIZES.get(family, len(positions))
+        no_effect = _holm_step_down(abs_t, dfs, alpha, 2, family_size=size)
+        equivalent = _holm_step_down(tost, dfs, alpha, 1, family_size=size)
+        for k, position in enumerate(positions):
+            rejects_no_effect[position] = no_effect[k]
+            rejects_tost[position] = equivalent[k]
     for position, index in enumerate(tested):
         c = comparisons[index]
         band = math.log(1.0 + c.get("effect", PRACTICAL_EFFECT))
@@ -364,8 +406,14 @@ def analyse(observations, required_blocks=None, alpha=DEFAULT_ALPHA,
             if scheduler == CONTROL_SCHEDULER:
                 continue
 
-            # Throttling: within limited policy only.
+            # Throttling: only arms that can enforce cpu.max can show an effect.
             if is_throttle:
+                if not honours_quota(scheduler):
+                    result.skipped.append({
+                        "workload": workload, "metric": metric, "scheduler": scheduler,
+                        "reason": "scheduler cannot honour cpu.max",
+                    })
+                    continue
                 target_policy = "limited" if "limited" in policies else (sorted(policies, key=lambda x: (x is None, x))[0] if policies else None)
                 ctrl_vals = control.get(target_policy, {})
                 arm_vals = by_policy.get(target_policy, {})
@@ -382,11 +430,57 @@ def analyse(observations, required_blocks=None, alpha=DEFAULT_ALPHA,
                                  required, (workload, metric), shared, bootstrap_resamples,
                                  bootstrap_seed, effect=practical_effect(metric),
                                  contrast="throttling", policy=target_policy,
-                                 descriptive=is_descriptive(workload))
+                                 descriptive=is_descriptive(workload),
+                                 family=FAMILY_THROTTLING)
                 continue
 
-            # Performance: interaction if both policies present, else single-policy.
-            if len(policies) >= 2 and set(PERFORMANCE_POLICIES).issubset(policies) \
+            # Scheduler comparison under no quota: every arm, including the ones
+            # that cannot honour cpu.max.
+            if "unlimited" in policies and control.get("unlimited") and by_policy.get("unlimited"):
+                shared = sorted(set(control["unlimited"]) & set(by_policy["unlimited"]))
+                if len(shared) < MIN_BLOCKS_FOR_VERDICT:
+                    result.skipped.append({
+                        "workload": workload, "metric": metric, "scheduler": scheduler,
+                        "reason": f"fewer than {MIN_BLOCKS_FOR_VERDICT} paired blocks",
+                        "shared_blocks": len(shared),
+                    })
+                else:
+                    logs = [
+                        _oriented_log_ratio(
+                            control["unlimited"][b], by_policy["unlimited"][b],
+                            lower_is_better=lower_is_better,
+                        )
+                        for b in shared
+                    ]
+                    _append_contrast(result, stats, boot, workload, metric, scheduler, logs,
+                                     required, (workload, metric), shared, bootstrap_resamples,
+                                     bootstrap_seed, effect=practical_effect(metric),
+                                     contrast="performance", policy="unlimited",
+                                     descriptive=is_descriptive(workload),
+                                     family=FAMILY_SCHEDULER_UNLIMITED)
+            elif len(policies) <= 1:
+                # Legacy or single-policy data: one scheduler contrast per policy.
+                for policy, arm_vals in sorted(by_policy.items(), key=lambda kv: (kv[0] is None, kv[0])):
+                    ctrl_vals = control.get(policy, {})
+                    shared = sorted(set(ctrl_vals) & set(arm_vals))
+                    if len(shared) < MIN_BLOCKS_FOR_VERDICT:
+                        result.skipped.append({
+                            "workload": workload, "metric": metric, "scheduler": scheduler,
+                            "reason": f"fewer than {MIN_BLOCKS_FOR_VERDICT} paired blocks",
+                            "shared_blocks": len(shared),
+                        })
+                        continue
+                    logs = [_oriented_log_ratio(ctrl_vals[b], arm_vals[b], lower_is_better=lower_is_better) for b in shared]
+                    _append_contrast(result, stats, boot, workload, metric, scheduler, logs,
+                                     required, (workload, metric), shared, bootstrap_resamples,
+                                     bootstrap_seed, effect=practical_effect(metric),
+                                     contrast="performance", policy=policy,
+                                     descriptive=is_descriptive(workload),
+                                     family=FAMILY_SCHEDULER_UNLIMITED)
+
+            # Quota interaction: only schedulers that implement bandwidth.
+            if honours_quota(scheduler) and len(policies) >= 2 \
+                    and set(PERFORMANCE_POLICIES).issubset(policies) \
                     and set(PERFORMANCE_POLICIES).issubset(control.keys()) \
                     and set(PERFORMANCE_POLICIES).issubset(by_policy.keys()):
                 blocks = _interaction_blocks(control, by_policy)
@@ -414,25 +508,8 @@ def analyse(observations, required_blocks=None, alpha=DEFAULT_ALPHA,
                                  required, (workload, metric), blocks, bootstrap_resamples,
                                  bootstrap_seed, effect=practical_effect(metric),
                                  contrast="performance_interaction", policy=None,
-                                 descriptive=is_descriptive(workload))
-            else:
-                # Single policy (or no policy): fall back to per-policy verdicts.
-                for policy, arm_vals in sorted(by_policy.items(), key=lambda kv: (kv[0] is None, kv[0])):
-                    ctrl_vals = control.get(policy, {})
-                    shared = sorted(set(ctrl_vals) & set(arm_vals))
-                    if len(shared) < MIN_BLOCKS_FOR_VERDICT:
-                        result.skipped.append({
-                            "workload": workload, "metric": metric, "scheduler": scheduler,
-                            "reason": f"fewer than {MIN_BLOCKS_FOR_VERDICT} paired blocks",
-                            "shared_blocks": len(shared),
-                        })
-                        continue
-                    logs = [_oriented_log_ratio(ctrl_vals[b], arm_vals[b], lower_is_better=lower_is_better) for b in shared]
-                    _append_contrast(result, stats, boot, workload, metric, scheduler, logs,
-                                     required, (workload, metric), shared, bootstrap_resamples,
-                                     bootstrap_seed, effect=practical_effect(metric),
-                                     contrast="performance", policy=policy,
-                                     descriptive=is_descriptive(workload))
+                                 descriptive=is_descriptive(workload),
+                                 family=FAMILY_QUOTA_INTERACTION)
 
     decisions = holm_decisions(stats, alpha=alpha)
     for entry, (boot_low, boot_high), decision in zip(stats, boot, decisions):
@@ -454,6 +531,7 @@ def analyse(observations, required_blocks=None, alpha=DEFAULT_ALPHA,
                 descriptive=entry["descriptive"],
                 contrast=entry["contrast"],
                 policy=entry["policy"],
+                family=entry.get("family", ""),
             )
         )
     return result
@@ -461,7 +539,7 @@ def analyse(observations, required_blocks=None, alpha=DEFAULT_ALPHA,
 
 def _append_contrast(result, stats, boot, workload, metric, scheduler, logs, required,
                      req_key, blocks, bootstrap_resamples, bootstrap_seed, effect,
-                     contrast, policy, descriptive):
+                     contrast, policy, descriptive, family=""):
     n = len(logs)
     wanted = required.get(req_key)
     if wanted is not None and n < wanted:
@@ -485,6 +563,7 @@ def _append_contrast(result, stats, boot, workload, metric, scheduler, logs, req
                 descriptive=descriptive,
                 contrast=contrast,
                 policy=policy,
+                family=family,
             )
         )
         return
@@ -530,6 +609,7 @@ def _append_contrast(result, stats, boot, workload, metric, scheduler, logs, req
         "incomplete": False,
         "contrast": contrast,
         "policy": policy,
+        "family": family,
     })
     boot.append((
         math.exp(means[int(0.025 * (len(means) - 1))]),
@@ -543,7 +623,7 @@ def summary_csv(result: AnalysisResult) -> str:
     writer.writerow([
         "workload", "metric", "scheduler", "blocks", "geometric_mean_ratio",
         "ci_low", "ci_high", "bootstrap_low", "bootstrap_high", "decision",
-        "effect", "descriptive", "contrast", "policy",
+        "effect", "descriptive", "contrast", "policy", "family",
     ])
     for v in result.verdicts:
         writer.writerow([
@@ -551,7 +631,7 @@ def summary_csv(result: AnalysisResult) -> str:
             f"{v.geometric_mean_ratio:.6f}", f"{v.ci_low:.6f}", f"{v.ci_high:.6f}",
             f"{v.bootstrap_low:.6f}", f"{v.bootstrap_high:.6f}", v.decision,
             f"{v.effect:.2f}", "yes" if v.descriptive else "no", v.contrast,
-            "" if v.policy is None else v.policy,
+            "" if v.policy is None else v.policy, v.family,
         ])
     return buffer.getvalue()
 
@@ -566,8 +646,14 @@ def summary_json(result: AnalysisResult) -> str:
         "descriptive_workloads": list(DESCRIPTIVE_WORKLOADS),
         "min_blocks_for_verdict": MIN_BLOCKS_FOR_VERDICT,
         "primary_contrasts": PRIMARY_CONTRASTS,
+        "families": {
+            FAMILY_SCHEDULER_UNLIMITED: FAMILY_SIZES[FAMILY_SCHEDULER_UNLIMITED],
+            FAMILY_QUOTA_INTERACTION: FAMILY_SIZES[FAMILY_QUOTA_INTERACTION],
+            FAMILY_THROTTLING: FAMILY_SIZES[FAMILY_THROTTLING],
+        },
+        "quota_capable_schedulers": list(QUOTA_CAPABLE_SCHEDULERS),
         "policies": list(POLICIES),
-        "multiplicity": "holm step-down over the predeclared family",
+        "multiplicity": "holm step-down within each pre-registered family",
         "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
         "bootstrap_seed": BOOTSTRAP_SEED,
         "power": DEFAULT_POWER,
@@ -588,6 +674,7 @@ def summary_json(result: AnalysisResult) -> str:
                 "descriptive": v.descriptive,
                 "contrast": v.contrast,
                 "policy": v.policy,
+                "family": v.family,
             }
             for v in result.verdicts
         ],

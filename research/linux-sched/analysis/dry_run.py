@@ -125,8 +125,11 @@ def check() -> list[str]:
             f"{len(false_positives)} effect verdicts: "
             f"{[(v.workload, v.scheduler) for v in false_positives[:3]]}"
         )
-    if null.skipped:
-        errors.append(f"null data skipped {len(null.skipped)} contrast(s)")
+    unexpected = [
+        s for s in null.skipped if "cannot honour cpu.max" not in s.get("reason", "")
+    ]
+    if unexpected:
+        errors.append(f"null data skipped {len(unexpected)} unexpected contrast(s)")
 
     affected = analyse_rows(synthetic_rows(inject_defect=True))
     detected = effect_verdicts(affected)

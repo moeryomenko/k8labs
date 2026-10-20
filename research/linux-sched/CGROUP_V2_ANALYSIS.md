@@ -65,10 +65,13 @@ effect.
 1. `append_block_row` writes `block_id,scheduler,workload,metric,value,direction`
    — no `policy` column. The factorial analyser reads `policy` and treats a
    missing value as `None`, so no interaction contrast can be formed from data
-   the runner currently produces.
+   the runner currently produces. **Still open**: the runner must write the
+   policy and run both policies per block before confirmatory data is valid.
 2. `activate_arm` started `scx_lavd` and `scx_mavd` without `--enable-cpu-bw`,
-   so even those two would have ignored the quota. Fixed: the flag is now passed
-   when `kernel_cgroup_bw_supported` finds the callback in the node's BTF.
+   so even those two would have ignored the quota. **Fixed**: the flag is now
+   passed when `kernel_cgroup_bw_supported` finds the callback in the node's BTF.
+   The analyser now records the split families and the runner test suite asserts
+   the flag is capability-gated.
 3. The quota itself is rendered from a single `LINUX_SCHED_CPU_LIMIT`
    (default `500m`) in `capture/capture-block.sh`; nothing varies it per policy
    or per workload, and nothing reads the frozen quota manifest.
@@ -77,23 +80,26 @@ effect.
    cgroup support. The EEVDF pilot is unaffected: EEVDF enforces `cpu.max`
    through the fair class.
 
-## 5. Options
+## 5. Decision: split the family (adopted)
 
-**A. Split the family (recommended).** Keep the six-arm comparison under the
-unlimited policy (25 scheduler-vs-EEVDF contrasts, valid for every arm), and
-restrict the quota-interaction and throttling families to the arms that can
-honour `cpu.max` (EEVDF control, `scx_lavd`, `scx_mavd`): 10 interaction and 20
-throttling contrasts. Holm is applied within each pre-registered family.
+Protocol `v3` separates three pre-registered families instead of one 75-contrast
+global family:
 
-**B. Keep the six-by-two matrix and pre-register the expected nulls.** Honest but
-wasteful: 45 of 75 contrasts cannot reject anything, and the Holm family is
-diluted.
+| Family | Contrasts | Arms |
+|---|---|---|
+| `scheduler_unlimited` | 25 | all five non-control schedulers × 5 workloads, no quota |
+| `quota_interaction` | 10 | `scx_lavd`, `scx_mavd` × 5 workloads |
+| `throttling` | 20 | `scx_lavd`, `scx_mavd` × 5 workloads × 2 throttle outcomes |
 
-**C. Implement bandwidth in the other three schedulers.** Upstream work in
-sched_ext; out of scope for this series.
+Holm step-down runs inside each family against its **planned** size, so a missing
+contrast cannot make its siblings easier to reject. EEVDF remains the control in
+all three. The campaign writes to its own data tree,
+`build/research/linux-sched-cgroup-v2-quota`, so v3 pilot and confirmatory blocks
+never mix with the scheduler-only series.
 
-Changing the confirmatory family is a protocol decision, so it needs a versioned
-protocol update rather than an edit in place.
+The rejected alternatives were: keeping 6×2 with pre-registered nulls (45 of 75
+contrasts could never reject and Holm was diluted), and implementing bandwidth in
+the other three schedulers upstream (out of scope for this series).
 
 ## 6. Reproduction
 

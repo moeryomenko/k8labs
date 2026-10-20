@@ -32,6 +32,11 @@ LINUX_SCHED_TEST_DIR := $(LINUX_SCHED_DIR)tests
 # campaign and a 30-second one are different studies and must not share a root.
 LINUX_SCHED_DATA_DIR ?= linux-sched
 LINUX_SCHED_DATA_ROOT ?= $(if $(K8LABS_RESEARCH_DATA_ROOT),$(K8LABS_RESEARCH_DATA_ROOT)/$(LINUX_SCHED_DATA_DIR),$(PROJECT_ROOT)/build/research/$(LINUX_SCHED_DATA_DIR))
+# The factorial cgroup-v2 quota campaign is a separate protocol version and keeps
+# its own data tree so its pilot and confirmatory blocks never mix with the
+# scheduler-only series.
+LINUX_SCHED_QUOTA_DATA_DIR ?= linux-sched-cgroup-v2-quota
+LINUX_SCHED_QUOTA_DATA_ROOT ?= $(if $(K8LABS_RESEARCH_DATA_ROOT),$(K8LABS_RESEARCH_DATA_ROOT)/$(LINUX_SCHED_QUOTA_DATA_DIR),$(PROJECT_ROOT)/build/research/$(LINUX_SCHED_QUOTA_DATA_DIR))
 LINUX_SCHED_ANALYSIS_OUTPUT ?= $(LINUX_SCHED_DATA_ROOT)/analysis
 # Analysis and plots are built from confirmatory results only. Pilot and smoke
 # data must never reach a verdict, and after the phases were separated those live
@@ -236,21 +241,31 @@ linux-sched-otel-validate: ## Validate the OTel manifests and configs offline
 
 
 # ---- Factorial cgroup-v2 quota campaign (versioned) ----
+.PHONY: linux-sched-quota-pilot
+linux-sched-quota-pilot: ## EEVDF pilot into the quota campaign data tree (SCENARIO=<name>)
+	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name>" >&2; exit 1; fi
+	$(LINUX_SCHED_RUNNER) run --scenario $(SCENARIO) --mode pilot --configs-dir $(LINUX_SCHED_CONFIGS_DIR) --data-root $(LINUX_SCHED_QUOTA_DATA_ROOT)
+
+.PHONY: linux-sched-quota-experiment
+linux-sched-quota-experiment: ## Confirmatory blocks into the quota campaign data tree (SCENARIO=<name>)
+	@if [ -z "$(SCENARIO)" ]; then echo "ERROR: set SCENARIO=<name>" >&2; exit 1; fi
+	$(LINUX_SCHED_RUNNER) run --scenario $(SCENARIO) --mode confirmatory --configs-dir $(LINUX_SCHED_CONFIGS_DIR) --data-root $(LINUX_SCHED_QUOTA_DATA_ROOT)
+
 .PHONY: linux-sched-dry-run
 linux-sched-dry-run: ## Dry-run the factorial analysis on synthetic data (no cluster needed)
 	python3 $(LINUX_SCHED_ANALYSIS_DIR)/dry_run.py
 
 .PHONY: linux-sched-freeze-quota
 linux-sched-freeze-quota: ## Freeze per-workload CPU quotas from EEVDF pilot calibration
-	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/pilot/calibration.csv" ]; then echo "No pilot calibration.csv under $(LINUX_SCHED_DATA_ROOT)/pilot; run the EEVDF calibration first."; exit 1; fi
-	python3 $(LINUX_SCHED_EXPERIMENTS_DIR)/freeze_quota.py --calibrations $(LINUX_SCHED_DATA_ROOT)/pilot/calibration.csv --output $(LINUX_SCHED_DATA_ROOT)/frozen-quotas.yaml
-	@echo "  Frozen quotas: $(LINUX_SCHED_DATA_ROOT)/frozen-quotas.yaml"
+	@if [ ! -f "$(LINUX_SCHED_QUOTA_DATA_ROOT)/pilot/calibration.csv" ]; then echo "No pilot calibration.csv under $(LINUX_SCHED_QUOTA_DATA_ROOT)/pilot; run the EEVDF calibration first."; exit 1; fi
+	python3 $(LINUX_SCHED_EXPERIMENTS_DIR)/freeze_quota.py --calibrations $(LINUX_SCHED_QUOTA_DATA_ROOT)/pilot/calibration.csv --output $(LINUX_SCHED_QUOTA_DATA_ROOT)/frozen-quotas.yaml
+	@echo "  Frozen quotas: $(LINUX_SCHED_QUOTA_DATA_ROOT)/frozen-quotas.yaml"
 
 
 .PHONY: linux-sched-factorial-sample-size
 linux-sched-factorial-sample-size: ## Freeze confirmatory block counts for the factorial quota campaign
-	@if [ ! -f "$(LINUX_SCHED_DATA_ROOT)/pilot/blocks.csv" ]; then echo "No pilot blocks.csv under $(LINUX_SCHED_DATA_ROOT)/pilot; run the pilots first."; exit 1; fi
-	python3 $(LINUX_SCHED_ANALYSIS_DIR)/factorial_sample_size.py --pilot-blocks $(LINUX_SCHED_DATA_ROOT)/pilot/blocks.csv --output $(LINUX_SCHED_DATA_ROOT)/sample-size.json
+	@if [ ! -f "$(LINUX_SCHED_QUOTA_DATA_ROOT)/pilot/blocks.csv" ]; then echo "No pilot blocks.csv under $(LINUX_SCHED_QUOTA_DATA_ROOT)/pilot; run the pilots first."; exit 1; fi
+	python3 $(LINUX_SCHED_ANALYSIS_DIR)/factorial_sample_size.py --pilot-blocks $(LINUX_SCHED_QUOTA_DATA_ROOT)/pilot/blocks.csv --output $(LINUX_SCHED_QUOTA_DATA_ROOT)/sample-size.json
 
 .PHONY: linux-sched-factorial-analyze
 linux-sched-factorial-analyze: ## Analyze factorial quota campaign blocks
@@ -280,6 +295,6 @@ linux-sched-test: ## Run the linux-sched test suite (pytest + bats)
 
 .PHONY: linux-sched-clean
 linux-sched-clean: ## Remove linux-sched experiment data (host-owned data root)
-	@echo "Removing linux-sched data under $(LINUX_SCHED_DATA_ROOT)..."
-	@rm -rf "$(LINUX_SCHED_DATA_ROOT)"
+	@echo "Removing linux-sched data under $(LINUX_SCHED_QUOTA_DATA_ROOT)..."
+	@rm -rf "$(LINUX_SCHED_QUOTA_DATA_ROOT)"
 	@echo "Clean complete."

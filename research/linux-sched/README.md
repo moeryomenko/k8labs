@@ -132,12 +132,27 @@ hold a full-window recording; `GATES.md` records why, and the windows used.
 
 ## Factorial cgroup-v2 quota campaign (versioned)
 
-A separate, versioned analysis track for the six-arm factorial quota campaign.
-It does not alter the scheduler-only protocol above.
+A separate, versioned analysis track (protocol `v3`) for the six-arm factorial
+quota campaign. It does not alter the scheduler-only protocol above and writes to
+its own data tree, `build/research/linux-sched-cgroup-v2-quota`.
 
-- Analysis: `analysis/factorial_analysis.py` (interaction + throttling contrasts,
-  global Holm, 5 % performance / 10 % throttling margins).
+Only EEVDF, `scx_lavd` and `scx_mavd` can honour `cpu.max`; see
+`CGROUP_V2_ANALYSIS.md`. The confirmatory families are therefore:
+
+| Family | Contrasts | Arms |
+|---|---|---|
+| `scheduler_unlimited` | 25 | all five non-control schedulers, no quota |
+| `quota_interaction` | 10 | `scx_lavd`, `scx_mavd` |
+| `throttling` | 20 | `scx_lavd`, `scx_mavd` × 2 outcomes |
+
+Holm runs within each family (5 % performance / 10 % throttling margins).
+`scx_lavd` and `scx_mavd` are started with `--enable-cpu-bw`, but only when the
+node kernel exposes `ops.cgroup_set_bandwidth`.
+
+- Analysis: `analysis/factorial_analysis.py`.
 - Sample sizing: `analysis/factorial_sample_size.py` (90 % power, 12-block balance).
+- Quota freeze: `experiments/freeze_quota.py` (`make linux-sched-freeze-quota`).
+- Dry run: `analysis/dry_run.py` (`make linux-sched-dry-run`).
 
 ```bash
 make linux-sched-factorial-sample-size
