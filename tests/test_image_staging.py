@@ -66,7 +66,7 @@ def test_exact_hash_enforcement_detects_mismatch(tmp_path: Path, monkeypatch) ->
     assert "hash mismatch" in problems[0]
 
 
-def test_cluster_mapping_uses_custom_artifact_with_rollback_base() -> None:
+def test_cluster_mapping_uses_the_staged_comparison_image() -> None:
     docs = yaml.safe_load_all(
         (REPO_ROOT / "capi" / "cluster.yaml").read_text(encoding="utf-8")
     )
@@ -75,5 +75,7 @@ def test_cluster_mapping_uses_custom_artifact_with_rollback_base() -> None:
         if isinstance(doc, dict) and doc.get("kind") == "HypervisorClusterTemplate":
             for image in doc["spec"]["template"]["spec"]["images"]:
                 image_paths.append(image["path"])
-    assert image_paths == [host_agent.CUSTOM_KERNEL_IMAGE_REFERENCE]
+    # The comparison image carries both kernels and the first-boot selector;
+    # both worker MachineDeployments boot from this single staged artifact.
+    assert image_paths == [host_agent.BASE_IMAGE_REFERENCE]
     assert host_agent.BASE_IMAGE_REFERENCE != host_agent.CUSTOM_KERNEL_IMAGE_REFERENCE

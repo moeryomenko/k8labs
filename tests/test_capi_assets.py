@@ -16,11 +16,12 @@ cluster-manifest
     ``capi/cluster.yaml`` parses as YAML and contains exactly one Cluster
     object with concrete committed values (no ${VAR} markers): name k8labs,
     namespace default, ClusterClass hypervisor-cluster-template,
-    control-plane replicas 1, worker machine deployment md-0 of class
-    default-worker with replicas 2 -- deliberately one below the upstream
-    template default of 3 (cluster-api-hypervisor/templates/cluster-template.yaml
-    lines 81-85), because the research protocol uses exactly two workers and the
-    host could not reliably start four VMs at once.
+    control-plane replicas 1, and two worker MachineDeployments: md-0 of class
+    default-worker with replicas 1 (stock kernel) and md-custom of class
+    custom-worker with replicas 1 (comparison kernel). The total is two
+    workers, deliberately one below the upstream template default of 3, because
+    the comparison protocol uses exactly two and the host could not reliably
+    start four VMs at once.
 
 crs-selector-match
     Every ClusterResourceSet in ``capi/addons/`` carries a non-empty
@@ -149,7 +150,10 @@ EXPECTED_NAMESPACE = "default"
 EXPECTED_CLUSTERCLASS = "hypervisor-cluster-template"
 EXPECTED_CP_REPLICAS = 1
 EXPECTED_WORKER_CLASS = "default-worker"
-EXPECTED_WORKER_REPLICAS = 2
+EXPECTED_WORKER_REPLICAS = 1
+EXPECTED_CUSTOM_WORKER_CLASS = "custom-worker"
+EXPECTED_CUSTOM_WORKER_REPLICAS = 1
+EXPECTED_WORKER_TOTAL = 2
 
 # Directory each CRS maps to, keyed by the token that must appear in the
 # CRS metadata.name.
@@ -478,9 +482,14 @@ def test_cluster_carries_concrete_committed_values() -> None:
         workers.get("machineDeployments") or [],
     )
     assert deployments, "topology.workers.machineDeployments is empty"
-    md = deployments[0]
-    assert md.get("class") == EXPECTED_WORKER_CLASS
-    assert md.get("replicas") == EXPECTED_WORKER_REPLICAS
+    by_name = {str(md.get("name")): md for md in deployments}
+    assert by_name["md-0"].get("class") == EXPECTED_WORKER_CLASS
+    assert by_name["md-0"].get("replicas") == EXPECTED_WORKER_REPLICAS
+    assert by_name["md-custom"].get("class") == EXPECTED_CUSTOM_WORKER_CLASS
+    assert by_name["md-custom"].get("replicas") == EXPECTED_CUSTOM_WORKER_REPLICAS
+    assert sum(int(md.get("replicas") or 0) for md in deployments) == (
+        EXPECTED_WORKER_TOTAL
+    )
 
 
 def test_cluster_metadata_labels_are_strings() -> None:

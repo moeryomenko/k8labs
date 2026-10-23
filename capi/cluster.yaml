@@ -26,10 +26,13 @@
 # disk 40960MiB (the common worker shape; w2's extra vCPU is a per-node
 # upscale the shared MachineDeployment template cannot express).
 #
-# Two workers, not the upstream template's three: the research protocol uses
-# exactly two (w1 as the measured target, w2 as the load generator), and the
-# third VM only competed for host memory. The host could not reliably start
-# four VMs at once.
+# Two workers, not the upstream template's three: the comparison series uses
+# one stock-kernel worker (md-0) and one comparison-kernel worker (md-custom).
+# Both clone the same worker templates and the same image; the image carries
+# both kernels and k8slab-kernel-select chooses the custom UKI on first boot
+# when the Machine name contains "-md-custom-". The stock worker keeps the
+# stock 7.3.0-65.fc46 default. The third upstream worker only competed for host
+# memory, and the host could not reliably start four VMs at once.
 #
 # Apply order is document order: ClusterClass first, then the referenced
 # templates, then the topology Cluster.
@@ -70,6 +73,17 @@ spec:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: HypervisorMachineTemplate
             name: hypervisor-worker-machine-template
+      - class: custom-worker
+        bootstrap:
+          templateRef:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1alpha1
+            kind: HypervisorConfigTemplate
+            name: hypervisor-worker-bootstrap-template
+        infrastructure:
+          templateRef:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+            kind: HypervisorMachineTemplate
+            name: hypervisor-worker-machine-template
 ---
 # HypervisorClusterTemplate referenced by the ClusterClass infrastructure
 # ref. Network values are the lab host network: bridge k8sbr0 on
@@ -85,7 +99,7 @@ spec:
     spec:
       images:
         - version: v1.37.0
-          path: /host-state/images/k8labs-custom-kernel.qcow2
+          path: /host-state/images/k8labs-base.qcow2
       network:
         cidr: 192.168.124.0/24
         gateway: 192.168.124.1
@@ -173,4 +187,7 @@ spec:
       machineDeployments:
         - name: md-0
           class: default-worker
-          replicas: 2
+          replicas: 1
+        - name: md-custom
+          class: custom-worker
+          replicas: 1
