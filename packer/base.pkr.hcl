@@ -43,14 +43,14 @@ source "cloud-hypervisor" "base" {
   }
 
   # SSH communicator for provisioning
-  communicator           = "ssh"
-  ssh_host               = var.guest_ip
-  ssh_username           = var.ssh_username
-  ssh_private_key_file   = var.ssh_private_key_file
-  ssh_agent_auth         = false
+  communicator              = "ssh"
+  ssh_host                  = var.guest_ip
+  ssh_username              = var.ssh_username
+  ssh_private_key_file      = var.ssh_private_key_file
+  ssh_agent_auth            = false
   ssh_clear_authorized_keys = false
-  ssh_port               = 22
-  ssh_timeout            = var.ssh_timeout
+  ssh_port                  = 22
+  ssh_timeout               = var.ssh_timeout
 
   serial  = "null"
   console = "null"
@@ -59,11 +59,24 @@ source "cloud-hypervisor" "base" {
 build {
   sources = ["source.cloud-hypervisor.base"]
 
-  # The locked kernel RPMs are the only kernel source the bake may use. Upload
-  # them first and let 01-configure-system.sh build the rpm-md metadata.
+  # Both kernel sources are local, verified RPM directories. Upload them first
+  # and let 01-configure-system.sh build the rpm-md metadata for each.
   provisioner "file" {
-    source = var.kernel_rpm_source_dir
-    destination = "/var/lib/k8labs-kernel-repo"
+    source      = var.kernel_rpm_source_dir
+    destination = "/var/lib/k8labs-kernel-repo-stock"
+  }
+
+  provisioner "file" {
+    source      = var.custom_kernel_rpm_source_dir
+    destination = "/var/lib/k8labs-kernel-repo-custom"
+  }
+
+  # Upload the licensed clip from the host cache. The guest's direct download
+  # from Blender intermittently fails mid-stream; the archive hash is verified
+  # by 01-configure-system.sh before use.
+  provisioner "file" {
+    source      = var.fixture_clip_archive
+    destination = "/root/clip.zip"
   }
 
   # Configure the system and clean up BEFORE the extension payloads are
@@ -74,6 +87,9 @@ build {
     environment_vars = [
       "KERNEL_VERSION=${var.kernel_version}",
       "KERNEL_REPO_URL=${var.kernel_repo_url}",
+      "CUSTOM_KERNEL_VERSION=${var.custom_kernel_version}",
+      "CUSTOM_KERNEL_REPO_URL=${var.custom_kernel_repo_url}",
+      "DEFAULT_KERNEL=${var.default_kernel}",
       "FIXTURE_DIR=${var.fixture_dir}",
       "FIXTURE_BIN_DIR=${var.fixture_bin_dir}",
       "FIXTURE_CLIP_URL=${var.fixture_clip_url}",
@@ -167,6 +183,8 @@ build {
   provisioner "shell" {
     environment_vars = [
       "KERNEL_VERSION=${var.kernel_version}",
+      "CUSTOM_KERNEL_VERSION=${var.custom_kernel_version}",
+      "DEFAULT_KERNEL=${var.default_kernel}",
       "K8LABS_UKI_CMDLINE=${var.uki_cmdline}",
       "K8LABS_SB_KEY=${var.uki_signing_key}",
       "K8LABS_PKCS11_MODULE=${var.uki_pkcs11_module}",

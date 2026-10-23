@@ -5,7 +5,31 @@ schema_version: 2
 platform: linux/amd64
 fedora:
   release: "44"
-  kernel: "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
+  kernel: "7.3.0-65.fc46"
+kernel_comparison:
+  stock:
+    version: "7.3.0-65.fc46"
+    source: "https://kojipkgs.fedoraproject.org/packages/kernel/7.3.0/65.fc46/x86_64"
+    rpms:
+      - id: kernel-core
+        url: "https://kojipkgs.fedoraproject.org/packages/kernel/7.3.0/65.fc46/x86_64/kernel-core-7.3.0-65.fc46.x86_64.rpm"
+        sha256: "8f5559bbc6b6c469c85738bcf255d3c3b39799089a309df67b97bef7b67316b4"
+      - id: kernel-modules
+        url: "https://kojipkgs.fedoraproject.org/packages/kernel/7.3.0/65.fc46/x86_64/kernel-modules-7.3.0-65.fc46.x86_64.rpm"
+        sha256: "435511fc95e13417c40eb52adf6a332caff9ff613a6c7a8384ff11579b81d918"
+      - id: kernel-modules-core
+        url: "https://kojipkgs.fedoraproject.org/packages/kernel/7.3.0/65.fc46/x86_64/kernel-modules-core-7.3.0-65.fc46.x86_64.rpm"
+        sha256: "46966c623b19d24965f77a2ec451e99c77beb830efde03f949c81c4e3128b8a0"
+      - id: kernel-modules-extra
+        url: "https://kojipkgs.fedoraproject.org/packages/kernel/7.3.0/65.fc46/x86_64/kernel-modules-extra-7.3.0-65.fc46.x86_64.rpm"
+        sha256: "d15f3e9d3006b82ffc1aae39ae033c3110836b68a7ea4a6673bd5bef62bf9a64"
+  custom:
+    version: "7.3.0-k8labs"
+    source_commit: "734bef548a96e8774d6eef5dfa2026c6edc4e80b"
+    source_describe: "v7.3-7363-g734bef548a96"
+    base_config: "build/kernel-rpms-stock/7.3.0-65.fc46/config-7.3.0-65.fc46"
+    base_config_sha256: "e7b7b37657c723efc94afa7576ef44885b7ed5c54a589782cfd97c61ba7c3f5b"
+    config_fragment: "configs/fedora-44-kernel.config-fragment"
 kubernetes:
   version: "v1.37.0"
   cri_o: "v1.37.0"

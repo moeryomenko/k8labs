@@ -1,23 +1,54 @@
-# Base OS: Fedora 44 with a kernel from a pinned repository. Fedora 44's own
-# kernel (7.2.x) carries an older sched_ext ABI than the sched_ext tree the scx
-# releases track, so the kernel comes from rawhide and is pinned by full NVR.
+# Base OS: Fedora 44 with two kernels for the comparison series. The stock
+# kernel is Fedora rawhide 7.3.0-65.fc46; the comparison kernel is built from
+# the local linux checkout with configs/fedora-44-kernel.config-fragment.
+# Both are installed in the same image and the stock kernel is the default
+# boot entry.
 
 variable "kernel_version" {
-  description = "Kernel version (full NVR) to pin during image baking"
+  description = "Stock Fedora kernel NVR to install and boot by default"
   type        = string
-  default     = "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
+  default     = "7.3.0-65.fc46"
 }
 
 variable "kernel_repo_url" {
-  description = "rpm-md repository to install the kernel from (empty = base OS repos). The campaign uses the locked local repository uploaded by base.pkr.hcl."
+  description = "rpm-md repository for the stock kernel (empty = base OS repos)"
   type        = string
-  default     = "file:///var/lib/k8labs-kernel-repo"
+  default     = "file:///var/lib/k8labs-kernel-repo-stock"
 }
 
 variable "kernel_rpm_source_dir" {
-  description = "Host directory holding the four locked kernel runtime RPMs"
+  description = "Host directory holding the four stock kernel runtime RPMs"
   type        = string
-  default     = "../artifacts/kernel/7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
+  default     = "../build/kernel-rpms-stock/7.3.0-65.fc46"
+}
+
+variable "custom_kernel_version" {
+  description = "Installed release of the k8labs comparison kernel"
+  type        = string
+  default     = "7.3.0-k8labs"
+}
+
+variable "custom_kernel_repo_url" {
+  description = "rpm-md repository for the k8labs comparison kernel"
+  type        = string
+  default     = "file:///var/lib/k8labs-kernel-repo-custom"
+}
+
+variable "custom_kernel_rpm_source_dir" {
+  description = "Host directory holding the kernel-k8labs RPM"
+  type        = string
+  default     = "../build/kernel-rpms-custom"
+}
+
+variable "default_kernel" {
+  description = "Default boot kernel: stock or custom"
+  type        = string
+  default     = "stock"
+
+  validation {
+    condition     = contains(["stock", "custom"], var.default_kernel)
+    error_message = "The default_kernel value must be stock or custom."
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -51,6 +82,12 @@ variable "fixture_clip_zip_sha256" {
   description = "SHA256 of the downloaded clip archive"
   type        = string
   default     = "109e3ede8790bd633f374ca311d9cc61dce8d7f98f5b0797ca98199c9fbceedf"
+}
+
+variable "fixture_clip_archive" {
+  description = "Host cache of the clip archive uploaded into the bake guest"
+  type        = string
+  default     = "../build/fixtures/BigBuckBunny_320x180.mp4.zip"
 }
 
 variable "fixture_clip_mp4_sha256" {

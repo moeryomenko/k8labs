@@ -100,13 +100,95 @@ ExecStart=/usr/bin/systemctl start kube-scheduler.service
 ExecStart=/usr/bin/systemctl start kubelet.service
 EOF
 
+# k8slab-kernel-select: choose the stock or comparison kernel on first boot.
+# The image installs both kernels and systemd-boot entries. The stock worker
+# MachineDeployment keeps the stock default; the custom worker's hostname
+# carries "-md-custom-", so it selects the custom UKI once and reboots. The
+# selected entry is persistent, and the flag file prevents a reboot loop.
+cat > /usr/local/sbin/k8labs-select-kernel <<'EOF'
+#!/bin/sh
+set -eu
+
+KERNELS_FILE=/etc/k8labs-kernels
+FLAG=/var/lib/k8labs/kernel-selected
+ESP_LOADER=/boot/efi/loader/loader.conf
+
+[ -f "${KERNELS_FILE}" ] || exit 0
+[ ! -f "${FLAG}" ] || exit 0
+
+# shellcheck disable=SC1090
+. "${KERNELS_FILE}"
+
+# cloud-final can start before cloud-init has written the final hostname.
+# Wait for it so the comparison worker is not mistaken for the stock worker.
+node_hostname=$(cat /etc/hostname)
+for _ in $(seq 1 120); do
+    case "${node_hostname}" in
+        ""|localhost|localhost.localdomain|k8labs-base)
+            sleep 1
+            node_hostname=$(cat /etc/hostname)
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+case "${node_hostname}" in
+    *-md-custom-*)
+        entry="k8labs-custom-${custom}.efi"
+        ;;
+    *)
+        entry="k8labs-stock-${stock}.efi"
+        ;;
+esac
+
+mkdir -p "$(dirname "${FLAG}")"
+current=$(sed -n 's/^default[[:space:]]*//p' "${ESP_LOADER}" 2>/dev/null | head -n1 || true)
+if [ "${current}" = "${entry}" ]; then
+    touch "${FLAG}"
+    exit 0
+fi
+
+# bootctl writes to $BOOT_ROOT (the btrfs /boot here), while the firmware
+# reads loader.conf from the ESP. Write the ESP file directly.
+cat > "${ESP_LOADER}" <<LOADER
+default ${entry}
+timeout 5
+editor no
+LOADER
+touch "${FLAG}"
+systemctl reboot
+EOF
+chmod +x /usr/local/sbin/k8labs-select-kernel
+
+cat > /usr/lib/systemd/system/k8slab-kernel-select.service <<'EOF'
+[Unit]
+Description=Select the stock or comparison kernel on first boot
+After=cloud-final.service k8slab-merge.service
+Wants=cloud-final.service k8slab-merge.service
+Before=k8slab-stack.service
+ConditionPathExists=/etc/k8labs-kernels
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/k8labs-select-kernel
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 systemctl enable k8slab-merge
-# Pull k8slab-stack in through cloud-final's wants directory (the unit file is
-# baked into /usr, so the symlink resolves without needing the sysext merge).
+# Pull k8slab-stack and the kernel selector in through cloud-final's wants
+# directory (the unit files are baked into /usr, so the symlinks resolve
+# without needing the sysext merge).
 mkdir -p /etc/systemd/system/cloud-final.service.wants
 ln -s /usr/lib/systemd/system/k8slab-stack.service \
     /etc/systemd/system/cloud-final.service.wants/k8slab-stack.service
+ln -s /usr/lib/systemd/system/k8slab-kernel-select.service \
+    /etc/systemd/system/cloud-final.service.wants/k8slab-kernel-select.service
 
 # Enable the Kubernetes node services so each VM brings up its runtime stack
 # automatically at boot. The unit files live inside the sysext images under
@@ -194,6 +276,13 @@ chmod +x /usr/local/sbin/resize-rootfs.sh
 # Remove machine-id so each VM gets unique ID on first boot
 rm -f /etc/machine-id
 touch /etc/machine-id
+
+# The kubelet binary and unit arrive through a sysext and run in init_t (the
+# squashfs merge strips labels). Its socket tree must carry init_var_lib_t so
+# init_t can unlink stale sockets; the RPM/container defaults leave
+# container_* labels behind and kubelet exits with EACCES on first boot.
+mkdir -p /var/lib/kubelet /var/log/pods
+chcon -R -t init_var_lib_t /var/lib/kubelet /var/log/pods 2>/dev/null || true
 
 # Flush all writes to disk before the packer plugin shuts the VM down. The
 # cloud-hypervisor plugin force-deletes the VM after its ACPI shutdown timeout

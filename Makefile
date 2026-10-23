@@ -191,6 +191,15 @@ base-cloudinit: base-ssh-key ## Generate cloud-init CIDATA disk for Packer build
 		--network-config packer/cloud-init/network-config \
 		--output "$(CLOUDINIT_DISK)"
 
+.PHONY: stock-kernel custom-kernel kernels
+stock-kernel: ## Fetch and verify the pinned stock Fedora kernel RPMs
+	scripts/fetch-stock-kernel.sh
+
+custom-kernel: ## Build the local-tree comparison kernel RPM (kernel-k8labs)
+	scripts/build-custom-kernel.sh
+
+kernels: stock-kernel custom-kernel ## Fetch stock and build custom kernel RPMs
+
 .PHONY: base
 base: bake-image base-deps base-cloudinit sysexts confexts ## Build base image via Packer in the rootless bake container
 	@if [ -f "$(BASE_IMAGE_DEST)" ]; then \
@@ -205,6 +214,7 @@ base: bake-image base-deps base-cloudinit sysexts confexts ## Build base image v
 	fi
 	@echo 'Building base image via Packer in the bake container...'
 	rm -rf build/base-image packer/output-base
+	$(MAKE) base-esp-raw
 	$(MAKE) bake-run
 	@echo 'Copying base image to build/...'
 	@set -euo pipefail; \
@@ -223,6 +233,8 @@ base: bake-image base-deps base-cloudinit sysexts confexts ## Build base image v
 # ../extensions/selinux, scripts/) resolve exactly as on the host. /dev/kvm
 # and /dev/net/tun are passed through, and NET_ADMIN/NET_RAW let bake-net.sh
 # create the tap + NAT inside the container's own netns — no host privilege.
+VAR_FILE ?= vars.pkrvars.hcl
+
 .PHONY: bake-run
 bake-run:
 	podman run --rm \
@@ -234,13 +246,21 @@ bake-run:
 		-v "$(CURDIR)/extensions:/src/extensions" \
 		-w /src/packer \
 		"$(BAKE_IMAGE)" \
-		packer build -var-file=vars.pkrvars.hcl -only=cloud-hypervisor.base .
+		packer build -var-file=$(VAR_FILE) -only=cloud-hypervisor.base .
+
+# The comparison image carries two signed UKIs and needs a 256 MiB ESP. The
+# prepared Fedora source lives in build/fedora-cloud-base-esp.qcow2; convert it
+# to raw before baking because the bake mutates the raw in place.
+.PHONY: base-esp-raw
+base-esp-raw: ## Materialize the 256M-ESP Fedora source as raw for the comparison bake
+	scripts/prepare-esp-image.sh
 
 .PHONY: base-rebuild
 base-rebuild: bake-image base-deps base-cloudinit sysexts confexts ## Force rebuild of the base image
 	@echo 'Forcing base image rebuild via Packer in the bake container...'
 	rm -f "$(BASE_IMAGE_DEST)"
 	rm -rf build/base-image packer/output-base
+	$(MAKE) base-esp-raw
 	$(MAKE) bake-run
 	@set -euo pipefail; \
 	ARTIFACT=$$(find packer/output-base -maxdepth 1 -type f ! -name '*.lock' | head -1); \

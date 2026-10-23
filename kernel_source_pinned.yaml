@@ -1,3 +1,7 @@
+# Historical linux-next source gate for the earlier kernel release.
+# The current comparison kernel is built from the local linux checkout at
+# 734bef548a96e8774d6eef5dfa2026c6edc4e80b (v7.3-7363-g734bef548a96); see
+# versions.lock.yaml kernel_comparison.custom.
 schema_version: 1
 kind: kernel-source-gate
 pinned_commit: 2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64

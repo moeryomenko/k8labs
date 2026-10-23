@@ -42,6 +42,7 @@ It must match the generated HostAgent artifact manifest exactly. Do not substitu
 - Rootless Podman and a working systemd user instance.
 - A KVM-capable host with `/dev/kvm`; the current user belongs to `kvm`.
 - `kind`, `kubectl`, `skopeo`, `podman`, `cloud-hypervisor`, `openssl`, `python3`, and the tools checked by `make prereq`.
+- `guestfs-tools` (`virt-resize`) and `dosfstools` (`mkfs.vfat`) for the two-UKI comparison image's 256 MiB ESP.
 - A baked `build/k8labs-base.qcow2` and `build/CLOUDHV.fd`.
 - A populated verified cache. Populate it while connected:
 
@@ -54,10 +55,28 @@ No sibling capishim or provider checkout, source build fallback, mutable image t
 ## Common workflow
 
 ```sh
-make base             # creates the baked workload image and firmware
+make kernels           # fetch stock 7.3.0-65.fc46 and build kernel-k8labs
+make base              # creates the baked workload image and firmware
 make prepare           # downloads and verifies the locked cache while connected
 make mgmt-up           # starts the host Agent and bootstraps Kind/CAPI/CAPH
 make cluster           # applies workload Cluster, addons, waits, fetches kubeconfig, smoke-tests
+```
+
+`make kernels` is required after a clean checkout: `stock-kernel` downloads and
+verifies the four Fedora rawhide RPMs pinned in `versions.lock.yaml`, and
+`custom-kernel` builds `kernel-k8labs` from the local linux checkout at the
+commit recorded in the lock. The base image installs both kernels; the stock
+kernel is the default boot entry and the custom kernel is selectable from the
+systemd-boot menu.
+
+The comparison image needs a 256 MiB ESP for the two signed UKIs. Prepare
+`build/fedora-cloud-base-esp.qcow2` once from the Fedora Cloud source (resize
+`/dev/sda2` to 256M, format it, and update the `/boot/efi` UUID in
+`/etc/fstab`), then:
+
+```sh
+make base-esp-raw
+make bake-run VAR_FILE=vars.scratch.pkrvars.hcl
 ```
 
 Management API operations use `kind-k8labs-mgmt`:

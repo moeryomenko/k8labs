@@ -32,7 +32,7 @@ settings:
   # Base OS metadata — all extensions target the same host OS
   id: "fedora"
   version_id: "44"
-  kernel_version: "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
+  kernel_version: "7.3.0-65.fc46"
 
   # Directory (relative to project root) where built .raw images are placed
   release_dir: "extensions/release"

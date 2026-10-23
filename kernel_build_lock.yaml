@@ -1,4 +1,8 @@
-# Reproducible kernel build lock for the linux-sched cgroup-v2 quota campaign.
+# Historical kernel build lock for the linux-next kernel-ark release.
+#
+# The current comparison series uses versions.lock.yaml instead: the stock
+# Fedora kernel 7.3.0-65.fc46 plus the local-tree kernel 7.3.0-k8labs. This
+# file is retained for the earlier linux-next release and its exact pins.
 #
 # This file records pins and inputs only. Artifact hashes are recorded after a
 # build produces the artifact; a hash is never written for something that has

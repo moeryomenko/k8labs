@@ -5,70 +5,167 @@
 set -eux
 
 # ---------------------------------------------------------------------------
-# Kernel version pinning — freeze the kernel at the baked version so derived
-# images do not accidentally upgrade it. KERNEL_VERSION is passed through
+# The Fedora Cloud Base image can boot with the root filesystem still
+# read-only while systemd remounts it. dnf refuses to install into /usr in
+# that state, so remount the root and /usr writable before touching packages.
+# ---------------------------------------------------------------------------
+if ! touch /usr/.k8labs-rw-test 2>/dev/null; then
+    mount -o remount,rw / 2>/dev/null || true
+    mount -o remount,rw /usr 2>/dev/null || true
+fi
+touch /usr/.k8labs-rw-test || {
+    echo "ERROR: /usr is not writable; cannot bake packages" >&2
+    exit 1
+}
+rm -f /usr/.k8labs-rw-test
+
+# ---------------------------------------------------------------------------
+# Kernel selection — install the stock Fedora kernel and the local-tree
+# comparison kernel, then freeze them so derived images do not upgrade either.
+# KERNEL_VERSION, CUSTOM_KERNEL_VERSION, and DEFAULT_KERNEL are passed through
 # the Packer shell provisioner environment_vars.
 # ---------------------------------------------------------------------------
-KERNEL_VERSION="${KERNEL_VERSION:-7.2.10-200.fc44}"
+KERNEL_VERSION="${KERNEL_VERSION:-7.3.0-65.fc46}"
+CUSTOM_KERNEL_VERSION="${CUSTOM_KERNEL_VERSION:-7.3.0-k8labs}"
+DEFAULT_KERNEL="${DEFAULT_KERNEL:-stock}"
 
-echo "==> Baking with kernel target: ${KERNEL_VERSION}"
+echo "==> Baking with stock kernel ${KERNEL_VERSION}, custom kernel ${CUSTOM_KERNEL_VERSION}, default ${DEFAULT_KERNEL}"
 
-# The kernel may come from a repository other than the base image's, which is
-# how the scheduler-research kernel (a newer sched_ext ABI than Fedora 44 ships)
-# is installed. KERNEL_REPO_URL is a base URL of an rpm-md repository.
-if [ -n "${KERNEL_REPO_URL:-}" ]; then
-    echo "==> Kernel repository: ${KERNEL_REPO_URL}"
-    # A local repository ships as plain RPMs; build its metadata first.
-    case "${KERNEL_REPO_URL}" in
+# Both kernels come from local rpm-md repositories uploaded by base.pkr.hcl.
+# A local repository ships as plain RPMs; build its metadata first.
+prepare_kernel_repo() {
+    repo_url=$1
+    [ -n "${repo_url}" ] || return 0
+    echo "==> Kernel repository: ${repo_url}"
+    case "${repo_url}" in
         file://*)
             dnf install -y createrepo_c >/dev/null
-            REPO_PATH="${KERNEL_REPO_URL#file://}"
-            createrepo_c --quiet "${REPO_PATH}"
+            repo_path="${repo_url#file://}"
+            # Packer may preserve the source directory name under the
+            # destination. Flatten any nested RPMs before createrepo_c, which
+            # only scans the directory it is given.
+            find "${repo_path}" -mindepth 2 -name '*.rpm' \
+                -exec cp -n {} "${repo_path}/" \;
+            createrepo_c --quiet "${repo_path}"
             ;;
         *)
             ;;
     esac
-    # The ad-hoc repo carries no configured OpenPGP key, so signature checking
-    # is disabled for it. Packages are fetched over HTTPS from the vendor's
-    # official mirror, and the kernel version is pinned by full NVR.
-    dnf_install_kernel() {
+}
+
+# The ad-hoc repos carry no configured OpenPGP key, so signature checking is
+# disabled for them. The versions are pinned by exact NVR.
+dnf_install_from_repo() {
+    repo_url=$1
+    shift
+    if [ -n "${repo_url}" ]; then
         dnf install -y --refresh \
-            --repofrompath=k8labs-kernel,"${KERNEL_REPO_URL}" \
+            --repofrompath=k8labs-kernel,"${repo_url}" \
             --repo=k8labs-kernel \
             --setopt=k8labs-kernel.gpgcheck=0 \
             --setopt=k8labs-kernel.repo_gpgcheck=0 \
             "$@"
-    }
-else
-    dnf_install_kernel() {
+    else
         dnf --refresh install -y "$@"
-    }
-fi
+    fi
+}
+
+prepare_kernel_repo "${KERNEL_REPO_URL:-}"
+prepare_kernel_repo "${CUSTOM_KERNEL_REPO_URL:-}"
+
+# Both kernels need BLS entries: grubby selects the default, and 04-uki.sh
+# reuses each entry's command line for the signed UKI. Fedora's kernel-install
+# defaults to bls, but make it explicit so a future base-image change cannot
+# silently switch to the uki layout and leave no entry to read.
+mkdir -p /etc/kernel
+printf 'layout=bls\n' > /etc/kernel/install.conf
+
+# The ESP is only ~100 MiB. kernel-install must keep the kernel and initramfs
+# on the btrfs /boot; the ESP is reserved for the signed UKIs and boot manager.
+# BOOT_ROOT is inherited by the RPM scriptlets; the install.conf key is not
+# understood by this systemd build.
+export BOOT_ROOT=/boot
+
+# A host-only initramfs is enough for the VM's virtio/btrfs root and keeps the
+# two UKIs small enough to fit.
+mkdir -p /etc/dracut.conf.d
+cat > /etc/dracut.conf.d/99-k8labs-hostonly.conf <<'EOF'
+hostonly="yes"
+compress="zstd"
+omit_dracutmodules+=" network network-manager nfs cifs iscsi fcoe multipath dmraid "
+EOF
 
 # The research image must be reproducible: silently accepting a newer package
 # changes the kernel BTF and can invalidate sched_ext scheduler binaries.
-dnf_install_kernel "kernel-core-${KERNEL_VERSION}" \
+dnf_install_from_repo "${KERNEL_REPO_URL:-}" \
+    "kernel-core-${KERNEL_VERSION}" \
     "kernel-modules-${KERNEL_VERSION}" \
     "kernel-modules-core-${KERNEL_VERSION}" \
     "kernel-modules-extra-${KERNEL_VERSION}"
 
-# Resolve the installed version, including the architecture suffix. The value
-# passed in may omit the architecture (the lock stores the version without it).
-INSTALLED_KERNEL_VERSION=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' "kernel-core-${KERNEL_VERSION}" | head -1)
-if [ -z "${INSTALLED_KERNEL_VERSION}" ]; then
-    echo "ERROR: exact kernel ${KERNEL_VERSION} was not installed" >&2
+STOCK_KERNEL_RELEASE=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' "kernel-core-${KERNEL_VERSION}" 2>/dev/null | head -1 || true)
+if [ -z "${STOCK_KERNEL_RELEASE}" ]; then
+    echo "ERROR: exact stock kernel ${KERNEL_VERSION} was not installed" >&2
     exit 1
 fi
-KERNEL_VERSION="${INSTALLED_KERNEL_VERSION}"
 
-echo "==> Kernel ${KERNEL_VERSION} installed from refreshed repositories"
+# The stock kernel-core RPM marks /boot/vmlinuz-<release> as a ghost file and
+# leaves it to kernel-install. With BOOT_ROOT=/boot kernel-install writes the
+# BLS tree under /boot; create the canonical image name the UKI step uses.
+if [ ! -f "/boot/vmlinuz-${STOCK_KERNEL_RELEASE}" ]; then
+    install -m 0755 "/lib/modules/${STOCK_KERNEL_RELEASE}/vmlinuz" \
+        "/boot/vmlinuz-${STOCK_KERNEL_RELEASE}"
+fi
 
-# kernel-devel supplies /usr/src/kernels/<ver>. Only install it when the kernel
-# came from the base repositories: an ad-hoc kernel repository (a different
-# Fedora release) has no devel tree for this image's release, and pulling one
-# drags that release's dependency set in and conflicts with the image's own
-# packages. Run-queue metrics use the libbpf-tools CO-RE binaries, which read
-# BTF and need no headers.
+dnf_install_from_repo "${CUSTOM_KERNEL_REPO_URL:-}" kernel-k8labs
+CUSTOM_KERNEL_RELEASE=$(rpm -q --qf '%{VERSION}-%{RELEASE}\n' kernel-k8labs 2>/dev/null | head -1 || true)
+if [ -z "${CUSTOM_KERNEL_RELEASE}" ]; then
+    echo "ERROR: custom kernel kernel-k8labs was not installed" >&2
+    exit 1
+fi
+if [ "${CUSTOM_KERNEL_RELEASE}" != "${CUSTOM_KERNEL_VERSION}" ]; then
+    echo "ERROR: custom kernel release ${CUSTOM_KERNEL_RELEASE} != ${CUSTOM_KERNEL_VERSION}" >&2
+    exit 1
+fi
+
+for release in "${STOCK_KERNEL_RELEASE}" "${CUSTOM_KERNEL_RELEASE}"; do
+    if [ ! -f "/boot/vmlinuz-${release}" ]; then
+        echo "ERROR: kernel image vmlinuz-${release} was not installed" >&2
+        exit 1
+    fi
+done
+
+case "${DEFAULT_KERNEL}" in
+    stock) DEFAULT_KERNEL_RELEASE="${STOCK_KERNEL_RELEASE}" ;;
+    custom) DEFAULT_KERNEL_RELEASE="${CUSTOM_KERNEL_RELEASE}" ;;
+    *) echo "ERROR: DEFAULT_KERNEL must be stock or custom" >&2; exit 1 ;;
+esac
+# GRUB is a fallback path only; the firmware boots the signed systemd-boot
+# UKI entry. grubby cannot always resolve the BLS entry in the Cloud image, so
+# do not fail the bake on it. 04-uki.sh writes the authoritative loader.conf.
+if ! grubby --set-default "/boot/vmlinuz-${DEFAULT_KERNEL_RELEASE}"; then
+    echo "WARN: grubby could not select ${DEFAULT_KERNEL_RELEASE}; systemd-boot default is set by 04-uki.sh" >&2
+fi
+
+# Record both kernels and the default for the UKI step and post-boot checks.
+cat > /etc/k8labs-kernels <<EOF
+stock=${STOCK_KERNEL_RELEASE}
+custom=${CUSTOM_KERNEL_RELEASE}
+default=${DEFAULT_KERNEL}
+EOF
+
+{
+    echo "Stock kernel: ${STOCK_KERNEL_RELEASE}"
+    echo "Custom kernel: ${CUSTOM_KERNEL_RELEASE}"
+    echo "Default kernel: ${DEFAULT_KERNEL_RELEASE}"
+} > /etc/baked-kernel-version
+
+echo "==> Kernels installed: stock ${STOCK_KERNEL_RELEASE}, custom ${CUSTOM_KERNEL_RELEASE}"
+
+# kernel-devel supplies /usr/src/kernels/<ver>. Only install it when the stock
+# kernel came from the base repositories: an ad-hoc kernel repository has no
+# devel tree for this image's release. Run-queue metrics use the libbpf-tools
+# CO-RE binaries, which read BTF and need no headers.
 if [ -z "${KERNEL_REPO_URL:-}" ]; then
     if ! dnf --refresh install -y "kernel-devel-${KERNEL_VERSION}" kernel-headers; then
         echo "WARN: kernel-devel-${KERNEL_VERSION} unavailable; BCC tools will not compile"
@@ -76,20 +173,6 @@ if [ -z "${KERNEL_REPO_URL:-}" ]; then
 else
     dnf --refresh install -y kernel-headers || true
 fi
-
-# Set the exact target kernel as the default boot entry. The original Fedora
-# kernel remains installed as a recovery fallback.
-NEW_KERNEL=$(find /boot -maxdepth 1 -name "vmlinuz-${KERNEL_VERSION}" \
-    -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-if [ -z "${NEW_KERNEL}" ]; then
-    echo "ERROR: exact kernel image vmlinuz-${KERNEL_VERSION} was not installed" >&2
-    exit 1
-fi
-grubby --set-default "${NEW_KERNEL}"
-
-# Record the exact target for post-boot verification.
-rpm -q kernel-core > /etc/baked-kernel-version
-echo "Kernel target: ${KERNEL_VERSION}" >> /etc/baked-kernel-version
 
 # Prevent kernel updates in images derived from this base
 mkdir -p /etc/dnf/dnf.conf.d
@@ -147,6 +230,7 @@ dnf install -y conmon parted growpart \
     libbpf-tools \
     python3-bcc \
     bpftool \
+    systemd-boot-unsigned \
     systemd-ukify \
     sbsigntools \
     softhsm \
@@ -221,7 +305,11 @@ if [ -n "${FIXTURE_DIR}" ]; then
     # extracted file are verified, so a truncated or substituted download
     # cannot reach a run.
     clip_tmp=$(mktemp -d)
-    curl -fsSL -o "${clip_tmp}/clip.zip" "${FIXTURE_CLIP_URL}"
+    if [ -f /root/clip.zip ]; then
+        cp /root/clip.zip "${clip_tmp}/clip.zip"
+    else
+        curl -fsSL -o "${clip_tmp}/clip.zip" "${FIXTURE_CLIP_URL}"
+    fi
     echo "${FIXTURE_CLIP_ZIP_SHA256}  ${clip_tmp}/clip.zip" | sha256sum -c -
     unzip -j -o -q "${clip_tmp}/clip.zip" -d "${clip_tmp}"
     clip_mp4=$(find "${clip_tmp}" -maxdepth 1 -name '*.mp4' | head -1)
