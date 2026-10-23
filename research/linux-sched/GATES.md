@@ -864,3 +864,24 @@ that load the control plane failed to bootstrap across three rebuilds and the
 stopped (load 7.7) the control plane bootstrapped and the study ran at 3 ms
 p99. Free host capacity is a precondition for the campaign, not an
 optimization.
+
+## Comparison kernel set (2026-10-23)
+
+The image installs two kernels for the stock-versus-local comparison:
+
+- **Stock:** Fedora rawhide `7.3.0-65.fc46` (`kernel-core`, `kernel-modules`,
+  `kernel-modules-core`, `kernel-modules-extra`), booted by default.
+- **Custom:** `kernel-k8labs` release `7.3.0-k8labs`, built out of tree from the
+  local linux checkout at `734bef548a96e8774d6eef5dfa2026c6edc4e80b`
+  (`v7.3-7363-g734bef548a96`) with
+  `configs/fedora-44-kernel.config-fragment` (sched_ext, BTF, cgroup v2, EFI
+  stub and module signing).
+
+Both kernels are signed as UKIs; systemd-boot is the UEFI fallback and presents
+both entries. `packer/variables.pkr.hcl` exposes `kernel_version` (stock),
+`custom_kernel_version`, and `default_kernel` (`stock` by default). The
+workload Cluster runs `md-0` on the stock default and `md-custom` on the
+comparison kernel: a first-boot service selects the custom UKI when the Machine
+name contains `-md-custom-`, then reboots once. The historical linux-next pin
+above remains recorded for the earlier interface findings; it is not the source
+of the comparison kernel.

@@ -35,12 +35,14 @@ STOCK_FIRMWARE_PATH = STOCK_FIRMWARE
 KVM_DEVICE = "/dev/kvm"
 CLOUD_HYPERVISOR_BIN = "cloud-hypervisor"
 
-# Derived by scripts/kernel_build_harness.py from the pinned linux-next source
-# (Makefile VERSION=7 PATCHLEVEL=3 EXTRAVERSION=-rc7) plus the config fragment.
-PINNED_KERNEL_NVR = "kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
+# Comparison series: the stock Fedora kernel and the local-tree kernel are
+# installed together. The validation script reports the stock NVR; the custom
+# kernel release is 7.3.0-k8labs.
+PINNED_KERNEL_NVR = "kernel-7.3.0-65.fc46"
 PINNED_KERNEL_VERSION = PINNED_KERNEL_NVR
 KERNEL_NVR = PINNED_KERNEL_NVR
 EXPECTED_KERNEL_NVR = PINNED_KERNEL_NVR
+CUSTOM_KERNEL_NVR = "kernel-k8labs-7.3.0-k8labs"
 
 PINNED_FIRMWARE_COMMIT = "d46aa46c8361194521391aa581593e556c707c6e"
 FIRMWARE_SOURCE_COMMIT = PINNED_FIRMWARE_COMMIT

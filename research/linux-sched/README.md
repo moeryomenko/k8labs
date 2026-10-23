@@ -8,8 +8,24 @@ from the approved plan.
 `scx_mavd` needs the arena-scalar prog flag (`BPF_F_ARENA_SCALAR`) and
 `scx_nitosis` needs `sched_ext_ops.sub_cid_sched_updated()`. Both are present in
 the pinned linux-next source `next-20261016`
-(`2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64`), so the custom kernel build needs no
-private patches. See `GATES.md`.
+(`2efb7a11f1aa4d2dc285fe2680cca22cb9f72f64`), so the historical custom kernel
+build needed no private patches. See `GATES.md`.
+
+The comparison image installs two kernels: the stock Fedora rawhide kernel
+`7.3.0-65.fc46` (default boot entry) and a comparison kernel built from the
+local linux checkout at `734bef548a96e8774d6eef5dfa2026c6edc4e80b`
+(`v7.3-7363-g734bef548a96`) with
+`configs/fedora-44-kernel.config-fragment`. Both are signed as UKIs and are
+selectable from the systemd-boot menu; the stock kernel remains the default.
+
+The workload Cluster uses two worker MachineDeployments. `md-0` keeps the stock
+default. `md-custom` carries `-md-custom-` in each Machine name, so
+`k8slab-kernel-select.service` selects the custom UKI on first boot and reboots
+once. Verify the assignment with:
+
+```sh
+kubectl --kubeconfig build/kubeconfig get nodes -o wide
+```
 
 Quota enforcement differs per arm: the fair class enforces `cpu.max`, while a
 sched_ext scheduler honours it only if it implements

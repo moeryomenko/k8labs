@@ -26,6 +26,14 @@ AVAILABLE_RAWHIDE_KERNEL = "7.3.0-0.rc7.261016g2f2f7eeef8b0.62.fc46"
 ARENA_SCALAR_AVAILABLE = True
 SUB_CID_SCHED_UPDATED_AVAILABLE = True
 
+# Comparison series: the stock Fedora kernel and a kernel built from the local
+# linux checkout. The historical linux-next pin above remains recorded so the
+# earlier interface findings stay traceable.
+STOCK_KERNEL_VERSION = "7.3.0-65.fc46"
+CUSTOM_KERNEL_VERSION = "7.3.0-k8labs"
+CUSTOM_SOURCE_COMMIT = "734bef548a96e8774d6eef5dfa2026c6edc4e80b"
+CUSTOM_SOURCE_DESCRIBE = "v7.3-7363-g734bef548a96"
+
 REQUIRED_INTERFACES = {
     "BPF_F_ARENA_SCALAR": "include/uapi/linux/bpf.h",
     "bpf_jit_supports_arena_scalar": "arch/x86/net/bpf_jit_comp.c",
@@ -33,11 +41,13 @@ REQUIRED_INTERFACES = {
 }
 
 RESOLUTION = (
-    "Resolved: linux-next "
+    "Historical resolution: linux-next "
     f"{PINNED_LINUX_NEXT_TAG} ({PINNED_LINUX_NEXT_COMMIT}) contains both "
     "BPF_F_ARENA_SCALAR (with x86 JIT support) and "
-    "sched_ext_ops.sub_cid_sched_updated(), so the custom kernel needs no "
-    "private patches. See researches GATES.md and the kernel source gate."
+    "sched_ext_ops.sub_cid_sched_updated(), so the earlier custom kernel "
+    "needed no private patches. The current comparison series uses stock "
+    f"{STOCK_KERNEL_VERSION} and local-tree {CUSTOM_KERNEL_VERSION} "
+    f"({CUSTOM_SOURCE_COMMIT}). See GATES.md and the kernel source gate."
 )
 
 HISTORICAL_BLOCKER = (
@@ -54,6 +64,16 @@ def _packer_kernel_version() -> str | None:
     text = PACKER_VARIABLES.read_text(encoding="utf-8")
     match = re.search(
         r'variable "kernel_version" \{.*?default\s*=\s*"([^"]+)"',
+        text,
+        re.S,
+    )
+    return match.group(1) if match else None
+
+
+def _packer_custom_kernel_version() -> str | None:
+    text = PACKER_VARIABLES.read_text(encoding="utf-8")
+    match = re.search(
+        r'variable "custom_kernel_version" \{.*?default\s*=\s*"([^"]+)"',
         text,
         re.S,
     )
@@ -90,31 +110,42 @@ def _provisioner_is_fail_closed() -> bool:
     text = PACKER_PROVISIONER.read_text(encoding="utf-8")
     if "Exact kernel" in text and "is unavailable" in text:
         return False
-    return "kernel-modules-extra-" in text
+    return (
+        "kernel-modules-extra-" in text
+        and "kernel-k8labs" in text
+        and "CUSTOM_KERNEL_REPO_URL" in text
+    )
 
 
 def check() -> list[str]:
     errors: list[str] = []
 
     packer_version = _packer_kernel_version()
-    if packer_version != PINNED_KERNEL_VERSION:
+    if packer_version != STOCK_KERNEL_VERSION:
         errors.append(
-            f"packer kernel_version {packer_version!r} != pinned "
-            f"{PINNED_KERNEL_VERSION!r}"
+            f"packer kernel_version {packer_version!r} != stock "
+            f"{STOCK_KERNEL_VERSION!r}"
+        )
+
+    packer_custom = _packer_custom_kernel_version()
+    if packer_custom != CUSTOM_KERNEL_VERSION:
+        errors.append(
+            f"packer custom_kernel_version {packer_custom!r} != custom "
+            f"{CUSTOM_KERNEL_VERSION!r}"
         )
 
     lock_version = _lock_kernel_version()
-    if lock_version is not None and lock_version != PINNED_KERNEL_VERSION:
+    if lock_version is not None and lock_version != STOCK_KERNEL_VERSION:
         errors.append(
-            f"versions.lock.yaml kernel {lock_version!r} != pinned "
-            f"{PINNED_KERNEL_VERSION!r}"
+            f"versions.lock.yaml kernel {lock_version!r} != stock "
+            f"{STOCK_KERNEL_VERSION!r}"
         )
 
     manifest_version = _manifest_kernel_version()
-    if manifest_version is not None and manifest_version != PINNED_KERNEL_VERSION:
+    if manifest_version is not None and manifest_version != STOCK_KERNEL_VERSION:
         errors.append(
             f"extensions/manifest.yaml kernel_version {manifest_version!r} != "
-            f"pinned {PINNED_KERNEL_VERSION!r}"
+            f"stock {STOCK_KERNEL_VERSION!r}"
         )
 
     if not _provisioner_is_fail_closed():

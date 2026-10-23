@@ -51,6 +51,10 @@ Stop if they differ.
 
 ## Step 1b — reproducible kernel build
 
+> Comparison series (2026-10-23): use `make kernels` to fetch the stock
+> `7.3.0-65.fc46` RPMs and build `kernel-k8labs` from the local linux checkout.
+> The kernel-ark steps below are retained for the historical linux-next release.
+
 rpm 6 does not honour `SOURCE_DATE_EPOCH` for `%{BUILDTIME}`, and the kABI
 stablelists tarball is created with plain `tar`. Pin both before building or the
 SRPM hash drifts between runs:
