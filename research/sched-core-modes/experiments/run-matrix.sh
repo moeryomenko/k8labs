@@ -422,4 +422,4 @@ PY
 mkdir -p "${DATA_ROOT}"
 ln -sfn "${RUN_DIR}" "${DATA_ROOT}/latest"
 log "matrix: ${RUN_DIR}/matrix.jsonl"
-log "next: make -C research sched-core-modes-analyze"
+log "next: task sched-core-modes-analyze"

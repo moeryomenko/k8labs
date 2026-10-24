@@ -4,7 +4,7 @@
 # shell=bash; this file targets POSIX sh, so the directive above overrides it
 # and ShellCheck enforces the real target dialect.
 #
-# verify-cluster-ops.sh — Verify the `make rbac` / `make cilium` cluster-ops
+# verify-cluster-ops.sh — Verify the `task rbac` / `task cilium` cluster-ops
 # prerequisites (static) and post-conditions (live).
 #
 # Asserts the spec's §3.5 cluster-ops requirements: the rbac/ and cilium/install/
@@ -22,14 +22,14 @@
 #   2. cilium/install/ holds pre-rendered install manifests (a cilium
 #      ServiceAccount or Deployment/DaemonSet) plus a VERSION marker pinning
 #      the Cilium version.
-#   3. Makefile defines `rbac:` and `cilium:` targets.
-#   4. `make help` lists `rbac` and `cilium`.
+#   3. Taskfile defines `rbac:` and `cilium:` tasks.
+#   4. `task --list` lists `rbac` and `cilium`.
 #
 # LIVE section (SKIPs cleanly — exit 0 for the section — when ./kubeconfig is
 #   absent or kubectl is unavailable):
-#   - after `make rbac`:   kubectl get clusterrolebinding lists the bindings
-#   - after `make cilium`: kube-system pods -l k8s-app=cilium are Running
-#     (sample assertion; full cluster checks belong to `make smoke-test`).
+#   - after `task rbac`:   kubectl get clusterrolebinding lists the bindings
+#   - after `task cilium`: kube-system pods -l k8s-app=cilium are Running
+#     (sample assertion; full cluster checks belong to `task smoke-test`).
 #
 # The static section currently FAILS on this tree (no rbac/, no
 # cilium/install/, no rbac:/cilium: targets) — that is the intended
@@ -152,41 +152,39 @@ else
     fail 'cilium/install/ directory missing — expected pre-rendered install manifests'
 fi
 
-# --- 3. Makefile targets -----------------------------------------------------
-if [ -f "${repo_root}/Makefile" ]; then
-    if grep -qE '^rbac:' "${repo_root}/Makefile"; then
-        pass 'Makefile defines rbac: target'
+# --- 3. Taskfile tasks -------------------------------------------------------
+TASKFILE="${repo_root}/Taskfile.yml"
+if [ -f "${TASKFILE}" ]; then
+    if grep -qE '^  rbac:' "${TASKFILE}"; then
+        pass 'Taskfile defines rbac: task'
     else
-        fail 'Makefile missing rbac: target'
+        fail 'Taskfile missing rbac: task'
     fi
 
-    if grep -qE '^cilium:' "${repo_root}/Makefile"; then
-        pass 'Makefile defines cilium: target'
+    if grep -qE '^  cilium:' "${TASKFILE}"; then
+        pass 'Taskfile defines cilium: task'
     else
-        fail 'Makefile missing cilium: target'
+        fail 'Taskfile missing cilium: task'
     fi
 else
-    fail 'Makefile missing at repo root'
+    fail 'Taskfile missing at repo root'
 fi
 
-# --- 4. `make help` lists the targets ---------------------------------------
-if _help_output=$(make -C "${repo_root}" help 2>&1); then
-    _esc=$(printf '\033')
-    _help_clean=$(printf '%s\n' "${_help_output}" | sed "s/${_esc}\[[0-9;]*m//g")
-
-    if printf '%s\n' "${_help_clean}" | grep -qE '^[[:space:]]*rbac([[:space:]]|$)'; then
-        pass 'make help lists rbac target'
+# --- 4. `task --list` lists the tasks ---------------------------------------
+if _help_output=$(task --list 2>&1); then
+    if printf '%s\n' "${_help_output}" | grep -qE '^[[:space:]]*\* rbac:'; then
+        pass 'task --list lists rbac task'
     else
-        fail 'make help does not list rbac target'
+        fail 'task --list does not list rbac task'
     fi
 
-    if printf '%s\n' "${_help_clean}" | grep -qE '^[[:space:]]*cilium([[:space:]]|$)'; then
-        pass 'make help lists cilium target'
+    if printf '%s\n' "${_help_output}" | grep -qE '^[[:space:]]*\* cilium:'; then
+        pass 'task --list lists cilium task'
     else
-        fail 'make help does not list cilium target'
+        fail 'task --list does not list cilium task'
     fi
 else
-    fail 'make help failed to run (exit non-zero)'
+    fail 'task --list failed to run (exit non-zero)'
 fi
 
 printf '%s\n' '--- LIVE ---'
@@ -205,27 +203,27 @@ fi
 if [ -n "${_live_skip_reason}" ]; then
     _live_status="SKIPPED (${_live_skip_reason})"
     skip "live section: ${_live_skip_reason}"
-    printf '%s\n' '      run this script after make rbac / make cilium on a healthy cluster'
+    printf '%s\n' '      run this script after task rbac / task cilium on a healthy cluster'
 else
-    # after `make rbac`: the four bindings exist in `kubectl get clusterrolebinding`
+    # after `task rbac`: the four bindings exist in `kubectl get clusterrolebinding`
     if _bindings=$(kubectl --kubeconfig="${_kubeconfig_path}" get clusterrolebinding 2>&1); then
         for _b in system:kubelet-bootstrap system:nodes system:admin system:kube-apiserver-proxy; do
             if printf '%s\n' "${_bindings}" | grep -qw "${_b}"; then
-                pass "clusterrolebinding ${_b} exists (after make rbac)"
+                pass "clusterrolebinding ${_b} exists (after task rbac)"
             else
-                fail "clusterrolebinding ${_b} missing (run make rbac)"
+                fail "clusterrolebinding ${_b} missing (run task rbac)"
             fi
         done
     else
         fail 'kubectl get clusterrolebinding failed — is the cluster reachable?'
     fi
 
-    # after `make cilium`: kube-system cilium pods report Running (sample assertion)
+    # after `task cilium`: kube-system cilium pods report Running (sample assertion)
     if _cilium_pods=$(kubectl --kubeconfig="${_kubeconfig_path}" -n kube-system get pods -l k8s-app=cilium 2>&1); then
         if printf '%s\n' "${_cilium_pods}" | grep -q 'Running'; then
-            pass 'kube-system cilium pods are Running (after make cilium)'
+            pass 'kube-system cilium pods are Running (after task cilium)'
         else
-            fail 'no Running cilium pod in kube-system (run make cilium)'
+            fail 'no Running cilium pod in kube-system (run task cilium)'
         fi
     else
         fail 'kubectl get cilium pods failed — is the cluster reachable?'

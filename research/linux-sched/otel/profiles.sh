@@ -144,7 +144,7 @@ profile_bytes() {
 start_forward() {
     local pod port
     pod="$(alloy_pod_on "$TARGET_NODE")"
-    [[ -n "$pod" ]] || die "no Ready Alloy pod on ${TARGET_NODE}; run 'make linux-sched-otel-apply' first"
+    [[ -n "$pod" ]] || die "no Ready Alloy pod on ${TARGET_NODE}; run 'task linux-sched-otel-apply' first"
     port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
     kubectl_wl -n "$OBSERVER_NAMESPACE" port-forward "pod/${pod}" "${port}:12345" \
         >"${PROFILE_TMP}/forward-${port}.log" 2>&1 &

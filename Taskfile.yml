@@ -1,0 +1,823 @@
+# k8labs — Kubernetes OS Image Build System
+#
+# Taskfile replacement for the former root Makefile. Run `task --list` for the
+# task index. The research series are included below and keep their existing
+# hyphenated task names.
+version: '3'
+
+shell: bash
+silent: true
+set: [errexit, nounset, pipefail]
+shopt: [globstar]
+
+includes:
+  research:
+    taskfile: ./research/Taskfile.yml
+    flatten: true
+
+vars:
+  PROJECT_ROOT: '{{.ROOT_DIR}}'
+  FIRMWARE_URL: https://github.com/cloud-hypervisor/edk2/releases/latest/download/CLOUDHV.fd
+  FIRMWARE_DEST: build/CLOUDHV.fd
+  FEDORA_CLOUD_URL: https://mirror.arizona.edu/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+  FEDORA_CLOUD_CHECKSUM: 28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f
+  FEDORA_CLOUD_DEST: build/fedora-cloud-base.qcow2
+  BASE_IMAGE_DEST: build/k8labs-base.qcow2
+  CLOUDINIT_DISK: build/cloudinit.img
+  SSH_KEY: build/packer-ssh-key
+  PACKER_VERSION: '{{.PACKER_VERSION | default "1.16.1"}}'
+  PACKER_PLUGIN_REF: '{{.PACKER_PLUGIN_REF | default "e902aef57dadb47f0dfe40c9a8ade9cd9fb50d2f"}}'
+  KUBERNETES_VERSION: '{{.KUBERNETES_VERSION | default "v1.37.0"}}'
+  CRIO_VERSION: '{{.CRIO_VERSION | default "v1.37.0"}}'
+  CRUN_VERSION: '{{.CRUN_VERSION | default "1.29.1"}}'
+  CILIUM_VERSION: '{{.CILIUM_VERSION | default "v1.20.2"}}'
+  BAKE_IMAGE: localhost/k8labs-bake:dev
+  K8LABS_CACHE_ROOT:
+    sh: printf '%s' "${K8LABS_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/k8labs}"
+  MGMT_CLUSTER_NAME: '{{.MGMT_CLUSTER_NAME | default "k8labs-mgmt"}}'
+  MGMT_CONTEXT: '{{.MGMT_CONTEXT | default (printf "kind-%s" .MGMT_CLUSTER_NAME)}}'
+  MGMT_FORCE: '{{.MGMT_FORCE | default "0"}}'
+  CLUSTER_NAME: '{{.CLUSTER_NAME | default "k8labs"}}'
+  WORKLOAD_KUBECONFIG: build/kubeconfig
+  HOST_AGENT_CONFIG:
+    sh: printf '%s' "${HOST_AGENT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/k8labs/host-agent}"
+  MULTI_CLUSTER2_NAME: k8labs-2
+  MULTI_CLUSTER2_MANIFEST: capi/cluster-lab2.yaml
+  MULTI_KUBECONFIG_1: build/kubeconfig.k8labs
+  MULTI_KUBECONFIG_2: build/kubeconfig.k8labs-2
+  SMOKE_KUBECONFIG: '{{.SMOKE_KUBECONFIG | default "build/kubeconfig"}}'
+  LEGACY_KUBECONFIG: '{{.LEGACY_KUBECONFIG | default "kubeconfig"}}'
+  VAR_FILE: '{{.VAR_FILE | default "vars.pkrvars.hcl"}}'
+  RUN_ID: '{{.RUN_ID | default ""}}'
+  RUN_RETENTION_DAYS: '{{.RUN_RETENTION_DAYS | default "14"}}'
+
+tasks:
+  default:
+    desc: List the available tasks
+    aliases: [help]
+    cmds:
+      - '{{.TASK_EXE}} --list'
+
+  # --- Base image ---
+
+  bake-image:
+    desc: Build the rootless bake container image (packer + CH plugin + bake-net.sh)
+    cmds:
+      - |
+        echo '==> Building bake container image ({{.BAKE_IMAGE}})...'
+        podman build -t "{{.BAKE_IMAGE}}" \
+          --build-arg PACKER_PLUGIN_REF="{{.PACKER_PLUGIN_REF}}" \
+          bake/
+
+  plugin:
+    desc: Build/refresh the bake container image
+    cmds:
+      - task: bake-image
+
+  plugin-rebuild:
+    desc: Force refresh of the bake container image
+    cmds:
+      - task: bake-image
+
+  versions-check:
+    desc: Validate the immutable dependency lock and reject mutable references
+    cmd: python3 scripts/lock.py --lock versions.lock.yaml
+
+  prepare-render-capi:
+    desc: Normalize a verified CAPI release manifest before cache validation
+    deps: [versions-check]
+    env:
+      CAPI_CORE_COMPONENTS: '{{.CAPI_CORE_COMPONENTS | default ""}}'
+      CAPI_RENDERED_OUTPUT: '{{.CAPI_RENDERED_OUTPUT | default ""}}'
+    cmd: |
+      set -Eeuo pipefail
+      input="${CAPI_CORE_COMPONENTS:-{{.K8LABS_CACHE_ROOT}}/bootstrap/cluster-api-v1.14.2/core-components.yaml}"
+      output="${CAPI_RENDERED_OUTPUT:-{{.K8LABS_CACHE_ROOT}}/manifests/cluster-api-v1.14.2-core-components.yaml}"
+      test -f "$input" || { echo "ERROR: verified CAPI manifest not found: $input" >&2; exit 1; }
+      python3 scripts/normalize_manifest.py "$input" "$output"
+      printf 'normalized CAPI manifest: %s\n' "$output"
+
+  prepare-check:
+    desc: Require a verified artifact cache for offline execution
+    deps: [versions-check]
+    cmd: |
+      set -Eeuo pipefail
+      lock_sha=$(python3 scripts/lock.py --lock versions.lock.yaml | sed -n 's/^lock_sha256=//p')
+      python3 scripts/offline.py --cache-root "{{.K8LABS_CACHE_ROOT}}" --lock-digest "$lock_sha"
+
+  prepare-prune:
+    desc: Remove cache keys not referenced by the active lock
+    deps: [versions-check]
+    cmd: python3 scripts/cache.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --prune
+
+  registry-install:
+    desc: Install the k8labs rootless registry quadlet
+    cmd: |
+      set -Eeuo pipefail
+      qdir="${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
+      mkdir -p "$qdir" "$HOME/.local/state/k8slab/registry"
+      install -m 0644 quadlet/registry.container "$qdir/k8slabs-registry.container"
+      systemctl --user daemon-reload
+
+  registry-up:
+    desc: Start the local registry
+    deps: [registry-install]
+    cmd: systemctl --user start k8slabs-registry.service
+
+  registry-down:
+    desc: Stop the local registry without deleting its state
+    cmd: systemctl --user stop k8slabs-registry.service || true
+
+  registry-check:
+    desc: Verify the local registry API is reachable
+    cmd: python3 -c 'import urllib.request; response=urllib.request.urlopen("http://127.0.0.1:5000/v2/", timeout=5); assert response.status in (200, 401)'
+
+  prepare:
+    desc: Download and verify artifacts into the lock-keyed cache
+    deps: [versions-check]
+    cmd: |
+      set -Eeuo pipefail
+      mkdir -p "{{.K8LABS_CACHE_ROOT}}"
+      python3 scripts/cache.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --populate
+
+  run-bundle:
+    desc: Create a redacted schema-versioned run bundle
+    cmd: |
+      set -Eeuo pipefail
+      args=(--lock versions.lock.yaml)
+      if [ -n "{{.RUN_ID}}" ]; then args+=(--run-id "{{.RUN_ID}}"); fi
+      python3 scripts/run_bundle.py "${args[@]}"
+
+  prune-runs:
+    desc: Remove successful run bundles older than RUN_RETENTION_DAYS
+    cmd: |
+      set -Eeuo pipefail
+      days="{{.RUN_RETENTION_DAYS}}"
+      find build/runs -mindepth 1 -maxdepth 1 -type d -mtime "+$days" -exec rm -rf -- {} + 2>/dev/null || true
+
+  kind-up:
+    desc: Create or reuse the cached-image Kind management cluster
+    deps: [prepare-check]
+    cmd: |
+      set -Eeuo pipefail
+      command -v kind >/dev/null 2>&1 || { echo "ERROR: kind is required; install the locked kind version" >&2; exit 1; }
+      python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --image-id kind-node
+      if kind get clusters 2>/dev/null | grep -qx "{{.MGMT_CLUSTER_NAME}}"; then
+        echo 'Kind management cluster already exists'
+        kind export kubeconfig --name "{{.MGMT_CLUSTER_NAME}}"
+      else
+        kind create cluster --name "{{.MGMT_CLUSTER_NAME}}" --config kind.yaml
+      fi
+      kubectl config get-contexts -o name | grep -qx "{{.MGMT_CONTEXT}}" || {
+        echo "ERROR: Kind cluster {{.MGMT_CLUSTER_NAME}} did not provide context {{.MGMT_CONTEXT}}" >&2
+        exit 1
+      }
+
+  kind-down:
+    desc: Delete the owned Kind management cluster only when it has no CAPI Clusters (MGMT_FORCE=1 overrides)
+    cmd: |
+      set -Eeuo pipefail
+      if ! kind get clusters 2>/dev/null | grep -qx "{{.MGMT_CLUSTER_NAME}}"; then
+        echo 'Kind management cluster does not exist'
+        exit 0
+      fi
+      if [ "{{.MGMT_FORCE}}" != 1 ] && kubectl --context "{{.MGMT_CONTEXT}}" get clusters.cluster.x-k8s.io --no-headers 2>/dev/null | grep -q .; then
+        echo 'ERROR: refusing to delete management cluster while CAPI Cluster objects remain; run task cluster-down or set MGMT_FORCE=1' >&2
+        exit 1
+      fi
+      kind delete cluster --name "{{.MGMT_CLUSTER_NAME}}"
+
+  kind-check:
+    desc: Check Kind management-cluster reachability
+    cmd: kubectl --context "{{.MGMT_CONTEXT}}" get nodes --no-headers
+
+  base-deps:
+    desc: Download CLOUDHV.fd firmware and Fedora Cloud Base image
+    cmd: |
+      set -Eeuo pipefail
+      echo '==> Downloading Cloud-Hypervisor UEFI firmware (CLOUDHV.fd)...'
+      mkdir -p build
+      if [ ! -f "{{.FIRMWARE_DEST}}" ]; then
+        curl -fL -o "{{.FIRMWARE_DEST}}" "{{.FIRMWARE_URL}}"
+        echo '    Downloaded CLOUDHV.fd'
+      else
+        echo '    CLOUDHV.fd already exists'
+      fi
+      echo '==> Downloading Fedora Cloud Base image...'
+      if [ ! -f "{{.FEDORA_CLOUD_DEST}}" ]; then
+        curl -fL -o "{{.FEDORA_CLOUD_DEST}}" "{{.FEDORA_CLOUD_URL}}"
+        echo "    Verifying checksum..."
+        echo "{{.FEDORA_CLOUD_CHECKSUM}}  {{.FEDORA_CLOUD_DEST}}" | sha256sum -c - || {
+          echo '    WARNING: checksum mismatch, deleting corrupted download'
+          rm -f "{{.FEDORA_CLOUD_DEST}}"
+          exit 1
+        }
+      else
+        echo '    Fedora Cloud image already exists'
+      fi
+      echo '==> Converting Fedora Cloud image to raw format (CH is more compatible)...'
+      fedora_dest="{{.FEDORA_CLOUD_DEST}}"
+      raw_dest="${fedora_dest%.qcow2}.raw"
+      rm -f "$raw_dest"
+      qemu-img convert -O raw "$fedora_dest" "$raw_dest"
+      echo '    Converted to raw format (always fresh: the bake mutates the raw in place)'
+
+  base-ssh-key:
+    desc: Generate SSH keypair for Packer provisioning
+    cmd: |
+      set -Eeuo pipefail
+      echo '==> Generating Packer SSH keypair...'
+      if [ ! -f "{{.SSH_KEY}}" ]; then
+        ssh-keygen -t ed25519 -f "{{.SSH_KEY}}" -N "" -q
+        echo '    Generated {{.SSH_KEY}}'
+      else
+        echo '    SSH key already exists'
+      fi
+
+  base-cloudinit:
+    desc: Generate cloud-init CIDATA disk for Packer build
+    deps: [base-ssh-key]
+    cmd: |
+      set -Eeuo pipefail
+      echo '==> Generating cloud-init disk for Packer build...'
+      tmp=$(mktemp)
+      trap 'rm -f "$tmp"' EXIT
+      pub_key=$(cat "{{.SSH_KEY}}.pub")
+      sed "s|__SSH_PUBLIC_KEY__|$pub_key|" packer/cloud-init/user-data > "$tmp"
+      scripts/create-cloudinit.sh \
+        --user-data "$tmp" \
+        --meta-data packer/cloud-init/meta-data \
+        --network-config packer/cloud-init/network-config \
+        --output "{{.CLOUDINIT_DISK}}"
+
+  stock-kernel:
+    desc: Fetch and verify the pinned stock Fedora kernel RPMs
+    cmd: scripts/fetch-stock-kernel.sh
+
+  custom-kernel:
+    desc: Build the local-tree comparison kernel RPM (kernel-k8labs)
+    cmd: scripts/build-custom-kernel.sh
+
+  kernels:
+    desc: Fetch stock and build custom kernel RPMs
+    cmds:
+      - task: stock-kernel
+      - task: custom-kernel
+
+  base:
+    desc: Build base image via Packer in the rootless bake container
+    deps: [bake-image, base-deps, base-cloudinit, sysexts, confexts]
+    cmd: |
+      set -Eeuo pipefail
+      if [ -f "{{.BASE_IMAGE_DEST}}" ]; then
+        newest_raw="$(ls -t extensions/release/*.raw 2>/dev/null | head -n1)"
+        if [ -n "$newest_raw" ] && [ "$newest_raw" -nt "{{.BASE_IMAGE_DEST}}" ]; then
+          echo 'Extension images are newer than {{.BASE_IMAGE_DEST}}; rebuilding base image...'
+        else
+          echo 'Base image already exists: {{.BASE_IMAGE_DEST}}'
+          echo 'To force a rebuild, run: task base-rebuild'
+          exit 0
+        fi
+      fi
+      echo 'Building base image via Packer in the bake container...'
+      rm -rf build/base-image packer/output-base
+      "{{.TASK_EXE}}" base-esp-raw
+      "{{.TASK_EXE}}" bake-run
+      echo 'Copying base image to build/...'
+      artifact=$(find packer/output-base -maxdepth 1 -type f ! -name '*.lock' | head -1)
+      if [ -z "$artifact" ]; then
+        echo 'ERROR: no Packer artifact found in packer/output-base/' >&2
+        exit 1
+      fi
+      mkdir -p build
+      qemu-img convert -O qcow2 "$artifact" "{{.BASE_IMAGE_DEST}}"
+      echo "    Converted $artifact -> {{.BASE_IMAGE_DEST}}"
+
+  bake-run:
+    desc: Run the Packer build inside the rootless bake container
+    cmd: |
+      set -Eeuo pipefail
+      podman run --rm \
+        --device /dev/kvm --device /dev/net/tun \
+        --cap-add NET_ADMIN,NET_RAW \
+        --sysctl net.ipv4.ip_forward=1 \
+        -v "{{.ROOT_DIR}}/build:/src/build" \
+        -v "{{.ROOT_DIR}}/packer:/src/packer" \
+        -v "{{.ROOT_DIR}}/extensions:/src/extensions" \
+        -w /src/packer \
+        "{{.BAKE_IMAGE}}" \
+        packer build -var-file={{.VAR_FILE}} -only=cloud-hypervisor.base .
+
+  base-esp-raw:
+    desc: Materialize the 256M-ESP Fedora source as raw for the comparison bake
+    cmd: scripts/prepare-esp-image.sh
+
+  base-rebuild:
+    desc: Force rebuild of the base image
+    deps: [bake-image, base-deps, base-cloudinit, sysexts, confexts]
+    cmd: |
+      set -Eeuo pipefail
+      echo 'Forcing base image rebuild via Packer in the bake container...'
+      rm -f "{{.BASE_IMAGE_DEST}}"
+      rm -rf build/base-image packer/output-base
+      "{{.TASK_EXE}}" base-esp-raw
+      "{{.TASK_EXE}}" bake-run
+      artifact=$(find packer/output-base -maxdepth 1 -type f ! -name '*.lock' | head -1)
+      if [ -z "$artifact" ]; then
+        echo 'ERROR: no Packer artifact found in packer/output-base/' >&2
+        exit 1
+      fi
+      mkdir -p build
+      qemu-img convert -O qcow2 "$artifact" "{{.BASE_IMAGE_DEST}}"
+      echo "    Converted $artifact -> {{.BASE_IMAGE_DEST}}"
+
+  # --- System extensions ---
+
+  download-sysexts:
+    desc: Download pre-built sysext binaries from upstream
+    cmd: extensions/download-sysexts.sh
+
+  sysext/kubelet:
+    desc: Build the kubelet sysext
+    cmds:
+      - echo 'Downloading kubelet binary...'
+      - extensions/download-sysexts.sh kubelet
+      - echo 'Packaging kubelet sysext...'
+      - extensions/build.sh sysext sysext/kubelet kubelet
+
+  sysext/cri-o:
+    desc: Build the cri-o sysext
+    cmds:
+      - echo 'Downloading cri-o binaries...'
+      - extensions/download-sysexts.sh cri-o
+      - echo 'Packaging cri-o sysext...'
+      - extensions/build.sh sysext sysext/cri-o cri-o
+
+  sysext/crun:
+    desc: Build the crun sysext
+    cmds:
+      - echo 'Downloading crun binary...'
+      - extensions/download-sysexts.sh crun
+      - echo 'Packaging crun sysext...'
+      - extensions/build.sh sysext sysext/crun crun
+
+  sysext/cni:
+    desc: Build the CNI plugins sysext
+    cmds:
+      - echo 'Downloading CNI plugins...'
+      - extensions/download-sysexts.sh cni
+      - echo 'Packaging CNI sysext...'
+      - extensions/build.sh sysext sysext/cni cni
+
+  sysext/etcd:
+    desc: Build etcd sysext (etcd + etcdctl + systemd unit)
+    cmds:
+      - echo 'Downloading etcd binaries...'
+      - extensions/download-sysexts.sh etcd
+      - echo 'Packaging etcd sysext...'
+      - extensions/build.sh sysext sysext/etcd etcd
+
+  sysext/kubernetes-cp:
+    desc: Build kubernetes-cp sysext (apiserver, cm, scheduler, kubectl)
+    cmds:
+      - echo 'Downloading Kubernetes control-plane binaries...'
+      - extensions/download-sysexts.sh kubernetes-cp
+      - echo 'Packaging kubernetes-cp sysext...'
+      - extensions/build.sh sysext sysext/kubernetes-cp kubernetes-cp
+
+  sysext/perfetto:
+    desc: Build perfetto sysext (tracebox)
+    cmds:
+      - echo 'Downloading tracebox binary...'
+      - extensions/download-sysexts.sh perfetto
+      - echo 'Packaging perfetto sysext...'
+      - extensions/build.sh sysext sysext/perfetto perfetto
+
+  sysexts:
+    desc: Build all sysext extensions in parallel
+    deps:
+      - for: [kubelet, cri-o, crun, cni, etcd, kubernetes-cp, perfetto]
+        task: sysext/{{.ITEM}}
+    cmds:
+      - echo 'Building all sysexts in parallel...'
+
+  confext/cri-o:
+    desc: Build confext cri-o configuration overlay
+    cmd: extensions/build.sh confext confext/cri-o confext-cri-o
+
+  confext/kubernetes:
+    desc: Build confext kubernetes configuration overlay
+    cmd: extensions/build.sh confext confext/kubernetes confext-kubernetes
+
+  confext/containers:
+    desc: Build confext containers configuration overlay
+    cmd: extensions/build.sh confext confext/containers confext-containers
+
+  confexts:
+    desc: Build all confext extensions in parallel
+    deps:
+      - for: [cri-o, kubernetes, containers]
+        task: confext/{{.ITEM}}
+    cmds:
+      - echo 'Building all confexts in parallel...'
+
+  extensions:
+    desc: Build all extensions (sysexts + confexts)
+    cmds:
+      - task: sysexts
+      - task: confexts
+      - echo 'All extensions built.'
+
+  all:
+    desc: Build base image + all extensions
+    cmds:
+      - task: base
+      - task: extensions
+      - echo 'Full build complete.'
+
+  # --- CAPI management plane ---
+
+  host-agent-install:
+    desc: Render the separately managed HostAgent service from locked inputs
+    deps: [prepare-check]
+    cmds:
+      - python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --image-id cluster-api-hypervisor
+      - python3 scripts/host_agent.py install --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --config-dir "{{.HOST_AGENT_CONFIG}}"
+
+  host-agent-up:
+    desc: Start the separately managed HostAgent service
+    cmds:
+      - task: host-agent-install
+      - python3 scripts/host_agent.py start --config-dir "{{.HOST_AGENT_CONFIG}}"
+
+  host-agent-check:
+    desc: Verify HostAgent service state and required local inputs
+    cmd: python3 scripts/host_agent.py check --config-dir "{{.HOST_AGENT_CONFIG}}"
+
+  prereq:
+    desc: Validate tools, KVM access, baked artifacts, and the locked management cache
+    cmd: |
+      set -euo pipefail
+      fail=0
+      for cmd in cloud-hypervisor openssl jq python3 clusterctl kubectl podman kind skopeo; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+          echo "ERROR: required tool '$cmd' not found on PATH" >&2
+          fail=1
+        fi
+      done
+      if [ ! -d ".venv" ]; then
+        echo "ERROR: Python virtual environment '.venv' not found - run task node-tools first" >&2
+        fail=1
+      fi
+      if [ ! -e /dev/kvm ]; then
+        echo 'ERROR: /dev/kvm not found - KVM acceleration is required to run lab VMs' >&2
+        fail=1
+      fi
+      if ! id -nG 2>/dev/null | grep -qw kvm; then
+        echo "ERROR: current user is not in the kvm group - add your user to the kvm group: sudo usermod -aG kvm $USER" >&2
+        fail=1
+      fi
+      if [ ! -f "{{.BASE_IMAGE_DEST}}" ]; then
+        echo "ERROR: base image '{{.BASE_IMAGE_DEST}}' not found - run 'task base' to bake it first" >&2
+        fail=1
+      fi
+      if [ ! -f "{{.FIRMWARE_DEST}}" ]; then
+        echo "ERROR: firmware '{{.FIRMWARE_DEST}}' not found - run 'task base' to fetch it first" >&2
+        fail=1
+      fi
+      exit "$fail"
+
+  mgmt-bootstrap:
+    desc: Bootstrap cert-manager, CAPI, and the hardened provider manager in Kind
+    cmds:
+      - task: kind-up
+      - task: host-agent-up
+      - cmd: |
+          set -Eeuo pipefail
+          python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --image-id cluster-api-hypervisor --kind-name "{{.MGMT_CLUSTER_NAME}}"
+          python3 scripts/bootstrap_management.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --context "{{.MGMT_CONTEXT}}" --host-agent-config "{{.HOST_AGENT_CONFIG}}"
+
+  mgmt-check:
+    desc: Verify management controllers and HostAgent connectivity
+    cmds:
+      - task: kind-check
+      - task: host-agent-check
+      - cmd: |
+          set -Eeuo pipefail
+          kubectl --context "{{.MGMT_CONTEXT}}" -n cert-manager wait --for=condition=Available deployment --all --timeout=5m
+          kubectl --context "{{.MGMT_CONTEXT}}" -n hypervisor-system wait --for=condition=Available deployment/controller-manager --timeout=5m
+          python3 scripts/host_agent.py check --config-dir "{{.HOST_AGENT_CONFIG}}"
+
+  mgmt-up:
+    desc: Create the Kind management plane and bootstrap its controllers
+    cmds:
+      - task: prereq
+      - task: mgmt-bootstrap
+      - task: mgmt-check
+
+  mgmt-down:
+    desc: Destructive alias for kind-down; HostAgent state is preserved
+    cmds:
+      - task: kind-down
+
+  provider-loopback-forward:
+    desc: Work around the pinned provider dialing loopback (see research/linux-sched/GATES.md)
+    cmd: python3 scripts/provider_loopback_forward.py --context "{{.MGMT_CONTEXT}}"
+
+  cluster-up:
+    desc: Server-side apply capi/cluster.yaml against the Kind management plane (idempotent)
+    cmd: |
+      set -euo pipefail
+      echo '==> Applying capi/cluster.yaml (server-side) to the management plane...'
+      kubectl --context "{{.MGMT_CONTEXT}}" apply --server-side -f capi/cluster.yaml
+      echo '    Cluster manifest applied'
+
+  addons-generate:
+    desc: Generate addon resource-set Secrets into build/capi-addons/ (deterministic output)
+    cmd: |
+      set -euo pipefail
+      echo '==> Generating addon resource-set Secrets...'
+      uv run python scripts/generate_capi_addons.py --repo-root . --output-dir build/capi-addons
+      echo '    Generated secrets written to build/capi-addons/'
+
+  addons-check:
+    desc: Validate that generated addon secrets match the committed source trees
+    cmd: |
+      set -euo pipefail
+      echo '==> Checking addon resource-set Secrets against source trees...'
+      uv run python scripts/generate_capi_addons.py --repo-root . --output-dir build/capi-addons --check
+      echo '    Addon secrets validated OK'
+
+  addons-clean:
+    desc: Remove generated addon resource-set Secrets (build/capi-addons/)
+    cmd: |
+      set -euo pipefail
+      echo '==> Removing generated addon secrets...'
+      rm -rf build/capi-addons
+      echo '    Removed build/capi-addons/'
+
+  addons-up:
+    desc: Generate then apply addon resources (Secrets first, then CRS manifests)
+    cmds:
+      - task: addons-generate
+      - cmd: |
+          set -euo pipefail
+          echo '==> Applying generated addon Secrets (server-side)...'
+          kubectl --context "{{.MGMT_CONTEXT}}" apply --server-side -f build/capi-addons/
+          echo '    Generated Secrets applied'
+          echo '==> Applying capi/addons/ ClusterResourceSets (server-side)...'
+          kubectl --context "{{.MGMT_CONTEXT}}" apply --server-side -f capi/addons/
+          echo '    ClusterResourceSet addons applied'
+
+  cluster-down:
+    desc: Delete the workload Cluster via the management plane and wait for reclamation
+    cmd: |
+      set -euo pipefail
+      echo '==> Deleting Cluster {{.CLUSTER_NAME}} via the management plane...'
+      kubectl --context "{{.MGMT_CONTEXT}}" delete "cluster.cluster.x-k8s.io/{{.CLUSTER_NAME}}"
+      echo '==> Waiting for infrastructure reclamation...'
+      kubectl --context "{{.MGMT_CONTEXT}}" wait --for=delete "cluster.cluster.x-k8s.io/{{.CLUSTER_NAME}}" --timeout=10m
+      echo '    Cluster deleted and reclaimed'
+
+  cluster-clean:
+    desc: Remove leftover workload-cluster resources on the management plane without deleting the plane itself
+    cmd: |
+      set -euo pipefail
+      if ! command -v kubectl >/dev/null 2>&1; then
+        echo 'ERROR: kubectl not found on PATH' >&2
+        exit 1
+      fi
+      echo '==> Cleaning leftover workload-cluster resources on the management plane...'
+      kubectl --context "{{.MGMT_CONTEXT}}" delete hypervisormachines.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name={{.CLUSTER_NAME}}" --ignore-not-found
+      kubectl --context "{{.MGMT_CONTEXT}}" delete hypervisormachinetemplates.infrastructure.cluster.x-k8s.io -l "cluster.x-k8s.io/cluster-name={{.CLUSTER_NAME}}" --ignore-not-found
+      echo '    Leftover workload-cluster resources cleaned'
+
+  cluster:
+    desc: 'Full CAPI pipeline: management bootstrap -> cluster -> addons -> ready -> kubeconfig -> smoke-test'
+    cmds:
+      - task: mgmt-up
+      - cmd: |
+          set -Eeuo pipefail
+          "{{.TASK_EXE}}" cluster-up
+          "{{.TASK_EXE}}" addons-up
+          echo '==> Waiting for Cluster {{.CLUSTER_NAME}} to become Available...'
+          kubectl --context "{{.MGMT_CONTEXT}}" wait --for=condition=Available "cluster.cluster.x-k8s.io/{{.CLUSTER_NAME}}" --timeout=30m
+          "{{.TASK_EXE}}" kubeconfig
+          echo '==> Waiting for all three workload Nodes to become Ready...'
+          kubectl --kubeconfig "{{.WORKLOAD_KUBECONFIG}}" wait --for=condition=Ready nodes --all --timeout=10m
+          node_count=$(kubectl --kubeconfig "{{.WORKLOAD_KUBECONFIG}}" get nodes --no-headers | wc -l | tr -d '[:space:]')
+          if [ "$node_count" -ne 3 ]; then echo "ERROR [readiness] expected 3 workload Nodes, found $node_count" >&2; exit 1; fi
+          "{{.TASK_EXE}}" smoke-test
+          echo 'Cluster ready.'
+
+  kubeconfig:
+    desc: Fetch the workload kubeconfig Secret and write build/kubeconfig
+    cmd: |
+      set -euo pipefail
+      mkdir -p build
+      secret_json=$(mktemp)
+      kubeconfig_out=$(mktemp)
+      trap 'rm -f "$secret_json" "$kubeconfig_out"' EXIT
+      echo "==> Fetching Secret {{.CLUSTER_NAME}}-kubeconfig from the management plane..."
+      kubectl --context "{{.MGMT_CONTEXT}}" get secret "{{.CLUSTER_NAME}}-kubeconfig" -n default -o json > "$secret_json"
+      scripts/fetch-kubeconfig "$secret_json" > "$kubeconfig_out"
+      mv "$kubeconfig_out" "{{.WORKLOAD_KUBECONFIG}}"
+      chmod 600 "{{.WORKLOAD_KUBECONFIG}}"
+      echo "    Workload kubeconfig written to {{.WORKLOAD_KUBECONFIG}}"
+
+  update-kubeconfig:
+    desc: Alias for kubeconfig - explicitly signals refresh
+    cmds:
+      - task: kubeconfig
+
+  smoke-test:
+    desc: Apply the smoke-test Job against the workload cluster and wait for success
+    deps: [kubeconfig]
+    cmd: |
+      set -euo pipefail
+      echo '==> Running smoke-test Job against the workload cluster...'
+      kubectl --kubeconfig "{{.SMOKE_KUBECONFIG}}" apply -f capi/smoke-test/job.yaml
+      kubectl --kubeconfig "{{.SMOKE_KUBECONFIG}}" -n default wait --for=condition=complete job/lb-smoke-test --timeout=300s
+      echo '    Smoke test passed'
+
+  multi-cluster-test:
+    desc: Provision k8labs AND k8labs-2 concurrently, smoke-test both, tear both down
+    summary: |
+      Heavy end-to-end test: the concurrent workload VMs need a ~16 CPU /
+      ~28 GiB RAM floor on the host, on top of the management plane.
+      Budget 20-40 minutes. Every per-cluster kubectl lifecycle call uses an
+      isolated discovery cache so the two clusters do not share kubectl state.
+    cmds:
+      - task: prereq
+      - task: mgmt-up
+      - cmd: |
+          set -Eeuo pipefail
+          echo '==> Applying both Cluster manifests (server-side)...'
+          kubectl --context "{{.MGMT_CONTEXT}}" apply --server-side -f capi/cluster.yaml
+          kubectl --context "{{.MGMT_CONTEXT}}" apply --server-side -f "{{.MULTI_CLUSTER2_MANIFEST}}"
+          echo '    Both Cluster manifests applied'
+          echo '==> Waiting for Cluster {{.CLUSTER_NAME}} to become Available...'
+          if ! kubectl --context "{{.MGMT_CONTEXT}}" --cache-dir "build/.kube-cache-{{.CLUSTER_NAME}}" wait --for=condition=Available "cluster.cluster.x-k8s.io/{{.CLUSTER_NAME}}" --timeout=30m; then
+            echo "ERROR [readiness] Cluster {{.CLUSTER_NAME}} did not become Available within 30m" >&2
+            exit 1
+          fi
+          echo '==> Waiting for Cluster {{.MULTI_CLUSTER2_NAME}} to become Available...'
+          if ! kubectl --context "{{.MGMT_CONTEXT}}" --cache-dir "build/.kube-cache-{{.MULTI_CLUSTER2_NAME}}" wait --for=condition=Available "cluster.cluster.x-k8s.io/{{.MULTI_CLUSTER2_NAME}}" --timeout=30m; then
+            echo "ERROR [readiness] Cluster {{.MULTI_CLUSTER2_NAME}} did not become Available within 30m" >&2
+            exit 1
+          fi
+          echo '    Both Clusters Available'
+          mkdir -p build
+          fetch_wc_kubeconfig() {
+            cluster="$1"
+            out="$2"
+            secret_json="$(mktemp)"
+            echo "==> Fetching Secret ${cluster}-kubeconfig from the management plane..."
+            kubectl --context "{{.MGMT_CONTEXT}}" get secret "${cluster}-kubeconfig" -n default -o json > "$secret_json"
+            scripts/fetch-kubeconfig "$secret_json" > "$out"
+            chmod 600 "$out"
+            rm -f "$secret_json"
+          }
+          fetch_wc_kubeconfig "{{.CLUSTER_NAME}}" "{{.MULTI_KUBECONFIG_1}}"
+          fetch_wc_kubeconfig "{{.MULTI_CLUSTER2_NAME}}" "{{.MULTI_KUBECONFIG_2}}"
+          url1="$(awk '/^[[:space:]]*server:/ {print $2; exit}' "{{.MULTI_KUBECONFIG_1}}")"
+          url2="$(awk '/^[[:space:]]*server:/ {print $2; exit}' "{{.MULTI_KUBECONFIG_2}}")"
+          if [ -z "$url1" ] || [ -z "$url2" ]; then
+            echo 'ERROR [kubeconfig-endpoint] no server URL found in one of the fetched kubeconfigs' >&2
+            exit 1
+          fi
+          if [ "$url1" = "$url2" ]; then
+            echo "ERROR [kubeconfig-endpoint] port collision: {{.CLUSTER_NAME}} ($url1) and {{.MULTI_CLUSTER2_NAME}} ($url2) resolve to the SAME server URL; distinct published ports are required" >&2
+            exit 1
+          fi
+          echo "    Distinct API endpoints: {{.CLUSTER_NAME}} $url1, {{.MULTI_CLUSTER2_NAME}} $url2"
+          echo '==> Running the smoke-test Job against {{.CLUSTER_NAME}}...'
+          "{{.TASK_EXE}}" smoke-test SMOKE_KUBECONFIG="{{.MULTI_KUBECONFIG_1}}"
+          echo '==> Running the smoke-test Job against {{.MULTI_CLUSTER2_NAME}}...'
+          "{{.TASK_EXE}}" smoke-test SMOKE_KUBECONFIG="{{.MULTI_KUBECONFIG_2}}"
+          echo '==> Deleting both Clusters (best-effort)...'
+          del_failures=''
+          if ! kubectl --context "{{.MGMT_CONTEXT}}" --cache-dir "build/.kube-cache-{{.CLUSTER_NAME}}" delete "cluster.cluster.x-k8s.io/{{.CLUSTER_NAME}}"; then
+            echo "ERROR [teardown] deleting Cluster {{.CLUSTER_NAME}} failed" >&2
+            del_failures=" $del_failures {{.CLUSTER_NAME}}"
+          fi
+          if ! kubectl --context "{{.MGMT_CONTEXT}}" --cache-dir "build/.kube-cache-{{.MULTI_CLUSTER2_NAME}}" delete "cluster.cluster.x-k8s.io/{{.MULTI_CLUSTER2_NAME}}"; then
+            echo "ERROR [teardown] deleting Cluster {{.MULTI_CLUSTER2_NAME}} failed" >&2
+            del_failures=" $del_failures {{.MULTI_CLUSTER2_NAME}}"
+          fi
+          echo '==> Waiting for infrastructure reclamation (both Clusters)...'
+          if ! kubectl --context "{{.MGMT_CONTEXT}}" --cache-dir "build/.kube-cache-{{.CLUSTER_NAME}}" wait --for=delete "cluster.cluster.x-k8s.io/{{.CLUSTER_NAME}}" --timeout=10m; then
+            echo "ERROR [reclamation] Cluster {{.CLUSTER_NAME}} was not reclaimed within 10m" >&2
+            del_failures=" $del_failures {{.CLUSTER_NAME}}"
+          fi
+          if ! kubectl --context "{{.MGMT_CONTEXT}}" --cache-dir "build/.kube-cache-{{.MULTI_CLUSTER2_NAME}}" wait --for=delete "cluster.cluster.x-k8s.io/{{.MULTI_CLUSTER2_NAME}}" --timeout=10m; then
+            echo "ERROR [reclamation] Cluster {{.MULTI_CLUSTER2_NAME}} was not reclaimed within 10m" >&2
+            del_failures=" $del_failures {{.MULTI_CLUSTER2_NAME}}"
+          fi
+          if [ -n "$del_failures" ]; then
+            echo "ERROR [teardown] multi-cluster-test failed for cluster(s):$del_failures" >&2
+            exit 1
+          fi
+          echo 'Multi-cluster test passed.'
+
+  # --- Legacy cluster operations ---
+
+  metrics-server:
+    desc: Deploy metrics-server for kubectl top
+    cmd: |
+      set -euo pipefail
+      echo 'Deploying metrics-server...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" apply -f cilium/metrics-server.yaml
+      echo 'Waiting for metrics-server to be ready...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" -n kube-system wait --for=condition=Available deployment/metrics-server --timeout=60s
+      echo 'metrics-server ready. Run: kubectl top nodes'
+
+  coredns:
+    desc: Deploy CoreDNS cluster DNS (kube-dns Service at 10.96.0.10)
+    cmd: |
+      set -euo pipefail
+      echo 'Deploying CoreDNS...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" apply -f coredns/
+      echo 'Waiting for CoreDNS deployment to be Available...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" -n kube-system wait --for=condition=Available deployment/coredns --timeout=5m
+      echo 'Verifying kube-dns Service clusterIP...'
+      clusterip=$(kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
+      if [ "$clusterip" != "10.96.0.10" ]; then
+        echo "FAIL: kube-dns clusterIP is $clusterip, expected 10.96.0.10"
+        exit 1
+      fi
+      echo "PASS: kube-dns clusterIP is 10.96.0.10"
+      echo 'CoreDNS ready.'
+
+  rbac:
+    desc: Apply cluster RBAC (kubelet bootstrap, system:nodes, admin, apiserver-proxy)
+    cmd: |
+      set -euo pipefail
+      echo 'Applying cluster RBAC manifests...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" apply -f rbac/
+      echo 'RBAC ready.'
+
+  cilium:
+    desc: Install Cilium from committed manifests (cilium.io CRDs + install + policies)
+    deps: [rbac]
+    cmd: |
+      set -euo pipefail
+      echo 'Applying cilium.io CRD bundle (v{{.CILIUM_VERSION}}) first...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" apply -f cilium/install/00-crds/
+      echo 'Waiting for cilium.io CRDs to be established...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" wait --for=condition=Established \
+        crd/ciliumloadbalancerippools.cilium.io \
+        crd/ciliuml2announcementpolicies.cilium.io \
+        crd/ciliumgatewayclassconfigs.cilium.io \
+        crd/ciliumclusterwidenetworkpolicies.cilium.io \
+        crd/ciliumnetworkpolicies.cilium.io \
+        crd/ciliumcidrgroups.cilium.io \
+        crd/ciliumnodes.cilium.io \
+        crd/ciliumendpoints.cilium.io \
+        crd/ciliumidentities.cilium.io \
+        crd/ciliumegressgatewaypolicies.cilium.io \
+        crd/ciliumenvoyconfigs.cilium.io \
+        crd/ciliumlocalredirectpolicies.cilium.io --timeout=5m
+      echo 'Applying Cilium install manifests (Gateway API CRDs + install)...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" apply -f cilium/install/
+      echo 'Applying LB pool, L2 policy, and Gateway manifests...'
+      kubectl --kubeconfig "{{.LEGACY_KUBECONFIG}}" apply -f cilium/gatewayclass.yaml \
+        -f cilium/gateway-class-config.yaml -f cilium/gateway.yaml \
+        -f cilium/http-route.yaml -f cilium/lb-pool.yaml \
+        -f cilium/l2-policy.yaml
+      echo 'Cilium ready.'
+
+  # --- Cleanup and tooling ---
+
+  clean:
+    desc: Remove build artifacts
+    cmd: |
+      echo 'Removing build artifacts...'
+      rm -rf build/ extensions/release/*.raw
+
+  node-tools:
+    desc: Sync Python tooling with uv (creates .venv, idempotent)
+    cmd: |
+      echo '==> Syncing Python tooling (uv sync)...'
+      uv sync
+
+  test:
+    desc: Run the Python test suite (pytest)
+    cmd: |
+      echo '==> Running Python tests (pytest)...'
+      uv run pytest tests/
+
+  validate-packer:
+    desc: Validate Packer template syntax
+    dir: '{{.ROOT_DIR}}/packer'
+    cmd: |
+      echo 'Validating Packer template syntax...'
+      packer validate -var-file=vars.pkrvars.hcl .
+
+  validate:
+    desc: Run all validations (dependency lock + packer + python tooling)
+    cmds:
+      - task: node-tools
+      - task: versions-check
+      - task: validate-packer
+      - echo 'All validations passed.'

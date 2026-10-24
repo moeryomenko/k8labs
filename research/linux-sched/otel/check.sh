@@ -11,7 +11,7 @@
 #      Pyroscope retains 336h, and no session took stored bytes past the 9 GiB
 #      stop threshold.
 #
-# Run it as `make -C research linux-sched-otel-check` after the campaign.
+# Run it as `task linux-sched-otel-check` after the campaign.
 
 set -Eeuo pipefail
 shopt -s inherit_errexit

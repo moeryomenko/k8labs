@@ -103,7 +103,7 @@ the other three schedulers upstream (out of scope for this series).
 
 ## 6. Quota calibration (EEVDF pilot)
 
-`make linux-sched-quota-calibrate SCENARIO=<name>` starts at 1 CPU on EEVDF and
+`task linux-sched-quota-calibrate SCENARIO=<name>` starts at 1 CPU on EEVDF and
 tightens by the frozen step (0.9) until the measured window reaches the 10%
 throttling target. The ratio comes from differencing the container's cgroup v2
 `cpu.stat` across the window (`nr_throttled / nr_periods`), not from a whole-pod

@@ -146,7 +146,7 @@ management pod resolves to `169.254.1.2` and can reach.
 `hostNetwork: true` does **not** help: the Kind node container uses
 `NetworkMode=bridge`, so its loopback is not the lab host's either.
 
-Workaround (committed, re-runnable): `make provider-loopback-forward`
+Workaround (committed, re-runnable): `task provider-loopback-forward`
 
 `scripts/provider_loopback_forward.py` reads the control-plane
 HypervisorMachine's `status.publishedPorts` and installs a `loopback-forward`
@@ -157,7 +157,7 @@ time because they are allocated per cluster.
 
 **Durable fix:** release a provider image from `cluster-api-hypervisor` HEAD
 (contains `21ac0d1`), update `versions.lock.yaml` (source commit + image
-digest), `make prepare`, redeploy, then delete the workaround.
+digest), `task prepare`, redeploy, then delete the workaround.
 
 ## HostAgent image loss (environment gotcha)
 
@@ -167,7 +167,7 @@ not known` — the agent's container image was gone from local Podman storage. T
 provider manager then crashlooped with `dial tcp 10.89.0.2:9444: connect: no
 route to host`, because it checks agent health at startup.
 
-`make host-agent-install` reloads the image and restores the agent; the manager
+`task host-agent-install` reloads the image and restores the agent; the manager
 recovers. Worth knowing because the symptom (provider crashloop) looks like the
 endpoint bug but is a different failure.
 
@@ -282,7 +282,7 @@ The result is a container-side `sched_ext_ops` of 512/51 against the kernel's
 512/51. Stage the binaries with that worktree as the source:
 
 ```sh
-LINUX_SCHED_SCX_ROOT=<durable-path>/scx-kern make -C research linux-sched-scx-stage
+LINUX_SCHED_SCX_ROOT=<durable-path>/scx-kern task linux-sched-scx-stage
 ```
 
 ## `scx_mavd` — RESOLVED by the pinned linux-next source
@@ -558,7 +558,7 @@ to remove. The same load now runs for that long first and its result is
 discarded. The observers cover the warmup too, because otherwise adding a warmup
 would silently truncate the collection by its length.
 
-`make linux-sched-overhead` also passed `--instrumentation instruments-enabled`,
+`task linux-sched-overhead` also passed `--instrumentation instruments-enabled`,
 which the capture compares against `enabled`, so **both** variants ran
 uninstrumented and the overhead comparison measured nothing. The variants are
 `enabled`/`disabled` now.
@@ -606,7 +606,7 @@ image onto the nodes, and each one is avoidable only if it is known.
   digest keys `~/.cache/k8labs/locks/<digest>/`, and every bring-up target gates
   on that cache. Adding a research-only section changed the digest, so
   `host-agent-install` failed with a missing cache directory and the fix would
-  have been a full `make prepare`. The fixture pins were moved out of the lock:
+  have been a full `task prepare`. The fixture pins were moved out of the lock:
   they live in the packer variables and the digest-pinned manifests, which is
   where they are consumed. The lock is for bring-up inputs, and its header says
   to touch it only through the version-resolution workflow.
@@ -623,7 +623,7 @@ image onto the nodes, and each one is avoidable only if it is known.
   staged by `host_agent-install`, with its digest in `state/manifest.json`.
   A re-bake is only used after that step runs; it hashes on the host in 1 MB
   chunks, so staging is memory-safe, unlike the agent's own buffered hashing.
-- **`make provider-loopback-forward` must be re-run after a recreate.** The
+- **`task provider-loopback-forward` must be re-run after a recreate.** The
   forwarding sidecar's ports refer to the deleted cluster's VM ports.
 - **The host is the hard limit.** Four VMs (2 GiB control plane, 3 x 4 GiB
   workers) plus the Kind management plane plus a desktop session leave the host
@@ -711,11 +711,11 @@ replaced by hand: kill the `cloud-hypervisor --api-socket` process for that VM,
 remove its `state/vms/<vm>*` and `/tmp/ch-capi/<vm>`, clear the Machine's
 finalizers, delete the Machine, and let the MachineDeployment create a
 replacement. Three things follow. The replacement is **not labelled**, so
-`make -C research linux-sched-workers-label` must run again or the observer
+`task linux-sched-workers-label` must run again or the observer
 DaemonSet will not schedule there. Its observer Pod is not Ready for about two
 minutes while it installs the tooling, so a capture started too soon fails with
 `container not found ("observer")`. And its spool is empty, so the schedulers
-must be staged again with `make -C research linux-sched-scx-stage`, or the arm
+must be staged again with `task linux-sched-scx-stage`, or the arm
 fails with `bin/scx_<name>: No such file or directory`.
 
 **Truncated trace artifacts.** Killing the supervising exec does not always take
@@ -739,7 +739,7 @@ be read with a data-recovery flag.
 - `logs`/`exec` work, so the Kubernetes API is the result transport; SSH to the
   VMs is still unusable and is not used.
 - Before the first block: re-bake the image so the fixtures exist (the observer
-  will not start without them), then `make linux-sched-calibrate SCENARIO=http`
+  will not start without them), then `task linux-sched-calibrate SCENARIO=http`
   to freeze the offered rate the measured blocks then share.
 
 
@@ -775,7 +775,7 @@ kernel does not provide, so it remains blocked here. `scx_mlfq` and
 ### Staging
 
 Built schedulers are staged into the observer Pod on every research worker with
-`make linux-sched-scx-stage`. Staging is separate from running so a failed
+`task linux-sched-scx-stage`. Staging is separate from running so a failed
 build is caught before an experiment starts.
 
 ### Nitosis workload cgroup parent
@@ -790,7 +790,7 @@ rejects any path outside the allow-list. Override with
 ### Observer gate
 
 The observer DaemonSet and its node-native tooling are validated offline by
-`make linux-sched-observers-test` and `make linux-sched-observer-check`.
+`task linux-sched-observers-test` and `task linux-sched-observer-check`.
 
 ## Kernel source
 
@@ -809,12 +809,12 @@ and the replacement booted as a plain node.
 
 The rebuild that worked:
 
-1. `make cluster-down`, then stop the hypervisor agent;
+1. `task cluster-down`, then stop the hypervisor agent;
 2. kill leftover `cloud-hypervisor` and `passt` processes;
 3. clear the host-agent inventory (`vms`, `network_resources`,
    `published_ports`) and the per-VM artifacts;
 4. restart `k8netd` (stale `passt` processes were holding ports 20000-20005);
-5. `make cluster-up`, `make addons-up`, `make kubeconfig`.
+5. `task cluster-up`, `task addons-up`, `task kubeconfig`.
 
 The provider then allocated port 20009 and the control plane bootstrapped
 normally. All three nodes, both observers and the research labels are restored.

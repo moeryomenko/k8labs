@@ -1,0 +1,345 @@
+# k8labs Linux CPU-scheduler research — linux-sched series Taskfile
+#
+# Compares the default EEVDF scheduler against sched_ext implementations on a
+# pinned worker VM using a randomized, seeded paired-block crossover. See
+# README.md for the protocol and GATES.md for the deferred arms.
+version: '3'
+
+vars:
+  PROJECT_ROOT:
+    sh: git rev-parse --show-toplevel 2>/dev/null || pwd
+  LINUX_SCHED_DIR: '{{.TASKFILE_DIR}}'
+  LINUX_SCHED_EXPERIMENTS_DIR: '{{.LINUX_SCHED_DIR}}/experiments'
+  LINUX_SCHED_RUNNER: '{{.LINUX_SCHED_EXPERIMENTS_DIR}}/run-block.sh'
+  LINUX_SCHED_CONFIGS_DIR: '{{.LINUX_SCHED_EXPERIMENTS_DIR}}/scenarios'
+  LINUX_SCHED_CAPTURE_DIR: '{{.LINUX_SCHED_DIR}}/capture'
+  LINUX_SCHED_ANALYSIS_DIR: '{{.LINUX_SCHED_DIR}}/analysis'
+  LINUX_SCHED_TEST_DIR: '{{.LINUX_SCHED_DIR}}/tests'
+  LINUX_SCHED_OTEL_DIR: '{{.LINUX_SCHED_DIR}}/otel'
+  LINUX_SCHED_DATA_DIR: '{{.LINUX_SCHED_DATA_DIR | default "linux-sched"}}'
+  LINUX_SCHED_DATA_ROOT:
+    sh: |
+      if [ -n "${LINUX_SCHED_DATA_ROOT:-}" ]; then
+        printf '%s' "$LINUX_SCHED_DATA_ROOT"
+      elif [ -n "${K8LABS_RESEARCH_DATA_ROOT:-}" ]; then
+        printf '%s/%s' "$K8LABS_RESEARCH_DATA_ROOT" "{{.LINUX_SCHED_DATA_DIR}}"
+      else
+        printf '%s/build/research/%s' "{{.PROJECT_ROOT}}" "{{.LINUX_SCHED_DATA_DIR}}"
+      fi
+  LINUX_SCHED_QUOTA_DATA_DIR: '{{.LINUX_SCHED_QUOTA_DATA_DIR | default "linux-sched-cgroup-v2-quota"}}'
+  LINUX_SCHED_QUOTA_DATA_ROOT:
+    sh: |
+      if [ -n "${LINUX_SCHED_QUOTA_DATA_ROOT:-}" ]; then
+        printf '%s' "$LINUX_SCHED_QUOTA_DATA_ROOT"
+      elif [ -n "${K8LABS_RESEARCH_DATA_ROOT:-}" ]; then
+        printf '%s/%s' "$K8LABS_RESEARCH_DATA_ROOT" "{{.LINUX_SCHED_QUOTA_DATA_DIR}}"
+      else
+        printf '%s/build/research/%s' "{{.PROJECT_ROOT}}" "{{.LINUX_SCHED_QUOTA_DATA_DIR}}"
+      fi
+  LINUX_SCHED_ANALYSIS_OUTPUT: '{{.LINUX_SCHED_DATA_ROOT}}/analysis'
+  LINUX_SCHED_CONFIRMATORY_DIR: '{{.LINUX_SCHED_DATA_ROOT}}/confirmatory'
+  LINUX_SCHED_WORKER_PATTERN: '{{.LINUX_SCHED_WORKER_PATTERN | default "-md-"}}'
+  LINUX_SCHED_TARGET_NODE: '{{.LINUX_SCHED_TARGET_NODE | default ""}}'
+  KUBECONFIG: '{{.PROJECT_ROOT}}/build/kubeconfig'
+  K8LABS_RESEARCH_DATA_ROOT: '{{.K8LABS_RESEARCH_DATA_ROOT | default ""}}'
+  KEEP_BLOCKS: '{{.KEEP_BLOCKS | default "5"}}'
+  PROFILE_VOLUME:
+    sh: printf '%s' "${PROFILE_VOLUME:-{{.PROJECT_ROOT}}/../profile-data/pyroscope}"
+  PYROSCOPE_URL: '{{.PYROSCOPE_URL | default "http://127.0.0.1:4040"}}'
+
+tasks:
+  linux-sched-setup:
+    desc: Verify linux-sched prerequisites (tools, cluster, worker VM access)
+    cmd: |
+      set -Eeuo pipefail
+      echo "=== linux-sched — prerequisites ==="
+      fail=0
+      for cmd in kubectl jq python3; do
+        if command -v "$cmd" >/dev/null 2>&1; then echo "  [OK] $cmd"; else echo "  [MISSING] $cmd"; fail=1; fi
+      done
+      if [ "$fail" -ne 0 ]; then echo "ERROR: missing required tools" >&2; exit 1; fi
+      if [ ! -f "{{.KUBECONFIG}}" ]; then echo "  [MISSING] workload kubeconfig {{.KUBECONFIG}}" >&2; exit 1; fi
+      if kubectl --kubeconfig "{{.KUBECONFIG}}" get nodes --no-headers >/dev/null 2>&1; then
+        echo "  [OK] workload cluster reachable"
+      else
+        echo "  [FAIL] cannot reach workload cluster" >&2; exit 1
+      fi
+      echo "  Data root: {{.LINUX_SCHED_DATA_ROOT}}"
+      if [ -e "{{.LINUX_SCHED_DATA_ROOT}}" ]; then
+        case "{{.LINUX_SCHED_DATA_ROOT}}" in
+          "{{.PROJECT_ROOT}}/"*) echo "ERROR: data root must live outside the Git worktree" >&2; exit 1 ;;
+        esac
+      fi
+      echo "=== prerequisites satisfied ==="
+
+  linux-sched-validate:
+    desc: Validate linux-sched scenario configs (no cluster needed)
+    cmd: |
+      echo "Validating linux-sched scenario configs..."
+      "{{.LINUX_SCHED_RUNNER}}" --validate --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}"
+      echo "All linux-sched configs validated."
+
+  linux-sched-list-scenarios:
+    desc: List linux-sched workload scenarios
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" --list --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}"'
+
+  linux-sched-smoke:
+    desc: 'Pipeline check for one scenario: one block into the smoke tree (SCENARIO=<name>)'
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" run --scenario "{{.SCENARIO}}" --mode smoke --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_DATA_ROOT}}"'
+
+  linux-sched-pilot:
+    desc: Run a pilot block set for one scenario (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" run --scenario "{{.SCENARIO}}" --mode pilot --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_DATA_ROOT}}"'
+
+  linux-sched-experiment:
+    desc: Run confirmatory paired blocks for one scenario (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" run --scenario "{{.SCENARIO}}" --mode confirmatory --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_DATA_ROOT}}"'
+
+  linux-sched-overhead:
+    desc: Run the observer-overhead calibration for one scenario (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" overhead --scenario "{{.SCENARIO}}" --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_DATA_ROOT}}"'
+
+  linux-sched-calibrate:
+    desc: Freeze a scenario's offered rate on the control arm (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" calibrate --scenario "{{.SCENARIO}}" --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_DATA_ROOT}}"'
+
+  linux-sched-sample-size:
+    desc: Freeze each scenario's confirmatory block count from its pilot variance
+    cmd: |
+      if [ ! -f "{{.LINUX_SCHED_DATA_ROOT}}/pilot/blocks.csv" ]; then
+        echo "No pilot blocks.csv under {{.LINUX_SCHED_DATA_ROOT}}/pilot; run the pilots first."
+        exit 1
+      fi
+      python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/sample_size.py" \
+        --pilot-blocks "{{.LINUX_SCHED_DATA_ROOT}}/pilot/blocks.csv" \
+        --output "{{.LINUX_SCHED_DATA_ROOT}}/sample-size.json"
+      echo "  Frozen counts: {{.LINUX_SCHED_DATA_ROOT}}/sample-size.json"
+
+  linux-sched-analyze:
+    desc: Analyze paired blocks into summary.csv/json with the frozen decision rule
+    cmd: |
+      if [ ! -f "{{.LINUX_SCHED_CONFIRMATORY_DIR}}/blocks.csv" ]; then
+        echo "No confirmatory blocks.csv under {{.LINUX_SCHED_CONFIRMATORY_DIR}}; pilot data is deliberately not analysed."
+        exit 1
+      fi
+      python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/sched_analysis.py" \
+        --blocks "{{.LINUX_SCHED_CONFIRMATORY_DIR}}/blocks.csv" \
+        --output-dir "{{.LINUX_SCHED_ANALYSIS_OUTPUT}}"
+      echo "  Summary: {{.LINUX_SCHED_ANALYSIS_OUTPUT}}/summary.csv"
+
+  linux-sched-plots:
+    desc: Generate linux-sched plots from analyzed data
+    cmd: |
+      python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/sched_plots.py" \
+        --data-root "{{.LINUX_SCHED_CONFIRMATORY_DIR}}" \
+        --output-dir "{{.LINUX_SCHED_ANALYSIS_OUTPUT}}"
+      echo "  Plots: {{.LINUX_SCHED_ANALYSIS_OUTPUT}}/plots"
+
+  linux-sched-data-usage:
+    desc: Report data-root usage and what a prune would remove
+    cmd: python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/prune_data.py" --data-root "{{.LINUX_SCHED_DATA_ROOT}}"
+
+  linux-sched-prune:
+    desc: Drop large raw evidence from blocks older than KEEP_BLOCKS (default 5)
+    cmd: python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/prune_data.py" --data-root "{{.LINUX_SCHED_DATA_ROOT}}" --keep-blocks "{{.KEEP_BLOCKS}}" --apply
+
+  linux-sched-report:
+    desc: Print the linux-sched analysis report pointer
+    cmds:
+      - task: linux-sched-analyze
+      - |
+        echo "linux-sched analysis written to {{.LINUX_SCHED_ANALYSIS_OUTPUT}}"
+        echo "  summary.csv  — decision rule verdicts"
+        echo "  summary.json — schema-versioned machine-readable verdicts"
+
+  linux-sched-scx-stage:
+    desc: Stage the built sched_ext schedulers onto the research workers
+    cmd: '"{{.LINUX_SCHED_EXPERIMENTS_DIR}}/stage-scx.sh"'
+
+  linux-sched-observer-check:
+    desc: Check the node image installs the native observer tooling (no cluster needed)
+    cmd: |
+      echo "Checking node-native observer tooling provisioning..."
+      python3 "{{.LINUX_SCHED_EXPERIMENTS_DIR}}/observer_check.py"
+
+  linux-sched-observers-apply:
+    desc: Validate and apply the capability-scoped observer DaemonSet
+    cmd: '"{{.LINUX_SCHED_DIR}}/observers/apply.sh" apply'
+
+  linux-sched-workers-label:
+    desc: Label the worker nodes so the observer DaemonSet schedules on them
+    cmd: |
+      echo "Labelling nodes matching '{{.LINUX_SCHED_WORKER_PATTERN}}' as research workers..."
+      kubectl --kubeconfig "{{.KUBECONFIG}}" get nodes --no-headers \
+        -o custom-columns=':metadata.name' \
+        | grep -- "{{.LINUX_SCHED_WORKER_PATTERN}}" \
+        | xargs -r -I{} kubectl --kubeconfig "{{.KUBECONFIG}}" label node {} \
+          linux-sched/research=observer --overwrite
+      count=$(kubectl --kubeconfig "{{.KUBECONFIG}}" get nodes \
+        -l linux-sched/research=observer --no-headers | wc -l)
+      if [ "$count" -eq 0 ]; then
+        echo "ERROR: no node matched '{{.LINUX_SCHED_WORKER_PATTERN}}'; set LINUX_SCHED_WORKER_PATTERN" >&2
+        exit 1
+      fi
+      echo "  observer nodes: $count"
+
+  linux-sched-observers-delete:
+    desc: Delete the observer DaemonSet
+    cmd: '"{{.LINUX_SCHED_DIR}}/observers/apply.sh" delete'
+
+  linux-sched-observers-test:
+    desc: Validate the observer DaemonSet manifests offline
+    cmd: '"{{.LINUX_SCHED_DIR}}/observers/apply.sh" test'
+
+  linux-sched-otel-up:
+    desc: Start the host-side Pyroscope profile store
+    cmd: |
+      set -Eeuo pipefail
+      PROFILE_VOLUME="{{.PROFILE_VOLUME}}" "{{.LINUX_SCHED_OTEL_DIR}}/host/provision-volume.sh"
+      cd "{{.LINUX_SCHED_OTEL_DIR}}/host"
+      PROFILE_VOLUME="{{.PROFILE_VOLUME}}" docker compose up -d
+      echo "  Pyroscope: {{.PYROSCOPE_URL}} (volume {{.PROFILE_VOLUME}})"
+
+  linux-sched-otel-apply:
+    desc: Deploy the Alloy profiling DaemonSet on the research workers
+    cmd: |
+      if [ -z "{{.LINUX_SCHED_TARGET_NODE}}" ]; then
+        echo "ERROR: set LINUX_SCHED_TARGET_NODE to the fixed target worker; profiling every worker would mislabel samples" >&2
+        exit 1
+      fi
+      kubectl apply -f "{{.LINUX_SCHED_OTEL_DIR}}/k8s/alloy-configmap.yaml"
+      sed -e "s|__TARGET_NODE__|{{.LINUX_SCHED_TARGET_NODE}}|g" "{{.LINUX_SCHED_OTEL_DIR}}/k8s/alloy-daemonset.yaml" \
+        | kubectl apply -f -
+      kubectl -n linux-sched rollout status daemonset/linux-sched-otel-alloy --timeout=300s
+
+  linux-sched-otel-profiles:
+    desc: Run the fifteen labelled profiling sessions (never beside a comparison block)
+    cmd: |
+      PROFILE_VOLUME="{{.PROFILE_VOLUME}}" PYROSCOPE_URL="{{.PYROSCOPE_URL}}" \
+        K8LABS_RESEARCH_DATA_ROOT="{{.K8LABS_RESEARCH_DATA_ROOT}}" \
+        "{{.LINUX_SCHED_OTEL_DIR}}/profiles.sh"
+
+  linux-sched-otel-check:
+    desc: Verify the OTel campaign queries, health, counters, volume, retention and stop threshold
+    cmd: |
+      PROFILE_VOLUME="{{.PROFILE_VOLUME}}" PYROSCOPE_URL="{{.PYROSCOPE_URL}}" \
+        K8LABS_RESEARCH_DATA_ROOT="{{.K8LABS_RESEARCH_DATA_ROOT}}" \
+        "{{.LINUX_SCHED_OTEL_DIR}}/check.sh"
+
+  linux-sched-otel-down:
+    desc: Remove the profiling DaemonSet and stop the host-side store
+    cmd: |
+      kubectl -n linux-sched delete -f "{{.LINUX_SCHED_OTEL_DIR}}/k8s/alloy-daemonset.yaml" --ignore-not-found || true
+      (cd "{{.LINUX_SCHED_OTEL_DIR}}/host" && PROFILE_VOLUME="{{.PROFILE_VOLUME}}" docker compose down) || true
+
+  linux-sched-otel-validate:
+    desc: Validate the OTel manifests and configs offline
+    cmd: python3 "{{.LINUX_SCHED_DIR}}/otel/validate_campaign.py"
+
+  linux-sched-quota-rate:
+    desc: Freeze a scenario's offered rate in the quota campaign tree (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" calibrate --scenario "{{.SCENARIO}}" --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}"'
+
+  linux-sched-quota-calibrate:
+    desc: Sweep EEVDF limits and freeze one workload's quota (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" quota-calibrate --scenario "{{.SCENARIO}}" --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}"'
+
+  linux-sched-quota-pilot:
+    desc: EEVDF pilot into the quota campaign data tree (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" run --scenario "{{.SCENARIO}}" --mode pilot --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}"'
+
+  linux-sched-quota-experiment:
+    desc: Confirmatory blocks into the quota campaign data tree (SCENARIO=<name>)
+    requires:
+      vars: [SCENARIO]
+    cmd: '"{{.LINUX_SCHED_RUNNER}}" run --scenario "{{.SCENARIO}}" --mode confirmatory --configs-dir "{{.LINUX_SCHED_CONFIGS_DIR}}" --data-root "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}"'
+
+  linux-sched-dry-run:
+    desc: Dry-run the factorial analysis on synthetic data (no cluster needed)
+    cmd: python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/dry_run.py"
+
+  linux-sched-freeze-quota:
+    desc: Freeze per-workload CPU quotas from EEVDF pilot calibration
+    cmd: |
+      if [ ! -f "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}/pilot/calibration.csv" ]; then
+        echo "No pilot calibration.csv under {{.LINUX_SCHED_QUOTA_DATA_ROOT}}/pilot; run the EEVDF calibration first."
+        exit 1
+      fi
+      python3 "{{.LINUX_SCHED_EXPERIMENTS_DIR}}/freeze_quota.py" \
+        --calibrations "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}/pilot/calibration.csv" \
+        --output "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}/frozen-quotas.yaml"
+      echo "  Frozen quotas: {{.LINUX_SCHED_QUOTA_DATA_ROOT}}/frozen-quotas.yaml"
+
+  linux-sched-factorial-sample-size:
+    desc: Freeze confirmatory block counts for the factorial quota campaign
+    cmd: |
+      if [ ! -f "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}/pilot/blocks.csv" ]; then
+        echo "No pilot blocks.csv under {{.LINUX_SCHED_QUOTA_DATA_ROOT}}/pilot; run the pilots first."
+        exit 1
+      fi
+      python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/factorial_sample_size.py" \
+        --pilot-blocks "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}/pilot/blocks.csv" \
+        --output "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}/sample-size.json"
+
+  linux-sched-factorial-analyze:
+    desc: Analyze factorial quota campaign blocks
+    cmd: |
+      if [ ! -f "{{.LINUX_SCHED_CONFIRMATORY_DIR}}/blocks.csv" ]; then echo "No confirmatory blocks.csv"; exit 1; fi
+      python3 "{{.LINUX_SCHED_ANALYSIS_DIR}}/factorial_analysis.py" \
+        --blocks "{{.LINUX_SCHED_CONFIRMATORY_DIR}}/blocks.csv" \
+        --output-dir "{{.LINUX_SCHED_ANALYSIS_OUTPUT}}"
+
+  linux-sched-quota-sample-size:
+    desc: Alias for the factorial quota sample-size task
+    cmds:
+      - task: linux-sched-factorial-sample-size
+
+  linux-sched-quota-analyze:
+    desc: Alias for the factorial quota analysis task
+    cmds:
+      - task: linux-sched-factorial-analyze
+
+  linux-sched-cgroup-v2-sample-size:
+    desc: Alias for the factorial quota sample-size task
+    cmds:
+      - task: linux-sched-factorial-sample-size
+
+  linux-sched-cgroup-v2-analyze:
+    desc: Alias for the factorial quota analysis task
+    cmds:
+      - task: linux-sched-factorial-analyze
+
+  linux-sched-test:
+    desc: Run the linux-sched test suite (pytest + bats)
+    cmd: |
+      set -e
+      echo "Running linux-sched test suite..."
+      uv run pytest "{{.LINUX_SCHED_ANALYSIS_DIR}}/tests/" "{{.LINUX_SCHED_EXPERIMENTS_DIR}}/tests/" "{{.LINUX_SCHED_DIR}}/observers/tests/" "{{.LINUX_SCHED_TEST_DIR}}/" "{{.LINUX_SCHED_OTEL_DIR}}/tests/"
+      if command -v bats >/dev/null 2>&1; then
+        bats "{{.LINUX_SCHED_TEST_DIR}}"/*.bats
+      else
+        echo "  bats not installed; skipping shell tests"
+      fi
+
+  linux-sched-clean:
+    desc: Remove linux-sched experiment data (host-owned data root)
+    cmd: |
+      echo "Removing linux-sched data under {{.LINUX_SCHED_QUOTA_DATA_ROOT}}..."
+      rm -rf "{{.LINUX_SCHED_QUOTA_DATA_ROOT}}"
+      echo "Clean complete."

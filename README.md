@@ -39,15 +39,16 @@ It must match the generated HostAgent artifact manifest exactly. Do not substitu
 
 ## Prerequisites
 
+- [Task](https://taskfile.dev/installation/) v3.54 or newer (`task`).
 - Rootless Podman and a working systemd user instance.
 - A KVM-capable host with `/dev/kvm`; the current user belongs to `kvm`.
-- `kind`, `kubectl`, `skopeo`, `podman`, `cloud-hypervisor`, `openssl`, `python3`, and the tools checked by `make prereq`.
+- `kind`, `kubectl`, `skopeo`, `podman`, `cloud-hypervisor`, `openssl`, `python3`, and the tools checked by `task prereq`.
 - `guestfs-tools` (`virt-resize`) and `dosfstools` (`mkfs.vfat`) for the two-UKI comparison image's 256 MiB ESP.
 - A baked `build/k8labs-base.qcow2` and `build/CLOUDHV.fd`.
 - A populated verified cache. Populate it while connected:
 
 ```sh
-make prepare
+task prepare
 ```
 
 No sibling capishim or provider checkout, source build fallback, mutable image tag, or implicit management-plane image pull is used.
@@ -55,14 +56,14 @@ No sibling capishim or provider checkout, source build fallback, mutable image t
 ## Common workflow
 
 ```sh
-make kernels           # fetch stock 7.3.0-65.fc46 and build kernel-k8labs
-make base              # creates the baked workload image and firmware
-make prepare           # downloads and verifies the locked cache while connected
-make mgmt-up           # starts the host Agent and bootstraps Kind/CAPI/CAPH
-make cluster           # applies workload Cluster, addons, waits, fetches kubeconfig, smoke-tests
+task kernels           # fetch stock 7.3.0-65.fc46 and build kernel-k8labs
+task base              # creates the baked workload image and firmware
+task prepare           # downloads and verifies the locked cache while connected
+task mgmt-up           # starts the host Agent and bootstraps Kind/CAPI/CAPH
+task cluster           # applies workload Cluster, addons, waits, fetches kubeconfig, smoke-tests
 ```
 
-`make kernels` is required after a clean checkout: `stock-kernel` downloads and
+`task kernels` is required after a clean checkout: `stock-kernel` downloads and
 verifies the four Fedora rawhide RPMs pinned in `versions.lock.yaml`, and
 `custom-kernel` builds `kernel-k8labs` from the local linux checkout at the
 commit recorded in the lock. The base image installs both kernels; the stock
@@ -75,8 +76,8 @@ The comparison image needs a 256 MiB ESP for the two signed UKIs. Prepare
 `/etc/fstab`), then:
 
 ```sh
-make base-esp-raw
-make bake-run VAR_FILE=vars.scratch.pkrvars.hcl
+task base-esp-raw
+task bake-run VAR_FILE=vars.scratch.pkrvars.hcl
 ```
 
 Management API operations use `kind-k8labs-mgmt`:
@@ -85,23 +86,23 @@ Management API operations use `kind-k8labs-mgmt`:
 kubectl --context kind-k8labs-mgmt get clusters.cluster.x-k8s.io
 ```
 
-`make kubeconfig` writes the workload kubeconfig to `build/kubeconfig`. `make cluster-down` deletes the workload cluster and waits for reclamation. `make multi-cluster-test` validates two concurrent workload clusters with distinct published API endpoints.
+`task kubeconfig` writes the workload kubeconfig to `build/kubeconfig`. `task cluster-down` deletes the workload cluster and waits for reclamation. `task multi-cluster-test` validates two concurrent workload clusters with distinct published API endpoints.
 
 ## Lifecycle commands
 
 | Command | Effect |
 |---|---|
-| `make prepare` | Populate the lock-keyed cache and verify immutable artifacts. |
-| `make host-agent-install` | Stage baked artifacts, render the HostAgent Quadlet, and create local TLS material. |
-| `make host-agent-up` | Install then start the separate HostAgent user service. |
-| `make kind-up` | Import the verified Kind image and create/reuse `k8labs-mgmt`. |
-| `make mgmt-up` | Preflight the host, start the Agent, import the provider image, and bootstrap cert-manager, CAPI, and CAPH. |
-| `make cluster-up` | Server-side apply `capi/cluster.yaml` to the Kind management context. |
-| `make addons-up` | Generate and apply workload-only ClusterResourceSet addons. |
-| `make cluster-down` | Delete the workload Cluster and wait for its CAPI resource to disappear. |
-| `make mgmt-down` / `make kind-down` | Delete only the owned Kind management cluster after verifying no CAPI Cluster objects remain. |
+| `task prepare` | Populate the lock-keyed cache and verify immutable artifacts. |
+| `task host-agent-install` | Stage baked artifacts, render the HostAgent Quadlet, and create local TLS material. |
+| `task host-agent-up` | Install then start the separate HostAgent user service. |
+| `task kind-up` | Import the verified Kind image and create/reuse `k8labs-mgmt`. |
+| `task mgmt-up` | Preflight the host, start the Agent, import the provider image, and bootstrap cert-manager, CAPI, and CAPH. |
+| `task cluster-up` | Server-side apply `capi/cluster.yaml` to the Kind management context. |
+| `task addons-up` | Generate and apply workload-only ClusterResourceSet addons. |
+| `task cluster-down` | Delete the workload Cluster and wait for its CAPI resource to disappear. |
+| `task mgmt-down` / `task kind-down` | Delete only the owned Kind management cluster after verifying no CAPI Cluster objects remain. |
 
-`make mgmt-down` is destructive for management Kubernetes state but intentionally preserves HostAgent state and TLS material. To override its CAPI Cluster guard, use `MGMT_FORCE=1`; clean up workload clusters first whenever possible.
+`task mgmt-down` is destructive for management Kubernetes state but intentionally preserves HostAgent state and TLS material. To override its CAPI Cluster guard, use `MGMT_FORCE=1`; clean up workload clusters first whenever possible.
 
 ## Development checks
 

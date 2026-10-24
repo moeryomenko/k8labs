@@ -242,17 +242,14 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "the makefiles fail a recipe when an earlier command fails" {
-    # Regression: .ONESHELL without -e takes the target's status from the last
-    # command only, so a failed sample-size step reported success and the run
-    # continued to the next phase with no frozen counts.
-    for makefile in "${SERIES_DIR}/../Makefile" "${SERIES_DIR}/linux-sched.mk"; do
-        run grep -n '^\.SHELLFLAGS' "$makefile"
-        [ "$status" -eq 0 ]
-        [[ "$output" == *"-e"* ]]
-        run grep -n '^\.ONESHELL' "$makefile"
-        [ "$status" -eq 0 ]
-    done
+@test "the Taskfiles fail a task when an earlier command fails" {
+    # Regression: a recipe without errexit takes the task's status from the
+    # last command only, so a failed sample-size step reported success and the
+    # run continued to the next phase with no frozen counts.
+    run grep -n 'set: \[errexit, nounset, pipefail\]' "${SERIES_DIR}/../../Taskfile.yml"
+    [ "$status" -eq 0 ]
+    run grep -n '^shell: bash' "${SERIES_DIR}/../../Taskfile.yml"
+    [ "$status" -eq 0 ]
 }
 
 @test "the overhead calibration detaches the previous arm first" {
@@ -267,11 +264,13 @@ setup() {
     # Regression: both tools were pointed at the raw root, which holds no
     # blocks.csv after the phases were separated, so the analysis refused to run
     # and the plots failed outright.
-    run grep -n 'sched_analysis.py --blocks $(LINUX_SCHED_CONFIRMATORY_DIR)/blocks.csv' \
-        "${SERIES_DIR}/linux-sched.mk"
+    run grep -n 'sched_analysis.py' "${SERIES_DIR}/Taskfile.yml"
     [ "$status" -eq 0 ]
-    run grep -n 'sched_plots.py --data-root $(LINUX_SCHED_CONFIRMATORY_DIR)' \
-        "${SERIES_DIR}/linux-sched.mk"
+    run grep -n 'LINUX_SCHED_CONFIRMATORY_DIR}}/blocks.csv' "${SERIES_DIR}/Taskfile.yml"
+    [ "$status" -eq 0 ]
+    run grep -n 'sched_plots.py' "${SERIES_DIR}/Taskfile.yml"
+    [ "$status" -eq 0 ]
+    run grep -n -- '--data-root "{{.LINUX_SCHED_CONFIRMATORY_DIR}}"' "${SERIES_DIR}/Taskfile.yml"
     [ "$status" -eq 0 ]
 }
 
@@ -285,13 +284,13 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "shell scripts never reference variables only the makefile defines" {
+@test "shell scripts never reference variables only the Taskfile defines" {
     # Regression: the run summary used ${LINUX_SCHED_ANALYSIS_DIR}, which exists in
-    # the makefile but never in the runner's environment, so `set -u` aborted the
+    # the Taskfile but never in the runner's environment, so `set -u` aborted the
     # run after every arm had completed.
-    local makefile_only="LINUX_SCHED_ANALYSIS_DIR LINUX_SCHED_CONFIGS_DIR LINUX_SCHED_DATA_ROOT LINUX_SCHED_ANALYSIS_OUTPUT LINUX_SCHED_CONFIRMATORY_DIR LINUX_SCHED_OTEL_DIR LINUX_SCHED_TEST_DIR LINUX_SCHED_RUNNER"
+    local taskfile_only="LINUX_SCHED_ANALYSIS_DIR LINUX_SCHED_CONFIGS_DIR LINUX_SCHED_DATA_ROOT LINUX_SCHED_ANALYSIS_OUTPUT LINUX_SCHED_CONFIRMATORY_DIR LINUX_SCHED_OTEL_DIR LINUX_SCHED_TEST_DIR LINUX_SCHED_RUNNER"
     local name
-    for name in $makefile_only; do
+    for name in $taskfile_only; do
         run grep -rn "\${${name}" "${SERIES_DIR}/experiments" "${SERIES_DIR}/capture" "${SERIES_DIR}/otel" --include='*.sh'
         if [ "$status" -eq 0 ]; then
             echo "referenced but not defined for the runner: $name" >&2

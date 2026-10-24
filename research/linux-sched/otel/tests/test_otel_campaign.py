@@ -6,12 +6,10 @@ import shutil
 import sys
 from pathlib import Path
 
-import pytest
-
 OTEL_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(OTEL_DIR))
 
-from validate_campaign import Problems, validate  # noqa: E402
+from validate_campaign import Problems, validate
 
 
 def _copy(tmp_path: Path) -> Path:
@@ -22,7 +20,7 @@ def _copy(tmp_path: Path) -> Path:
 
 def test_the_real_artefacts_pass(tmp_path: Path) -> None:
     problems = Problems()
-    validate(problems, root=OTEL_DIR, mk_path=Path(__file__).resolve().parents[2] / "linux-sched.mk")
+    validate(problems, root=OTEL_DIR, taskfile_path=Path(__file__).resolve().parents[2] / "Taskfile.yml")
     assert problems == []
 
 
@@ -36,7 +34,7 @@ def test_a_privileged_profiler_is_reported(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     problems = Problems()
-    validate(problems, root=root, mk_path=Path("/dev/null"))
+    validate(problems, root=root, taskfile_path=Path("/dev/null"))
     assert any("privileged" in problem for problem in problems)
 
 
@@ -48,7 +46,7 @@ def test_a_missing_capability_is_reported(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     problems = Problems()
-    validate(problems, root=root, mk_path=Path("/dev/null"))
+    validate(problems, root=root, taskfile_path=Path("/dev/null"))
     assert any("SYSLOG" in problem for problem in problems)
 
 
@@ -60,7 +58,7 @@ def test_a_missing_session_label_is_reported(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     problems = Problems()
-    validate(problems, root=root, mk_path=Path("/dev/null"))
+    validate(problems, root=root, taskfile_path=Path("/dev/null"))
     assert any("run_id" in problem for problem in problems)
 
 
@@ -74,7 +72,7 @@ def test_routing_profiles_through_alloys_otlp_receiver_is_reported(tmp_path: Pat
         encoding="utf-8",
     )
     problems = Problems()
-    validate(problems, root=root, mk_path=Path("/dev/null"))
+    validate(problems, root=root, taskfile_path=Path("/dev/null"))
     assert any("OTLP receiver" in problem for problem in problems)
 
 
@@ -91,7 +89,7 @@ def test_a_configmap_in_the_daemonset_manifest_is_reported(tmp_path) -> None:
         encoding="utf-8",
     )
     problems = Problems()
-    validate(problems, root=root, mk_path=_Path("/dev/null"))
+    validate(problems, root=root, taskfile_path=_Path("/dev/null"))
     assert any("must not contain a ConfigMap" in problem for problem in problems)
 
 
@@ -101,5 +99,5 @@ def test_a_missing_placeholder_file_is_reported(tmp_path) -> None:
     root = _copy(tmp_path)
     (root / "k8s" / "alloy-configmap.yaml").unlink()
     problems = Problems()
-    validate(problems, root=root, mk_path=_Path("/dev/null"))
+    validate(problems, root=root, taskfile_path=_Path("/dev/null"))
     assert any("its own file" in problem for problem in problems)

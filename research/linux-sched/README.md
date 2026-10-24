@@ -65,23 +65,23 @@ studied separately in the sibling `kube-sched` series.
 ## Commands
 
 ```bash
-make linux-sched-setup                                   # prerequisites
-make linux-sched-validate                                # validate scenario configs (no cluster)
-make linux-sched-list-scenarios                          # list scenarios
-make linux-sched-pilot        SCENARIO=http              # pilot blocks (never analysed)
-make linux-sched-sample-size                             # freeze confirmatory N from pilot variance
-make linux-sched-experiment   SCENARIO=http              # confirmatory blocks
-make linux-sched-calibrate    SCENARIO=http              # freeze the offered rate (http, mixed)
-make linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
-make linux-sched-analyze                                 # decision-rule summary
-make linux-sched-plots                                   # SVG figures for the data root
-make linux-sched-data-usage                              # report what the data root costs
-make linux-sched-prune       KEEP_BLOCKS=5               # drop raw evidence from older blocks
-make linux-sched-observer-check                          # node-native observer tooling gate
-make linux-sched-workers-label                           # label worker nodes for the observers
-make linux-sched-observers-apply                         # deploy the capability-scoped observers
-make linux-sched-observers-test                          # validate observer manifests (no cluster)
-make linux-sched-test                                    # pytest + bats
+task linux-sched-setup                                   # prerequisites
+task linux-sched-validate                                # validate scenario configs (no cluster)
+task linux-sched-list-scenarios                          # list scenarios
+task linux-sched-pilot        SCENARIO=http              # pilot blocks (never analysed)
+task linux-sched-sample-size                             # freeze confirmatory N from pilot variance
+task linux-sched-experiment   SCENARIO=http              # confirmatory blocks
+task linux-sched-calibrate    SCENARIO=http              # freeze the offered rate (http, mixed)
+task linux-sched-overhead     SCENARIO=http              # observer-overhead calibration
+task linux-sched-analyze                                 # decision-rule summary
+task linux-sched-plots                                   # SVG figures for the data root
+task linux-sched-data-usage                              # report what the data root costs
+task linux-sched-prune       KEEP_BLOCKS=5               # drop raw evidence from older blocks
+task linux-sched-observer-check                          # node-native observer tooling gate
+task linux-sched-workers-label                           # label worker nodes for the observers
+task linux-sched-observers-apply                         # deploy the capability-scoped observers
+task linux-sched-observers-test                          # validate observer manifests (no cluster)
+task linux-sched-test                                    # pytest + bats
 ```
 
 The seeded schedule can be inspected without a cluster:
@@ -96,7 +96,7 @@ research/linux-sched/experiments/run-block.sh plan \
 
 ```
 linux-sched/
-├── linux-sched.mk                 # series makefile (linux-sched-* targets)
+├── Taskfile.yml                 # series Taskfile (linux-sched-* tasks)
 ├── experiments/
 │   ├── run-block.sh               # paired-block driver
 │   ├── lib.sh                     # shared helpers (cluster/transport/protocol)
@@ -167,12 +167,12 @@ node kernel exposes `ops.cgroup_set_bandwidth`.
 
 - Analysis: `analysis/factorial_analysis.py`.
 - Sample sizing: `analysis/factorial_sample_size.py` (90 % power, 12-block balance).
-- Quota freeze: `experiments/freeze_quota.py` (`make linux-sched-freeze-quota`).
-- Dry run: `analysis/dry_run.py` (`make linux-sched-dry-run`).
+- Quota freeze: `experiments/freeze_quota.py` (`task linux-sched-freeze-quota`).
+- Dry run: `analysis/dry_run.py` (`task linux-sched-dry-run`).
 
 ```bash
-make linux-sched-factorial-sample-size
-make linux-sched-factorial-analyze
+task linux-sched-factorial-sample-size
+task linux-sched-factorial-analyze
 ```
 
 ## Pre-implementation gates
@@ -198,7 +198,7 @@ rather than reporting a fake success):
    subject fix (see `GATES.md`); the capture path must be driven through the
    Kubernetes API.
 6. A frozen offered rate for `http` and `mixed`, whose load arguments carry an
-   `__RPS__` placeholder. `make linux-sched-calibrate SCENARIO=http` finds it on
+   `__RPS__` placeholder. `task linux-sched-calibrate SCENARIO=http` finds it on
    the control arm by raising the rate until p99 crosses a target and freezing
    the highest rate that stayed under it; `run` refuses to start without it.
 

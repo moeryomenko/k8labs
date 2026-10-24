@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -49,7 +50,9 @@ def test_quadlet_has_one_exec_and_only_bounded_agent_paths(
     (runtime / "k8snet").mkdir()
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
-    monkeypatch.setattr(host_agent.shutil, "which", lambda _: "/opt/bin/cloud-hypervisor")
+    monkeypatch.setattr(
+        host_agent.shutil, "which", lambda _: "/opt/bin/cloud-hypervisor"
+    )
     paths = {
         "state": str(tmp_path / "state"),
         "vms": str(tmp_path / "state" / "vms"),
@@ -114,7 +117,9 @@ def test_agent_address_defaults_after_the_bridge_gateway(monkeypatch) -> None:
     monkeypatch.setattr(
         host_agent,
         "run_output",
-        lambda _: json.dumps([{"subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}]}]),
+        lambda _: json.dumps(
+            [{"subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}]}]
+        ),
     )
 
     assert host_agent.agent_address() == "10.89.0.2"
@@ -125,7 +130,9 @@ def test_agent_address_override_rejects_bridge_gateway(monkeypatch) -> None:
     monkeypatch.setattr(
         host_agent,
         "run_output",
-        lambda _: json.dumps([{"subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}]}]),
+        lambda _: json.dumps(
+            [{"subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}]}]
+        ),
     )
 
     with pytest.raises(SystemExit, match="non-gateway IPv4 address"):
@@ -197,7 +204,9 @@ def test_gateway_change_rotates_only_the_server_leaf(tmp_path: Path) -> None:
             "certificate_has_san",
             side_effect=lambda certificate, value: value == host_agent.MANAGER_IDENTITY,
         ),
-        patch.object(host_agent, "create_server_certificate", side_effect=create_server) as create,
+        patch.object(
+            host_agent, "create_server_certificate", side_effect=create_server
+        ) as create,
         patch.object(host_agent, "create_manager_certificate") as create_manager,
     ):
         host_agent.ensure_certificates(tmp_path / "agent", "10.89.0.2")
@@ -206,22 +215,24 @@ def test_gateway_change_rotates_only_the_server_leaf(tmp_path: Path) -> None:
     create_manager.assert_not_called()
 
 
-
 def test_host_agent_configuration_defaults_outside_the_repository() -> None:
     root = Path(__file__).parents[1]
-    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    taskfile = (root / "Taskfile.yml").read_text(encoding="utf-8")
     ignored = (root / ".gitignore").read_text(encoding="utf-8")
 
-    assert 'HOST_AGENT_CONFIG ?= $${XDG_CONFIG_HOME:-$${HOME}/.config}/k8labs/host-agent' in makefile
+    assert "HOST_AGENT_CONFIG:" in taskfile
+    assert "${XDG_CONFIG_HOME:-$HOME/.config}/k8labs/host-agent" in taskfile
     assert "host-agent/" in ignored
 
 
 def test_host_agent_imports_its_locked_image_before_rendering() -> None:
-    makefile = (Path(__file__).parents[1] / "Makefile").read_text(encoding="utf-8")
+    root = Path(__file__).parents[1]
+    taskfile = yaml.safe_load((root / "Taskfile.yml").read_text(encoding="utf-8"))
+    commands = taskfile["tasks"]["host-agent-install"]["cmds"]
+    joined = "\n".join(str(entry) for entry in commands)
 
-    target = makefile.split("host-agent-install: prepare-check", 1)[1].split("host-agent-up:", 1)[0]
-    assert "scripts/load_management_images.py" in target
-    assert "--image-id cluster-api-hypervisor" in target
+    assert "scripts/load_management_images.py" in joined
+    assert "--image-id cluster-api-hypervisor" in joined
 
 
 def test_start_replaces_an_active_quadlet(tmp_path: Path) -> None:
@@ -237,5 +248,15 @@ def test_start_replaces_an_active_quadlet(tmp_path: Path) -> None:
 
     assert run.call_args_list == [
         ((["systemctl", "--user", "daemon-reload"],), {}),
-        ((["systemctl", "--user", "reload-or-restart", "k8labs-hypervisor-agent.service"],), {}),
+        (
+            (
+                [
+                    "systemctl",
+                    "--user",
+                    "reload-or-restart",
+                    "k8labs-hypervisor-agent.service",
+                ],
+            ),
+            {},
+        ),
     ]

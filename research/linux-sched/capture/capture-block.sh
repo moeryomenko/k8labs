@@ -53,7 +53,7 @@ EOF
 observer_pod() {
     local node="$1" pod
     pod="$(observer_pod_for_node "$node")"
-    [[ -n "$pod" ]] || die "no observer pod on ${node}; run 'make linux-sched-observers-apply'"
+    [[ -n "$pod" ]] || die "no observer pod on ${node}; run 'task linux-sched-observers-apply'"
     printf '%s' "$pod"
 }
 

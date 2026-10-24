@@ -1,7 +1,7 @@
 """Offline validation of the linux-sched observer DaemonSet.
 
 The observer runs with capabilities and host PID access, never the `privileged`
-flag. These checks are a gate: `make linux-sched-observers-apply` runs them
+flag. These checks are a gate: `task linux-sched-observers-apply` runs them
 before applying, so a manifest that quietly regains privilege, host networking,
 host root, or an unbounded host path cannot reach the cluster.
 

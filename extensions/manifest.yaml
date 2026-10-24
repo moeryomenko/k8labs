@@ -9,7 +9,7 @@
 # Sources of truth:
 #  - extensions/download-sysexts.sh  (download URLs, versions, binary paths)
 #  - extensions/build.sh             (build process, validation)
-#  - Makefile (lines 149-230)        (sysext/confext names, targets, output names)
+#  - Taskfile.yml                  (sysext/confext task names, targets, output names)
 #  - sysext/*/usr/lib/extension-release.d/extension-release.<image-name>
 #                                     (sysext release metadata)
 #  - confext/*/etc/extension-release.d/extension-release.<image-name>

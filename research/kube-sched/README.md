@@ -34,12 +34,12 @@ request capacity.
 ## Commands
 
 ```bash
-make kube-sched-setup                                    # prerequisites
-make kube-sched-validate                                 # validate profiles (no cluster)
-make kube-sched-plan                                     # seeded block schedule (no cluster)
-make kube-sched-experiment MATRIX=most-allocated         # run placement blocks
-make kube-sched-analyze                                  # decision-rule summary
-make kube-sched-test                                     # pytest + bats
+task kube-sched-setup                                    # prerequisites
+task kube-sched-validate                                 # validate profiles (no cluster)
+task kube-sched-plan                                     # seeded block schedule (no cluster)
+task kube-sched-experiment MATRIX=most-allocated         # run placement blocks
+task kube-sched-analyze                                  # decision-rule summary
+task kube-sched-test                                     # pytest + bats
 ```
 
 ## Outcomes

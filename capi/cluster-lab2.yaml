@@ -10,7 +10,7 @@
 #
 # It intentionally carries ONLY the topology Cluster document. The
 # ClusterClass and every template it references are already applied by
-# `make cluster-up` from capi/cluster.yaml; both clusters share that single
+# `task cluster-up` from capi/cluster.yaml; both clusters share that single
 # ClusterClass instance, and CAPI's topology controller clones the referenced
 # templates per cluster. Re-declaring them here would duplicate objects the
 # first manifest already owns.

@@ -1,0 +1,84 @@
+# k8labs Kubernetes-scheduler research — kube-sched series Taskfile
+#
+# Studies kube-scheduler placement behavior on the lab cluster while holding the
+# guest Linux scheduler fixed on EEVDF. Independent of linux-sched: separate
+# commands, data, profiles and analysis.
+version: '3'
+
+vars:
+  PROJECT_ROOT:
+    sh: git rev-parse --show-toplevel 2>/dev/null || pwd
+  KUBE_SCHED_DIR: '{{.TASKFILE_DIR}}'
+  KUBE_SCHED_EXPERIMENTS_DIR: '{{.KUBE_SCHED_DIR}}/experiments'
+  KUBE_SCHED_RUNNER: '{{.KUBE_SCHED_EXPERIMENTS_DIR}}/run-placement.sh'
+  KUBE_SCHED_PROFILES_DIR: '{{.KUBE_SCHED_DIR}}/profiles'
+  KUBE_SCHED_ANALYSIS_DIR: '{{.KUBE_SCHED_DIR}}/analysis'
+  KUBE_SCHED_TEST_DIR: '{{.KUBE_SCHED_DIR}}/tests'
+  KUBE_SCHED_DATA_ROOT:
+    sh: |
+      if [ -n "${KUBE_SCHED_DATA_ROOT:-}" ]; then
+        printf '%s' "$KUBE_SCHED_DATA_ROOT"
+      elif [ -n "${K8LABS_RESEARCH_DATA_ROOT:-}" ]; then
+        printf '%s/kube-sched' "$K8LABS_RESEARCH_DATA_ROOT"
+      else
+        printf '%s/build/research/kube-sched' "{{.PROJECT_ROOT}}"
+      fi
+  KUBE_SCHED_ANALYSIS_OUTPUT: '{{.KUBE_SCHED_DATA_ROOT}}/analysis'
+  KUBECONFIG: '{{.PROJECT_ROOT}}/build/kubeconfig'
+
+tasks:
+  kube-sched-setup:
+    desc: Verify kube-sched prerequisites (kubectl, workload cluster)
+    cmd: |
+      set -Eeuo pipefail
+      echo "=== kube-sched — prerequisites ==="
+      for cmd in kubectl python3; do
+        command -v "$cmd" >/dev/null 2>&1 && echo "  [OK] $cmd" || { echo "  [MISSING] $cmd" >&2; exit 1; }
+      done
+      test -f "{{.KUBECONFIG}}" || { echo "  [MISSING] workload kubeconfig {{.KUBECONFIG}}" >&2; exit 1; }
+      kubectl --kubeconfig "{{.KUBECONFIG}}" get nodes --no-headers >/dev/null 2>&1 \
+        && echo "  [OK] workload cluster reachable" \
+        || { echo "  [FAIL] cannot reach workload cluster" >&2; exit 1; }
+      echo "  Data root: {{.KUBE_SCHED_DATA_ROOT}}"
+
+  kube-sched-validate:
+    desc: Validate kube-sched scheduler profiles (no cluster needed)
+    cmd: '"{{.KUBE_SCHED_RUNNER}}" --validate --profiles-dir "{{.KUBE_SCHED_PROFILES_DIR}}"'
+
+  kube-sched-plan:
+    desc: Print the seeded placement block schedule (no cluster needed)
+    cmd: '"{{.KUBE_SCHED_RUNNER}}" plan --profiles-dir "{{.KUBE_SCHED_PROFILES_DIR}}"'
+
+  kube-sched-experiment:
+    desc: Run placement blocks for one matrix (MATRIX=<name>)
+    requires:
+      vars: [MATRIX]
+    cmd: '"{{.KUBE_SCHED_RUNNER}}" run --matrix "{{.MATRIX}}" --profiles-dir "{{.KUBE_SCHED_PROFILES_DIR}}" --data-root "{{.KUBE_SCHED_DATA_ROOT}}"'
+
+  kube-sched-analyze:
+    desc: Analyze placement blocks into a summary
+    cmd: |
+      if [ ! -f "{{.KUBE_SCHED_DATA_ROOT}}/pods.csv" ]; then
+        echo "No pods.csv under {{.KUBE_SCHED_DATA_ROOT}}; run an experiment first."
+        exit 0
+      fi
+      python3 "{{.KUBE_SCHED_ANALYSIS_DIR}}/placement_analysis.py" \
+        --pods "{{.KUBE_SCHED_DATA_ROOT}}/pods.csv" \
+        --output-dir "{{.KUBE_SCHED_ANALYSIS_OUTPUT}}"
+
+  kube-sched-test:
+    desc: Run the kube-sched test suite
+    cmd: |
+      echo "Running kube-sched test suite..."
+      uv run pytest "{{.KUBE_SCHED_ANALYSIS_DIR}}/tests/"
+      if command -v bats >/dev/null 2>&1; then
+        bats "{{.KUBE_SCHED_TEST_DIR}}"/*.bats
+      else
+        echo "  bats not installed; skipping shell tests"
+      fi
+
+  kube-sched-clean:
+    desc: Remove kube-sched experiment data (host-owned data root)
+    cmd: |
+      rm -rf "{{.KUBE_SCHED_DATA_ROOT}}"
+      echo "Clean complete."

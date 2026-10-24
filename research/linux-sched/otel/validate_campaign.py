@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate the linux-sched OTel campaign's artefacts offline.
 
 These check the properties that are cheap to get wrong and expensive to discover
@@ -23,7 +22,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LINUX_SCHED_DIR = HERE.parent
-MK = LINUX_SCHED_DIR / "linux-sched.mk"
+TASKFILE = LINUX_SCHED_DIR / "Taskfile.yml"
 
 SESSION_LABELS = ("workload", "scheduler", "node", "kernel", "image", "run_id")
 REQUIRED_CAPABILITIES = (
@@ -59,15 +58,17 @@ def _without_comments(text: str) -> str:
     )
 
 
-def validate(problems: Problems, root: Path = HERE, mk_path: Path = MK) -> None:
-    """Check the artefacts under `root`, wiring against `mk_path`."""
+def validate(
+    problems: Problems, root: Path = HERE, taskfile_path: Path = TASKFILE
+) -> None:
+    """Check the artefacts under `root`, wiring against `taskfile_path`."""
 
     daemonset = _read(root / "k8s" / "alloy-daemonset.yaml")
     template = _read(root / "k8s" / "alloy-config.alloy.tmpl")
     compose = _read(root / "host" / "compose.yaml")
     profiles = _read(root / "profiles.sh")
     gate = _read(root / "check.sh")
-    mk = _read(mk_path)
+    taskfile = _read(taskfile_path)
 
     # The profiler must not run privileged, and prose saying so is not a breach.
     active = _without_comments(daemonset)
@@ -198,11 +199,11 @@ def validate(problems: Problems, root: Path = HERE, mk_path: Path = MK) -> None:
 
     # The plan's acceptance names the command the gate is run through.
     problems.check(
-        "linux-sched-otel-check:" in mk,
-        "the Makefile must expose linux-sched-otel-check",
+        "linux-sched-otel-check:" in taskfile,
+        "the Taskfile must expose linux-sched-otel-check",
     )
     problems.check(
-        "check.sh" in mk,
+        "check.sh" in taskfile,
         "linux-sched-otel-check must run the gate script",
     )
 

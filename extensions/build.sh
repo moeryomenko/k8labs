@@ -140,7 +140,7 @@ else
         # Skip the rebuild when the output already exists and is newer than
         # every regular file in the source tree. Without this guard every
         # invocation refreshes the .raw mtime (mksquashfs -noappend rewrites
-        # the file), which defeats the Makefile's base-image skip-guard
+        # the file), which defeats the Taskfile's base-image skip-guard
         # (NEWEST_RAW -nt BASE_IMAGE_DEST).
         newer_sources=$(find "$source_dir" -type f -newer "$output_file")
         if [ -f "$output_file" ] && [ -z "$newer_sources" ]; then

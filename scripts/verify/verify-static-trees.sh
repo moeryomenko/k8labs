@@ -121,7 +121,7 @@ check_placeholders() {
 #
 # RATIFIED 2026-08-10 (E2E replay): systemd 259 requires the metadata
 # FILE to be named extension-release.<image-name>, where <image-name> is the
-# packaged .raw basename. The Makefile builds every sysext with output-name
+# packaged .raw basename. The Taskfile builds every sysext with output-name
 # equal to the tree name (`extensions/build.sh sysext sysext/<tree> <tree>`),
 # so each sysext tree must carry
 # usr/lib/extension-release.d/extension-release.<tree>. The old
@@ -166,7 +166,7 @@ check_sysext_metadata() {
 # Check 3 — confext release metadata at etc/extension-release.d/
 #
 # Same corrected contract as Check 2: the metadata FILE must be named
-# extension-release.<image-name>. The Makefile packages the static confexts
+# extension-release.<image-name>. The Taskfile packages the static confexts
 # with a confext- output prefix
 # (`extensions/build.sh confext confext/<tree> confext-<tree>`), so each
 # static confext tree must carry

@@ -4,10 +4,10 @@ This runbook configures the Kind-based Cluster API management plane and its sepa
 
 ## 1. Host prerequisites
 
-Use a KVM-capable machine with rootless Podman, a running systemd user instance, and a user in the `kvm` group. Required tools are checked by:
+Use a KVM-capable machine with rootless Podman, a running systemd user instance, and a user in the `kvm` group. Install [Task](https://taskfile.dev/installation/) v3.54 or newer; the repo's task index is `task --list`. Required tools are checked by:
 
 ```sh
-make prereq
+task prereq
 ```
 
 The command also requires the baked workload artifacts:
@@ -20,7 +20,7 @@ build/CLOUDHV.fd
 Build them if necessary:
 
 ```sh
-make base
+task base
 ```
 
 Ensure k8netd is available in the user runtime directory before starting the HostAgent. The Agent uses the current user’s D-Bus and k8netd socket; do not configure fixed UIDs or home-directory paths.
@@ -30,8 +30,8 @@ Ensure k8netd is available in the user runtime directory before starting the Hos
 While connected, acquire every locked release and OCI image:
 
 ```sh
-make prepare
-make prepare-check
+task prepare
+task prepare-check
 ```
 
 The cache is keyed by the canonical lock digest. `prepare-check` validates every raw artifact checksum and OCI layout before Kind creation, image import, HostAgent installation, or Kubernetes changes.
@@ -43,9 +43,9 @@ For an offline run, populate the cache first, then run the same management comma
 The HostAgent is a user Quadlet service. It is deliberately separate from Kind and is the only process that receives the required bounded host inputs.
 
 ```sh
-make host-agent-install
-make host-agent-up
-make host-agent-check
+task host-agent-install
+task host-agent-up
+task host-agent-check
 ```
 
 Installation:
@@ -63,15 +63,15 @@ To use a different address, set `HOST_AGENT_ADDRESS` to a non-gateway IPv4 addre
 ## 4. Bootstrap the management plane
 
 ```sh
-make kind-up
-make mgmt-bootstrap
-make mgmt-check
+task kind-up
+task mgmt-bootstrap
+task mgmt-check
 ```
 
 Or run the composed target:
 
 ```sh
-make mgmt-up
+task mgmt-up
 ```
 
 `kind-up` imports the verified Kind node image and creates/reuses the owned `k8labs-mgmt` cluster. Its configuration keeps Kind’s default kindnet CNI and has no host paths, device mounts, special node labels, or Agent DaemonSet.
@@ -92,7 +92,7 @@ kubectl --context kind-k8labs-mgmt -n hypervisor-system get deployment/controlle
 ## 5. Provision workload clusters
 
 ```sh
-make cluster
+task cluster
 ```
 
 The workflow applies `capi/cluster.yaml` to the Kind management context, applies workload-only Cilium/RBAC/CoreDNS resources through ClusterResourceSets, waits for CAPI readiness, fetches the workload kubeconfig to `build/kubeconfig`, and runs the smoke test.
@@ -113,7 +113,7 @@ Cilium belongs only to workload clusters; do not replace Kind’s management-clu
 To exercise concurrent workload clusters:
 
 ```sh
-make multi-cluster-test
+task multi-cluster-test
 ```
 
 It verifies that the published workload API endpoints differ and cleans up both clusters.
@@ -121,10 +121,10 @@ It verifies that the published workload API endpoints differ and cleans up both 
 ## 6. Safe teardown
 
 ```sh
-make cluster-down
-make mgmt-down
+task cluster-down
+task mgmt-down
 ```
 
-`mgmt-down` aliases guarded `kind-down`. It refuses to remove `k8labs-mgmt` while CAPI `Cluster` objects remain. Use `MGMT_FORCE=1 make mgmt-down` only when intentionally discarding the management cluster despite remaining CAPI objects.
+`mgmt-down` aliases guarded `kind-down`. It refuses to remove `k8labs-mgmt` while CAPI `Cluster` objects remain. Use `MGMT_FORCE=1 task mgmt-down` only when intentionally discarding the management cluster despite remaining CAPI objects.
 
 Management teardown deletes Kind Kubernetes state only. It does not remove the HostAgent service, its TLS material, Agent inventory, VM artifacts, firmware, or baked image copies. Preserve those state boundaries when performing manual maintenance.

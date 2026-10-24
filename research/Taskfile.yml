@@ -1,0 +1,17 @@
+# k8labs research — Taskfile aggregator
+#
+# Each series keeps its existing hyphenated task names. Includes are flattened
+# so the public commands stay `task linux-sched-*`, `task kube-sched-*`, and
+# `task sched-core-modes-*`.
+version: '3'
+
+includes:
+  linux-sched:
+    taskfile: ./linux-sched/Taskfile.yml
+    flatten: true
+  kube-sched:
+    taskfile: ./kube-sched/Taskfile.yml
+    flatten: true
+  sched-core-modes:
+    taskfile: ./sched-core-modes/Taskfile.yml
+    flatten: true

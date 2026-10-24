@@ -1,20 +1,20 @@
 """Contracts for the research series boundary.
 
-The approved plan replaces the retired `cpu-sched` suite with two independent
-series, `linux-sched` and `kube-sched`. These tests assert the boundary holds:
-both series exist and are discovered by the aggregator, and no active reference
-to the retired series remains.
+The approved plan replaces the retired `cpu-sched` suite with independent
+series. These tests assert the boundary holds: every series has a Taskfile,
+the research aggregator discovers them, and no active reference to the retired
+series remains.
 """
 
 from __future__ import annotations
 
-import re
-import subprocess
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).parents[1]
 RESEARCH = ROOT / "research"
-SERIES = ("linux-sched", "kube-sched")
+SERIES = ("linux-sched", "kube-sched", "sched-core-modes")
 
 # Files whose contents must not reference the retired suite. `.git` history and
 # historical notes are intentionally excluded from this check.
@@ -32,32 +32,47 @@ def _iter_text_files() -> list[Path]:
     return files
 
 
-def test_both_series_makefiles_exist() -> None:
+def _taskfile(series: str) -> Path:
+    return RESEARCH / series / "Taskfile.yml"
+
+
+def _load(path: Path) -> dict:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), path
+    return data
+
+
+def test_every_series_has_a_taskfile() -> None:
     for series in SERIES:
-        assert (RESEARCH / series / f"{series}.mk").is_file(), series
+        assert _taskfile(series).is_file(), series
 
 
-def test_aggregator_discovers_both_series() -> None:
-    makefile = (RESEARCH / "Makefile").read_text(encoding="utf-8")
-    assert "include $(wildcard */*.mk)" in makefile
+def test_aggregator_discovers_every_series() -> None:
+    includes = _load(RESEARCH / "Taskfile.yml").get("includes", {})
+    assert isinstance(includes, dict)
+    for series in SERIES:
+        assert series in includes, includes
+        assert includes[series]["flatten"] is True
 
 
-def test_make_help_lists_only_the_new_series() -> None:
-    result = subprocess.run(
-        ["make", "-C", str(RESEARCH), "help"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    # Strip ANSI colour codes: `make help` wraps target names in `\x1b[36m...`,
-    # and the trailing `m` would otherwise defeat a `\b`-anchored match.
-    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
-    # `help` renders `  <target><pad> <description>` (no colon).
-    targets = set(re.findall(r"^\s{2}([A-Za-z0-9_./-]+)\s{2,}\S", output, re.MULTILINE))
-    assert any(t.startswith("linux-sched-") for t in targets), targets
-    assert any(t.startswith("kube-sched-") for t in targets), targets
-    assert not any(t.startswith("cpu-sched-") for t in targets), targets
+def test_every_series_exposes_only_its_prefixed_tasks() -> None:
+    for series in SERIES:
+        tasks = _load(_taskfile(series)).get("tasks", {})
+        assert tasks, series
+        for name in tasks:
+            assert name.startswith(f"{series}-"), (series, name)
+
+
+def test_help_lists_only_the_new_series() -> None:
+    root = _load(ROOT / "Taskfile.yml")
+    tasks = root.get("tasks", {})
+    assert tasks["default"]["aliases"] == ["help"]
+    for series in SERIES:
+        assert any(
+            name.startswith(f"{series}-")
+            for name in _load(_taskfile(series)).get("tasks", {})
+        )
+    assert not any("cpu-sched" in name for name in tasks)
 
 
 def test_retired_series_directory_is_gone() -> None:
@@ -77,7 +92,10 @@ def test_no_active_reference_to_retired_series() -> None:
 
 
 def test_series_are_independent() -> None:
-    linux = (RESEARCH / "linux-sched" / "linux-sched.mk").read_text(encoding="utf-8")
-    kube = (RESEARCH / "kube-sched" / "kube-sched.mk").read_text(encoding="utf-8")
+    linux = _taskfile("linux-sched").read_text(encoding="utf-8")
+    kube = _taskfile("kube-sched").read_text(encoding="utf-8")
+    sched = _taskfile("sched-core-modes").read_text(encoding="utf-8")
     assert "linux-sched-" in linux and "kube-sched-" not in linux
     assert "kube-sched-" in kube and "linux-sched-" not in kube
+    assert "sched-core-modes-" in sched
+    assert "linux-sched-" not in sched and "kube-sched-" not in sched

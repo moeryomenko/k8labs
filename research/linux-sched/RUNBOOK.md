@@ -51,7 +51,7 @@ Stop if they differ.
 
 ## Step 1b — reproducible kernel build
 
-> Comparison series (2026-10-23): use `make kernels` to fetch the stock
+> Comparison series (2026-10-23): use `task kernels` to fetch the stock
 > `7.3.0-65.fc46` RPMs and build `kernel-k8labs` from the local linux checkout.
 > The kernel-ark steps below are retained for the historical linux-next release.
 
@@ -113,8 +113,8 @@ The bake runs in the rootless bake container and fails closed if signing fails.
 export K8LABS_SB_KEY='pkcs11:token=k8labs;object=uki-signing;type=private'
 export K8LABS_SB_CERT="$PWD/firmware/k8labs-uefi-db.crt"
 
-make base-deps
-make base          # or: make bake-run with a var file that sets:
+task base-deps
+task base          # or: task bake-run with a var file that sets:
                    #   firmware_path        = "../build/CLOUDHV-k8labs-sb.fd"
                    #   kernel_version       = "7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
                    #   kernel_repo_url      = "file:///var/lib/k8labs-kernel-repo"

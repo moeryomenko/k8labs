@@ -9,10 +9,10 @@
 #   2. container/ directory does not exist.
 #   3. ansible.cfg does not exist at the repo root.
 #   4. mise.toml contains no ansible/ansible-playbook alias.
-#   5. Makefile has no ANSIBLE_ variable definitions, no ansible-playbook
+#   5. Taskfile.yml has no ANSIBLE_ variable definitions, no ansible-playbook
 #      invocation, and no container/deploy-extensions/certs/bootstrap/
 #      inventory targets.
-#   6. `grep -ri ansible Makefile mise.toml` returns nothing.
+#   6. `grep -ri ansible Taskfile.yml mise.toml` returns nothing.
 #
 # Read-only: inspects the working tree; touches nothing.
 # Exits 0 only when every check PASSes.
@@ -29,7 +29,7 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
 DERIVED_ROOT=$(CDPATH='' cd -- "${SCRIPT_DIR}/../.." && pwd) || exit 1
 REPO_ROOT="${1:-${DERIVED_ROOT}}"
 
-MAKEFILE="${REPO_ROOT}/Makefile"
+TASKFILE="${REPO_ROOT}/Taskfile.yml"
 MISE="${REPO_ROOT}/mise.toml"
 
 failures=0
@@ -74,42 +74,42 @@ else
     pass "mise.toml has no ansible/ansible-playbook alias"
 fi
 
-# --- Check 5: Makefile has no ANSIBLE_/ansible-playbook/removed targets ---
-# Missing Makefile -> no ANSIBLE_ vars, no invocations, no targets -> PASS
+# --- Check 5: Taskfile.yml has no ANSIBLE_/ansible-playbook/removed targets ---
+# Missing Taskfile.yml -> no ANSIBLE_ vars, no invocations, no targets -> PASS
 # (absence is the goal).
-makefile_problems=""
+taskfile_problems=""
 
-ansi_var_lines=$(grep -n 'ANSIBLE_' "${MAKEFILE}" 2>/dev/null | cut -d: -f1 | tr '\n' ' ' || true)
+ansi_var_lines=$(grep -n 'ANSIBLE_' "${TASKFILE}" 2>/dev/null | cut -d: -f1 | tr '\n' ' ' || true)
 if [ -n "${ansi_var_lines}" ]; then
-    makefile_problems="${makefile_problems} ANSIBLE_ at lines ${ansi_var_lines};"
+    taskfile_problems="${taskfile_problems} ANSIBLE_ at lines ${ansi_var_lines};"
 fi
 
-apb_lines=$(grep -n 'ansible-playbook' "${MAKEFILE}" 2>/dev/null | cut -d: -f1 | tr '\n' ' ' || true)
+apb_lines=$(grep -n 'ansible-playbook' "${TASKFILE}" 2>/dev/null | cut -d: -f1 | tr '\n' ' ' || true)
 if [ -n "${apb_lines}" ]; then
-    makefile_problems="${makefile_problems} ansible-playbook at lines ${apb_lines};"
+    taskfile_problems="${taskfile_problems} ansible-playbook at lines ${apb_lines};"
 fi
 
 for target in container deploy-extensions certs bootstrap inventory; do
-    tgt_lines=$(grep -n "^${target}:" "${MAKEFILE}" 2>/dev/null | cut -d: -f1 | tr '\n' ' ' || true)
+    tgt_lines=$(grep -n "^  ${target}:" "${TASKFILE}" 2>/dev/null | cut -d: -f1 | tr '\n' ' ' || true)
     if [ -n "${tgt_lines}" ]; then
-        makefile_problems="${makefile_problems} target ${target}: at lines ${tgt_lines};"
+        taskfile_problems="${taskfile_problems} task ${target}: at lines ${tgt_lines};"
     fi
 done
 
-if [ -n "${makefile_problems}" ]; then
-    fail "Makefile has no ANSIBLE_/ansible-playbook/removed targets" "${makefile_problems}"
+if [ -n "${taskfile_problems}" ]; then
+    fail "Taskfile.yml has no ANSIBLE_/ansible-playbook/removed targets" "${taskfile_problems}"
 else
-    pass "Makefile has no ANSIBLE_/ansible-playbook/removed targets"
+    pass "Taskfile.yml has no ANSIBLE_/ansible-playbook/removed targets"
 fi
 
-# --- Check 6: grep -ri ansible Makefile mise.toml returns nothing ---
+# --- Check 6: grep -ri ansible Taskfile.yml mise.toml returns nothing ---
 # Pipeline exit status is grep -q's; the output check (not grep's exit code)
 # makes a missing file "return nothing" -> PASS, per the absence-is-the-goal
 # edge case.
-if grep -ri 'ansible' "${MAKEFILE}" "${MISE}" 2>/dev/null | grep -q .; then
-    fail "grep -ri ansible Makefile mise.toml returns nothing" "matches found"
+if grep -ri 'ansible' "${TASKFILE}" "${MISE}" 2>/dev/null | grep -q .; then
+    fail "grep -ri ansible Taskfile.yml mise.toml returns nothing" "matches found"
 else
-    pass "grep -ri ansible Makefile mise.toml returns nothing"
+    pass "grep -ri ansible Taskfile.yml mise.toml returns nothing"
 fi
 
 # --- Summary ---

@@ -539,7 +539,7 @@ append_block_row() {
 frozen_quota_for() {
     local workload="$1"
     local file="${LINUX_SCHED_FROZEN_QUOTA_FILE:-${RAW_DATA_ROOT}/frozen-quotas.yaml}"
-    [[ -f "$file" ]] || die "no frozen quota manifest at ${file}; run make linux-sched-freeze-quota"
+    [[ -f "$file" ]] || die "no frozen quota manifest at ${file}; run task linux-sched-freeze-quota"
     python3 - "$file" "$workload" <<'PYQUOTA'
 import sys
 import yaml

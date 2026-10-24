@@ -23,7 +23,7 @@ main() {
         log "staged schedulers on ${node}"
         count=$(( count + 1 ))
     done
-    (( count > 0 )) || die "no observer-labelled workers; run 'make linux-sched-observers-apply' first"
+    (( count > 0 )) || die "no observer-labelled workers; run 'task linux-sched-observers-apply' first"
     log "staged schedulers on ${count} worker(s)"
 }
 

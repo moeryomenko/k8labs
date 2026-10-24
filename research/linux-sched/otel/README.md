@@ -67,11 +67,11 @@ data root and from every worker disk.
 ## Running it
 
 ```sh
-make -C research linux-sched-otel-up        # host: Pyroscope
-make -C research linux-sched-otel-apply     # workers: the Alloy profiling DaemonSet
-make -C research linux-sched-otel-profiles  # 15 labelled sessions, one at a time
-make -C research linux-sched-otel-check     # the gate
-make -C research linux-sched-otel-down
+task linux-sched-otel-up        # host: Pyroscope
+task linux-sched-otel-apply     # workers: the Alloy profiling DaemonSet
+task linux-sched-otel-profiles  # 15 labelled sessions, one at a time
+task linux-sched-otel-check     # the gate
+task linux-sched-otel-down
 ```
 
 `linux-sched-otel-profiles` writes `sessions.json` beside the data root: for each

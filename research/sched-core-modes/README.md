@@ -65,33 +65,33 @@ Prerequisites:
 
 ```sh
 # Discover the worker, check kernel/cgroup/debugfs/tools.
-make -C research sched-core-modes-setup
+task sched-core-modes-setup
 
 # Seeded plan only; does not change the worker mode.
-make -C research sched-core-modes-plan PROFILE=pilot
+task sched-core-modes-plan PROFILE=pilot
 
 # Pilot: 1 repetition, 3 s measurement, 1 s warmup, all four scenarios.
-make -C research sched-core-modes-pilot
+task sched-core-modes-pilot
 
 # Full: 3 repetitions, 8 s measurement, 2 s warmup.
-make -C research sched-core-modes-run
+task sched-core-modes-run
 
 # Analyze the latest run.
-make -C research sched-core-modes-analyze
-make -C research sched-core-modes-report
+task sched-core-modes-analyze
+task sched-core-modes-report
 ```
 
 Select the stock worker for a cross-kernel check:
 
 ```sh
-make -C research sched-core-modes-run WORKER=stock
+task sched-core-modes-run WORKER=stock
 ```
 
 Select a specific run or data root:
 
 ```sh
-make -C research sched-core-modes-run RUN_ID=20261024T120000Z
-make -C research sched-core-modes-analyze \
+task sched-core-modes-run RUN_ID=20261024T120000Z
+task sched-core-modes-analyze \
   SCHED_CORE_MODES_RUN_DIR=build/research/sched-core-modes/20261024T120000Z
 ```
 
@@ -111,8 +111,8 @@ their own weights and scheduling.
 
 ```sh
 NODE=k8labs-md-custom-hbsml-qx6v4-mch2q \
-  make -C research sched-core-modes-k8s
-make -C research sched-core-modes-k8s-clean
+  task sched-core-modes-k8s
+task sched-core-modes-k8s-clean
 ```
 
 The Jobs print `stress-ng` bogo-ops in their logs. Compare the four logs and,
@@ -142,7 +142,7 @@ The analyzer writes to `<run>/analysis/`:
 - `summary.json` — the same data in machine-readable form
 - `summary.md` — human-readable tables and generated findings
 
-`make sched-core-modes-report` copies the latest `summary.md` to
+`task sched-core-modes-report` copies the latest `summary.md` to
 `RESULTS.md` in this directory.
 
 ## Results

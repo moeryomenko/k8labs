@@ -157,7 +157,7 @@ resolve_hosts() {
 
     mapfile -t ordered_nodes < <(printf '%s' "$ordered")
     best_node="${ordered_nodes[0]:-}"
-    [[ -n "$best_node" ]] || die "no observer-labelled worker found; run 'make linux-sched-observers-apply'"
+    [[ -n "$best_node" ]] || die "no observer-labelled worker found; run 'task linux-sched-observers-apply'"
 
     TARGET_NODE="$best_node"
     LOAD_NODE="${ordered_nodes[1]:-}"
