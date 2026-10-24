@@ -1,8 +1,7 @@
-"""Analyze complete confirmatory CPU-limits campaign rows.
+"""Analyze versioned CPU-limits campaign rows.
 
-The analyzer accepts only the three versioned runner CSV files. It keeps every
-missing row explicit. Pilot data and a pilot directory are rejected so a pilot
-observation can never become confirmatory evidence.
+The analyzer keeps every missing row explicit. Confirmatory analysis rejects
+pilot data. Pilot analysis produces descriptive estimates only.
 """
 
 from __future__ import annotations
@@ -355,8 +354,13 @@ def _p_value(log_ratios: Sequence[float]) -> float:
     )
 
 
-def analyze(cells: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    """Apply the fixed contrast families without filling missing pairs."""
+def analyze(
+    cells: Sequence[Mapping[str, object]], *, phase: str = "confirmatory"
+) -> dict[str, object]:
+    """Analyze one phase without filling missing pairs."""
+
+    if phase not in {"pilot", "confirmatory"}:
+        raise ValueError(f"unsupported analysis phase: {phase!r}")
 
     contrasts: list[dict[str, object]] = []
     for (
@@ -386,6 +390,17 @@ def analyze(cells: Sequence[Mapping[str, object]]) -> dict[str, object]:
                     treatment[str(cell["block_id"])] = (
                         value if isinstance(value, float) else None
                     )
+            # Log-ratio estimates are undefined for a zero throttle ratio. In a
+            # pilot, retain those blocks as incomplete rather than inventing a value.
+            if phase == "pilot" and family == "throttle_gap":
+                control = {
+                    block: value if value is not None and value > 0.0 else None
+                    for block, value in control.items()
+                }
+                treatment = {
+                    block: value if value is not None and value > 0.0 else None
+                    for block, value in treatment.items()
+                }
             paired = paired_log_ratios(control, treatment)
             row: dict[str, object] = {
                 "family": family,
@@ -415,7 +430,9 @@ def analyze(cells: Sequence[Mapping[str, object]]) -> dict[str, object]:
                 interval = paired_t_interval(logs)
                 row.update(
                     {
-                        "decision": "inconclusive",
+                        "decision": "pilot descriptive"
+                        if phase == "pilot"
+                        else "inconclusive",
                         "estimate": interval.estimate,
                         "ci_low": interval.low,
                         "ci_high": interval.high,
@@ -425,6 +442,8 @@ def analyze(cells: Sequence[Mapping[str, object]]) -> dict[str, object]:
                 )
             contrasts.append(row)
     for family, _, _, _, margin, planned_size in FAMILIES:
+        if phase == "pilot":
+            continue
         eligible = [
             row
             for row in contrasts
@@ -452,7 +471,7 @@ def analyze(cells: Sequence[Mapping[str, object]]) -> dict[str, object]:
     incomplete_cells = list(getattr(cells, "incomplete_cells", []))
     return {
         "protocol": PROTOCOL,
-        "phase": "confirmatory",
+        "phase": phase,
         "cells": list(cells),
         "contrasts": contrasts,
         "incomplete_cells": incomplete_cells,
@@ -495,15 +514,19 @@ def write_outputs(output_dir: Path, result: Mapping[str, object]) -> None:
     (output_dir / "summary.json").write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    is_pilot = result["phase"] == "pilot"
     lines = [
-        "# CPU-limits confirmatory summary",
+        f"# CPU-limits {result['phase']} "
+        + ("descriptive summary" if is_pilot else "summary"),
         "",
         f"Complete cells: {len(cells)}",
         f"Incomplete cells: {len(result['incomplete_cells'])}",
         "",
-        "## Contrasts",
+        "## " + ("Pilot descriptive contrast availability" if is_pilot else "Contrasts"),
         "",
-        "| family | workload | metric | decision | paired blocks |",
+        "| family | workload | metric | "
+        + ("pilot label" if is_pilot else "decision")
+        + " | paired blocks |",
         "|---|---|---|---|---:|",
     ]
     for contrast in result["contrasts"]:
@@ -515,12 +538,18 @@ def write_outputs(output_dir: Path, result: Mapping[str, object]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--phase", choices=("pilot", "confirmatory"), default="confirmatory")
     parser.add_argument("--blocks", type=Path, required=True)
     parser.add_argument("--cgroups", type=Path, required=True)
     parser.add_argument("--metrics", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
-    result = analyze(load_campaign(args.blocks, args.cgroups, args.metrics))
+    result = analyze(
+        load_campaign(
+            args.blocks, args.cgroups, args.metrics, expected_phase=args.phase
+        ),
+        phase=args.phase,
+    )
     write_outputs(args.output_dir, result)
     print(f"wrote {len(result['cells'])} complete cell summaries")
     return 0

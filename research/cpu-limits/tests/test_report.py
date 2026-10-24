@@ -43,3 +43,30 @@ def test_measured_input_lists_contrasts_and_escapes_table_values() -> None:
     assert r"cpu\|bound" in report
     assert "1.100000" in report
     assert "## Limitations" in report
+
+
+def test_pilot_report_uses_descriptive_labels_without_confirmatory_decisions() -> None:
+    report = compose_report(
+        {
+            "phase": "pilot",
+            "cells": [{"block_id": "1", "workload": "cpu-bound"}],
+            "contrasts": [
+                {
+                    "family": "limit_effect",
+                    "workload": "cpu-bound",
+                    "metric": "throughput",
+                    "decision": "pilot descriptive",
+                    "estimate": 1.1,
+                    "ci_low": 1.0,
+                    "ci_high": 1.2,
+                    "paired_blocks": ["1"],
+                }
+            ],
+        },
+        summary_markdown="# Summary\n",
+    )
+
+    assert "# CPU-limits pilot descriptive results" in report
+    assert "pilot descriptive, not confirmatory" in report
+    assert "| family | workload | metric | decision |" not in report
+    assert "complete confirmatory rows" not in report

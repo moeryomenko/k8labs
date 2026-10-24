@@ -253,6 +253,10 @@ def render_figures(result: Mapping[str, object], output_dir: Path) -> list[str]:
         "timeline.svg": _timeline(traces),
         "cgroup-parameter-map.svg": _parameter_map(cells),
     }
+    if result.get("phase") == "pilot" and not traces:
+        message = "PILOT DESCRIPTIVE: no trace rows were supplied with the CSV inputs."
+        figures["runqueue-histogram.svg"] = _svg("Run-queue latency histogram", [f'<text x="40" y="90" font-family="sans-serif" font-size="18">{message}</text>'])
+        figures["timeline.svg"] = _svg("On-CPU and off-CPU timeline with throttle markers", [f'<text x="40" y="90" font-family="sans-serif" font-size="18">{message}</text>'])
     optional = (("cgroup_mode", "cgroup-mode.svg", "cgroup_mode effect"), ("base_slice", "base-slice.svg", "base_slice_ns effect"), ("sched_ext", "sched-ext-quota.svg", "sched_ext quota enforcement"))
     for key, filename, title in optional:
         if result.get(key):

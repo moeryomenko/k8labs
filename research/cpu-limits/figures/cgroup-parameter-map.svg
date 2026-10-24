@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img">
+<title>Cgroup parameter map</title>
+<rect width="960" height="540" fill="white"/>
+<text x="40" y="40" font-family="sans-serif" font-size="22">Cgroup parameter map</text>
+<text x="70" y="80" font-family="sans-serif" font-size="13">Measured cgroup settings at the selected enforcement level</text>
+<text x="70" y="115" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.max.period = 100000</text>
+<text x="70" y="136" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.max.quota = max</text>
+<text x="70" y="157" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.weight = 1</text>
+<text x="70" y="178" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.max.period = 100000</text>
+<text x="70" y="199" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.max.quota = max</text>
+<text x="70" y="220" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.weight = 1</text>
+<text x="70" y="241" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.max.period = 100000</text>
+<text x="70" y="262" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.max.quota = max</text>
+<text x="70" y="283" font-family="monospace" font-size="12">solo-cpu-bound-best-effort: cpu.weight = 1</text>
+<text x="70" y="304" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.max.period = 100000</text>
+<text x="70" y="325" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.max.quota = 50000</text>
+<text x="70" y="346" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.weight = 17</text>
+<text x="70" y="367" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.max.period = 100000</text>
+<text x="70" y="388" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.max.quota = 50000</text>
+<text x="70" y="409" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.weight = 17</text>
+<text x="70" y="430" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.max.period = 100000</text>
+<text x="70" y="451" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.max.quota = 50000</text>
+<text x="70" y="472" font-family="monospace" font-size="12">contention-cpu-bound-burstable-low: cpu.weight = 17</text>
+</svg>

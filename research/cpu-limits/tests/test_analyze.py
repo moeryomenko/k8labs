@@ -258,3 +258,23 @@ def test_summary_outputs_report_cell_metrics_and_parameters(tmp_path: Path) -> N
     assert fit["quota_utilization"] == pytest.approx(1.0)
     assert fit["cgroup_parameters"]["cpu.weight"] == "100"
     assert (tmp_path / "analysis" / "summary.md").is_file()
+
+
+def test_pilot_analysis_is_descriptive_and_sets_the_phase(tmp_path: Path) -> None:
+    paths = write_campaign(tmp_path)
+    blocks, _cgroups, _metrics = campaign_rows()
+    for row in blocks:
+        row["phase"] = "pilot"
+    write_csv(paths[0], BLOCK_COLUMNS, blocks)
+
+    result = analyze(load_campaign(*paths, expected_phase="pilot"), phase="pilot")
+    write_outputs(tmp_path / "analysis", result)
+
+    summary = json.loads(
+        (tmp_path / "analysis" / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["phase"] == "pilot"
+    assert "pilot descriptive" in {row["decision"] for row in summary["contrasts"]}
+    assert "pilot descriptive summary" in (
+        tmp_path / "analysis" / "summary.md"
+    ).read_text(encoding="utf-8")

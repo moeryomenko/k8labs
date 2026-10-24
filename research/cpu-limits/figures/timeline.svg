@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img">
+<title>On-CPU and off-CPU timeline with throttle markers</title>
+<rect width="960" height="540" fill="white"/>
+<text x="40" y="40" font-family="sans-serif" font-size="22">On-CPU and off-CPU timeline with throttle markers</text>
+<text x="40" y="90" font-family="sans-serif" font-size="18">PILOT DESCRIPTIVE: no trace rows were supplied with the CSV inputs.</text>
+</svg>
