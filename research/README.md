@@ -14,7 +14,8 @@ research/
 ├── common/             # shared cross-series components (placeholder)
 ├── linux-sched/        # Linux CPU scheduling: EEVDF vs sched_ext
 ├── kube-sched/         # Kubernetes placement: scoring/topology policy
-└── sched-core-modes/   # cgroup_mode: up, smp, concur, max, tasks
+├── sched-core-modes/   # cgroup_mode: up, smp, concur, max, tasks
+└── sched-core-delta/   # stock 7.3 vs custom kernel: sched-core-2026-10-18
 ```
 
 ## Series
@@ -30,6 +31,10 @@ research/
 - **sched-core-modes** (`research/sched-core-modes/`) — controlled cgroup-v2
   study of the five `cgroup_mode` values with weighted threads, nested QoS,
   quota and wakeup workloads. See `research/sched-core-modes/README.md`.
+- **sched-core-delta** (`research/sched-core-delta/`) — paired stock-7.3
+  versus custom-kernel comparison for the `sched-core-2026-10-18` series:
+  wakeup, slice, fairness, quota, churn, and the steal governor. See
+  `research/sched-core-delta/README.md`.
 
 The series are independent: they own separate commands, data roots,
 configuration, and analysis.
@@ -42,6 +47,7 @@ task kube-sched-plan
 task linux-sched-test
 task kube-sched-test
 task sched-core-modes-test
+task sched-core-delta-test
 ```
 
 Tasks are also available from the repo root: `task <task-name>`. Run
