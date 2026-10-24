@@ -522,7 +522,8 @@ def write_outputs(output_dir: Path, result: Mapping[str, object]) -> None:
         f"Complete cells: {len(cells)}",
         f"Incomplete cells: {len(result['incomplete_cells'])}",
         "",
-        "## " + ("Pilot descriptive contrast availability" if is_pilot else "Contrasts"),
+        "## "
+        + ("Pilot descriptive contrast availability" if is_pilot else "Contrasts"),
         "",
         "| family | workload | metric | "
         + ("pilot label" if is_pilot else "decision")
@@ -538,10 +539,13 @@ def write_outputs(output_dir: Path, result: Mapping[str, object]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=("pilot", "confirmatory"), default="confirmatory")
+    parser.add_argument(
+        "--phase", choices=("pilot", "confirmatory"), default="confirmatory"
+    )
     parser.add_argument("--blocks", type=Path, required=True)
     parser.add_argument("--cgroups", type=Path, required=True)
     parser.add_argument("--metrics", type=Path, required=True)
+    parser.add_argument("--trace-rows", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     result = analyze(
@@ -550,6 +554,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         phase=args.phase,
     )
+    if args.trace_rows is not None:
+        trace_payload = json.loads(args.trace_rows.read_text(encoding="utf-8"))
+        if not isinstance(trace_payload, Mapping):
+            raise ValueError("trace rows must contain a JSON object")
+        trace_rows = trace_payload.get("trace_rows", [])
+        if not isinstance(trace_rows, list):
+            raise ValueError("trace rows must contain a trace_rows list")
+        result["trace_rows"] = trace_rows
     write_outputs(args.output_dir, result)
     print(f"wrote {len(result['cells'])} complete cell summaries")
     return 0

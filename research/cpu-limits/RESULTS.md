@@ -220,15 +220,17 @@ confirmatory campaign did not run.
 
 ## Trace evidence
 
-Data: `research/cpu-limits/PILOT.md`; 3 blocks and 108 complete cells.
+Data: `build/research/cpu-limits/pilot/cells/*/*/trace/raw/{sched-trace,throttle}.csv`;
+3 blocks and 108 complete cells, with traces in 4 selected cells per block.
 
-`PILOT.md` records pilot trace and perf artifacts for these selected trace
-cells in every block: `solo-cpu-bound-fit`,
+The trace parser matched target workload PIDs and produced 34,898 trace rows
+across the four trace cells: `solo-cpu-bound-fit`,
 `solo-cpu-bound-burstable-low`, `solo-io-bound-fit`, and
-`solo-io-bound-burstable-low`. The copied run-queue histogram and timeline
-figures are pilot trace evidence references. Their SVGs state that the CSV
-inputs do not contain trace rows, so this report does not add numerical
-run-queue or timeline findings.
+`solo-io-bound-burstable-low`. The target-task run-queue delay was
+p50 = 0.003 ms and p99 = 0.087 ms in these pilot slices. The run-queue
+histogram and on-CPU/off-CPU timeline figures are generated from those rows.
+The trace slice is five seconds inside the measured window and is not a
+whole-window sample.
 
 ## Figure references
 

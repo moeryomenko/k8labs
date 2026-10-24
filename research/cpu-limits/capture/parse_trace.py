@@ -87,7 +87,12 @@ def parse_trace_csv(path: Path) -> list[TraceEvent]:
         with path.open("r", encoding="utf-8", newline="") as stream:
             reader = csv.reader(stream, strict=True)
             header = next(reader, None)
-            if header is None or not {"event", "ts_ns", "pid"}.issubset(header):
+            if header is None:
+                return events
+            header_set = set(header)
+            # The bpftrace probe writes `timestamp`; older fixtures use `ts_ns`.
+            ts_column = "ts_ns" if "ts_ns" in header_set else "timestamp"
+            if not {"event", ts_column, "pid"}.issubset(header_set):
                 return events
             for values in reader:
                 if len(values) != len(header):
@@ -96,17 +101,18 @@ def parse_trace_csv(path: Path) -> list[TraceEvent]:
                     column: value for column, value in zip(header, values, strict=True)
                 }
                 event = row.get("event", "").strip()
-                ts_ns = _optional_int(row.get("ts_ns", ""))
+                ts_ns = _optional_int(row.get(ts_column, ""))
                 pid = _optional_int(row.get("pid", ""))
                 if not event or ts_ns is None or pid is None or ts_ns < 0 or pid < 0:
                     continue
+                target_text = row.get("target_pid", "") or row.get("next_pid", "")
                 normalized = {column: row.get(column, "") for column in TRACE_COLUMNS}
                 events.append(
                     TraceEvent(
                         event=event,
                         ts_ns=ts_ns,
                         pid=pid,
-                        target_pid=_optional_int(row.get("target_pid", "")),
+                        target_pid=_optional_int(target_text),
                         runtime_ns=_optional_int(row.get("runtime_ns", "")),
                         row=normalized,
                     )

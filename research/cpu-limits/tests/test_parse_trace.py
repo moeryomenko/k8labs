@@ -171,3 +171,21 @@ def test_malformed_csv_lines_are_ignored(tmp_path: Path) -> None:
 
     assert len(events) == 1
     assert events[0].event == "sched_wakeup"
+
+
+def test_parses_the_bpftrace_probe_header(tmp_path: Path) -> None:
+    path = tmp_path / "probe.csv"
+    path.write_text(
+        "timestamp,event,cpu,pid,comm,prev_state,next_pid,next_comm,runtime_ns,cgroup_id\n"
+        "100,sched_wakeup,0,1,waker,,123,worker,,1\n"
+        "160,sched_switch,0,1,waker,0,123,worker,,1\n"
+        "210,sched_switch,0,123,worker,0,1,waker,,1\n",
+        encoding="utf-8",
+    )
+
+    events = parse_trace_csv(path)
+
+    assert len(events) == 3
+    assert events[0].ts_ns == 100
+    assert events[0].target_pid == 123
+    assert events[1].ts_ns == 160
