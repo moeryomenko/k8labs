@@ -1,4 +1,29 @@
-# cpu-limits live gate record
+# cpu-limits gate record
+
+## Final campaign status
+
+**PARTIALLY MEASURED — PILOT COMPLETE, CONFIRMATORY BLOCKED.**
+
+The live capability gate passed on the selected custom-kernel worker. The pilot
+completed three full 36-cell blocks. Policy calibration then failed for
+`cpu-bound`, `io-bound`, and `hybrid`, so the confirmatory campaign did not
+start. This record does not claim a confirmatory result.
+
+| final gate | status | evidence |
+|---|---|---|
+| Offline design and test commands | PASS | `task cpu-limits-validate` and `task cpu-limits-test` pass. |
+| Live capability gate | PASS | The retry record below passed on the selected worker. |
+| Pilot completeness | PASS | `PILOT.md` records 3 complete blocks and 108 complete cells. |
+| Policy calibration | FAIL | `FREEZE.md` records no valid low limit for three workloads. |
+| Sample-size authorization | FAIL | `sample-size.json` has status `FAIL`; throttle-gap rows are incomplete. |
+| Confirmatory campaign | BLOCKED | `CONFIRMATORY.md` records that no confirmatory workload ran. |
+| Focused kernel and sched_ext experiments | NOT RUN | They require a successful confirmatory authorization. |
+
+Do not run `task cpu-limits-confirm`, focused experiments, or report a
+confirmatory result until a new pilot creates successful `policies.json` and
+`sample-size.json` records for every required workload and contrast.
+
+## Live capability gate
 
 - Task: `cpu-limits-12-live-gate`
 - Retry: `2026-10-24T12:19:39Z`
