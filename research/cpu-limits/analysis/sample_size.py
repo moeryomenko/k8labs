@@ -159,6 +159,9 @@ def estimate_sample_sizes(
     return {
         "protocol": "cpu-limits-v1",
         "phase": "pilot",
+        "status": "PASS"
+        if all(item["status"] == "complete" for item in scenarios)
+        else "FAIL",
         "power": POWER,
         "sd_upper_confidence": SD_UPPER_CONFIDENCE,
         "cap": MAX_CONFIRMATORY_BLOCKS,

@@ -235,11 +235,13 @@ def write_pilot_files(tmp_path: Path) -> tuple[Path, Path]:
     cgroups = tmp_path / "cgroups.csv"
     with blocks.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
-            stream, fieldnames=("cell_id", "workload", "policy", "status")
+            stream,
+            fieldnames=("block_id", "cell_id", "workload", "policy", "status"),
         )
         writer.writeheader()
         writer.writerow(
             {
+                "block_id": "1",
                 "cell_id": "solo-cpu-bound-burstable-low",
                 "workload": "cpu-bound",
                 "policy": "burstable-low",
@@ -248,7 +250,8 @@ def write_pilot_files(tmp_path: Path) -> tuple[Path, Path]:
         )
     with cgroups.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
-            stream, fieldnames=("cell_id", "window", "level", "key", "value")
+            stream,
+            fieldnames=("block_id", "cell_id", "window", "level", "key", "value"),
         )
         writer.writeheader()
         for key, value, window in (
@@ -259,6 +262,7 @@ def write_pilot_files(tmp_path: Path) -> tuple[Path, Path]:
         ):
             writer.writerow(
                 {
+                    "block_id": "1",
                     "cell_id": "solo-cpu-bound-burstable-low",
                     "window": window,
                     "level": "pod_slice",
@@ -278,6 +282,56 @@ def test_freeze_selects_a_low_value_inside_the_throttle_band(tmp_path: Path) -> 
     assert frozen.status == "PASS"
     assert frozen.low_millicores == 500
     assert frozen.limitation is None
+    assert frozen.evidence[0]["block_id"] == "1"
+    assert frozen.evidence[0]["cell_id"] == "solo-cpu-bound-burstable-low"
+
+
+def test_freeze_retains_each_block_for_a_repeated_cell(tmp_path: Path) -> None:
+    blocks = tmp_path / "blocks.csv"
+    cgroups = tmp_path / "cgroups.csv"
+    with blocks.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=("block_id", "cell_id", "workload", "policy", "status"),
+        )
+        writer.writeheader()
+        for block_id in ("1", "2"):
+            writer.writerow(
+                {
+                    "block_id": block_id,
+                    "cell_id": "solo-cpu-bound-burstable-low",
+                    "workload": "cpu-bound",
+                    "policy": "burstable-low",
+                    "status": "complete",
+                }
+            )
+    with cgroups.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=("block_id", "cell_id", "window", "level", "key", "value"),
+        )
+        writer.writeheader()
+        for block_id, throttled in (("1", "5"), ("2", "7")):
+            for key, value, window in (
+                ("cpu.stat.nr_periods", "20", "measurement_delta"),
+                ("cpu.stat.nr_throttled", throttled, "measurement_delta"),
+                ("cpu.max.quota", "50000", "end"),
+                ("cpu.max.period", "100000", "end"),
+            ):
+                writer.writerow(
+                    {
+                        "block_id": block_id,
+                        "cell_id": "solo-cpu-bound-burstable-low",
+                        "window": window,
+                        "level": "pod_slice",
+                        "key": key,
+                        "value": value,
+                    }
+                )
+
+    samples = FREEZE.read_pilot_samples(cgroups, blocks)
+
+    assert [sample.throttled_ratio for sample in samples] == [0.25, 0.35]
 
 
 def test_freeze_writes_a_fail_record_and_defaults_without_calibration(

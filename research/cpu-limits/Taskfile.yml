@@ -147,14 +147,18 @@ tasks:
       set -eu
       for path in \
         "{{.CPU_LIMITS_DATA_ROOT}}/pilot/blocks.csv" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/pilot/cgroups.csv" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/pilot/metrics.csv" \
         "{{.CPU_LIMITS_DATA_ROOT}}/policies.json"; do
         test -f "$path" || {
           echo "ERROR: required pilot output is missing: $path" >&2
           exit 1
         }
       done
-      python3 "{{.CPU_LIMITS_ANALYSIS_DIR}}/sample_size.py" \
-        --data-root "{{.CPU_LIMITS_DATA_ROOT}}" \
+      PYTHONPATH="{{.CPU_LIMITS_DIR}}" python3 "{{.CPU_LIMITS_ANALYSIS_DIR}}/sample_size.py" \
+        --blocks "{{.CPU_LIMITS_DATA_ROOT}}/pilot/blocks.csv" \
+        --cgroups "{{.CPU_LIMITS_DATA_ROOT}}/pilot/cgroups.csv" \
+        --metrics "{{.CPU_LIMITS_DATA_ROOT}}/pilot/metrics.csv" \
         --output "{{.CPU_LIMITS_DATA_ROOT}}/sample-size.json"
 
   cpu-limits-confirm:

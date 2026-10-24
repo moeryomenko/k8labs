@@ -56,3 +56,4 @@ def test_missing_pilot_contrast_is_recorded_without_a_count() -> None:
     )
     assert entry["status"] == "incomplete"
     assert entry["confirmatory_blocks"] is None
+    assert result["status"] == "FAIL"

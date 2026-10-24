@@ -33,6 +33,9 @@ THROTTLE_TARGET = 0.25
 class PilotSample:
     """The cgroup values used to calibrate one workload policy."""
 
+    block_id: str
+    cell_id: str
+    level: str
     workload: str
     policy: str
     quota_us: int | None
@@ -90,22 +93,23 @@ def _as_int(value: str, key: str) -> int:
     return result
 
 
-def _workloads_by_cell(blocks_path: Path) -> dict[str, tuple[str, str]]:
+def _workloads_by_cell(blocks_path: Path) -> dict[tuple[str, str], tuple[str, str]]:
     with blocks_path.open("r", encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
-        required = {"cell_id", "workload", "policy", "status"}
+        required = {"block_id", "cell_id", "workload", "policy", "status"}
         if reader.fieldnames is None or not required.issubset(reader.fieldnames):
             raise ValueError("blocks CSV is missing required columns")
-        result: dict[str, tuple[str, str]] = {}
+        result: dict[tuple[str, str], tuple[str, str]] = {}
         for row in reader:
             if row.get("status") != "complete":
                 continue
+            block_id = _required(row, "block_id")
             cell_id = _required(row, "cell_id")
             workload = _required(row, "workload")
             policy = _required(row, "policy")
             if workload not in WORKLOADS:
                 raise ValueError(f"blocks CSV has unknown workload: {workload}")
-            result[cell_id] = (workload, policy)
+            result[(block_id, cell_id)] = (workload, policy)
     return result
 
 
@@ -113,15 +117,16 @@ def read_pilot_samples(cgroups_path: Path, blocks_path: Path) -> list[PilotSampl
     """Read complete pilot cgroup deltas without manufacturing missing values."""
 
     workloads = _workloads_by_cell(blocks_path)
-    values: dict[tuple[str, str, str], dict[str, str]] = defaultdict(dict)
+    values: dict[tuple[str, str, str, str], dict[str, str]] = defaultdict(dict)
     with cgroups_path.open("r", encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
-        required = {"cell_id", "window", "level", "key", "value"}
+        required = {"block_id", "cell_id", "window", "level", "key", "value"}
         if reader.fieldnames is None or not required.issubset(reader.fieldnames):
             raise ValueError("cgroups CSV is missing required columns")
         for row in reader:
+            block_id = row.get("block_id", "")
             cell_id = row.get("cell_id", "")
-            if cell_id not in workloads:
+            if (block_id, cell_id) not in workloads:
                 continue
             if row.get("level") not in {
                 "pod_slice",
@@ -138,31 +143,36 @@ def read_pilot_samples(cgroups_path: Path, blocks_path: Path) -> list[PilotSampl
                     continue
             else:
                 continue
-            values[(cell_id, row["level"], key)][key] = _required(row, "value")
+            values[(block_id, cell_id, row["level"], key)][key] = _required(
+                row, "value"
+            )
 
     samples: list[PilotSample] = []
-    for cell_id, (workload, policy) in workloads.items():
+    for (block_id, cell_id), (workload, policy) in workloads.items():
         for level in ("container_leaf", "container_scope", "pod_slice"):
             level_values = {
-                key.rsplit(".", 1)[-1]: values.get((cell_id, level, key), {}).get(
-                    key, ""
-                )
+                key.rsplit(".", 1)[-1]: values.get(
+                    (block_id, cell_id, level, key), {}
+                ).get(key, "")
                 for key in ("cpu.stat.nr_periods", "cpu.stat.nr_throttled")
             }
             if not all(level_values.values()):
                 continue
-            quota_text = values.get((cell_id, level, "cpu.max.quota"), {}).get(
-                "cpu.max.quota", ""
-            )
-            period_text = values.get((cell_id, level, "cpu.max.period"), {}).get(
-                "cpu.max.period", ""
-            )
+            quota_text = values.get(
+                (block_id, cell_id, level, "cpu.max.quota"), {}
+            ).get("cpu.max.quota", "")
+            period_text = values.get(
+                (block_id, cell_id, level, "cpu.max.period"), {}
+            ).get("cpu.max.period", "")
             quota = (
                 None if quota_text == "max" else _as_int(quota_text, "cpu.max.quota")
             )
             period = _as_int(period_text, "cpu.max.period") if period_text else None
             samples.append(
                 PilotSample(
+                    block_id=block_id,
+                    cell_id=cell_id,
+                    level=level,
                     workload=workload,
                     policy=policy,
                     quota_us=quota,
@@ -202,11 +212,21 @@ def freeze_values(workload: str, samples: Iterable[PilotSample]) -> FrozenPolicy
             millicores = sample.millicores
         except ValueError as error:
             evidence.append(
-                {"policy": sample.policy, "status": "invalid", "reason": str(error)}
+                {
+                    "block_id": sample.block_id,
+                    "cell_id": sample.cell_id,
+                    "level": sample.level,
+                    "policy": sample.policy,
+                    "status": "invalid",
+                    "reason": str(error),
+                }
             )
             continue
         evidence.append(
             {
+                "block_id": sample.block_id,
+                "cell_id": sample.cell_id,
+                "level": sample.level,
                 "policy": sample.policy,
                 "quota_millicores": millicores,
                 "throttled_period_ratio": ratio,
