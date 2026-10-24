@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -265,6 +266,117 @@ def _pod_uid(pod: Mapping[str, object]) -> str:
     return uid
 
 
+def _pod_ip(pod: Mapping[str, object]) -> str:
+    status = pod.get("status")
+    if not isinstance(status, Mapping):
+        raise CellRunError("Pod has no status")
+    address = status.get("podIP")
+    if not isinstance(address, str) or not address:
+        raise CellRunError("Pod IP is missing")
+    return address
+
+
+def _duration_ms(value: str, unit: str) -> float:
+    scale = {"us": 0.001, "µs": 0.001, "ms": 1.0, "s": 1000.0}
+    return float(value) * scale[unit]
+
+
+def parse_wrk2(text: str) -> dict[str, tuple[float, str]]:
+    """Parse wrk2 summary output into throughput and latency metrics."""
+
+    metrics: dict[str, tuple[float, str]] = {}
+    request_rate = re.search(r"Requests/sec:\s*([0-9.]+)", text)
+    if request_rate is None:
+        raise CellRunError("wrk2 output has no Requests/sec")
+    metrics["requests_per_second"] = (float(request_rate.group(1)), "requests/s")
+
+    # wrk2 has two output shapes. Some builds print named percentiles; the
+    # pinned build prints a value/percentile histogram table in milliseconds.
+    named = {
+        "latency_p50_ms": re.search(r"(?m)^\s*50%\s+([0-9.]+)(us|µs|ms|s)\s*$", text),
+        "latency_p99_ms": re.search(r"(?m)^\s*99%\s+([0-9.]+)(us|µs|ms|s)\s*$", text),
+    }
+    if all(named.values()):
+        for name, match in named.items():
+            assert match is not None
+            metrics[name] = (_duration_ms(match.group(1), match.group(2)), "ms")
+        return metrics
+
+    rows: list[tuple[float, float]] = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*([0-9.]+)\s+([0-9.]+)\s+(\d+)\s+([0-9.]+|inf)\s*$", line)
+        if match is not None:
+            rows.append((float(match.group(1)), float(match.group(2))))
+    if not rows:
+        raise CellRunError("wrk2 output has no latency histogram")
+    for target, name in ((0.50, "latency_p50_ms"), (0.99, "latency_p99_ms")):
+        value, _ = min(rows, key=lambda item: abs(item[1] - target))
+        metrics[name] = (value, "ms")
+    return metrics
+
+
+def parse_stress_ng(text: str) -> dict[str, tuple[float, str]]:
+    """Parse the stress-ng metrics-brief bogo rate."""
+
+    inline = re.search(r"([0-9.]+)\s+bogo ops/s", text)
+    if inline is not None:
+        return {"bogo_ops_per_second": (float(inline.group(1)), "ops/s")}
+    # The pinned image prints a table:
+    # stressor bogo_ops real usr sys bogo_ops/s(real) bogo_ops/s(usr+sys)
+    table = re.search(
+        r"(?m)^stress-ng: info:\s+\[\d+\]\s+\S+\s+(\d+)\s+"
+        r"([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*$",
+        text,
+    )
+    if table is None:
+        raise CellRunError("stress-ng output has no bogo ops/s")
+    return {"bogo_ops_per_second": (float(table.group(5)), "ops/s")}
+
+
+def parse_ffmpeg(text: str) -> dict[str, tuple[float, str]]:
+    """Parse the last ffmpeg fps value."""
+
+    matches = re.findall(r"fps=\s*([0-9.]+)", text)
+    if not matches:
+        raise CellRunError("ffmpeg output has no fps")
+    return {"frames_per_second": (float(matches[-1]), "frames/s")}
+
+
+def _load_metrics(
+    kubectl: Kubectl,
+    collector_pod: str,
+    cell: design.Cell,
+    target_name: str,
+    target: Mapping[str, object],
+    measure_seconds: int,
+) -> tuple[dict[str, tuple[float, str]], str]:
+    """Drive or collect the application outcome for one workload."""
+
+    if cell.workload in {"io-bound", "hybrid"}:
+        address = _pod_ip(target)
+        output = kubectl.run(
+            "exec",
+            collector_pod,
+            "--",
+            "wrk2",
+            "-t2",
+            "-c16",
+            "-d",
+            f"{measure_seconds}s",
+            "-R",
+            "400",
+            "--latency",
+            f"http://{address}/",
+        )
+        metrics = parse_wrk2(output)
+        if cell.workload == "hybrid":
+            ffmpeg_log = kubectl.run("logs", target_name, "-c", "ffmpeg")
+            metrics.update(parse_ffmpeg(ffmpeg_log))
+        return metrics, output
+    time.sleep(measure_seconds)
+    return {}, ""
+
+
 def wait_for_ready(kubectl: Kubectl, name: str, timeout: int) -> Mapping[str, object]:
     """Wait for Ready and stop early if Kubernetes reports a terminal failure."""
 
@@ -288,6 +400,22 @@ def wait_for_ready(kubectl: Kubectl, name: str, timeout: int) -> Mapping[str, ob
                     return pod
         time.sleep(1)
     raise CellRunError(f"Pod {name} was not Ready within {timeout} seconds")
+
+
+def wait_for_terminal(kubectl: Kubectl, name: str, timeout: int) -> None:
+    """Wait until a self-terminating workload Pod has finished."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pod = _pod_json(kubectl, name)
+        status = pod.get("status")
+        if isinstance(status, Mapping) and status.get("phase") in {
+            "Succeeded",
+            "Failed",
+        }:
+            return
+        time.sleep(1)
+    raise CellRunError(f"Pod {name} did not finish within {timeout} seconds")
 
 
 def snapshot_pod(
@@ -587,6 +715,7 @@ def run_cell(args: argparse.Namespace) -> CellResult:
         )
         scraper = MetricsScraper(args.collector_url, cell.cell_id)
         scraper.start()
+        time.sleep(args.warmup_seconds)
         if args.trace:
             trace_dir = cell_dir / "trace"
             trace_command = [
@@ -608,8 +737,14 @@ def run_cell(args: argparse.Namespace) -> CellResult:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-        time.sleep(args.warmup_seconds)
-        time.sleep(args.measure_seconds)
+        load_metrics, load_output = _load_metrics(
+            kubectl,
+            args.collector_pod,
+            cell,
+            target_name,
+            target,
+            args.measure_seconds,
+        )
         metrics = scraper.stop()
         scraper = None
         if trace_process is not None:
@@ -620,6 +755,23 @@ def run_cell(args: argparse.Namespace) -> CellResult:
         after = snapshot_pod(kubectl, args.collector_pod, pod_uid, args)
         (cell_dir / "cgroup-end.json").write_text(
             json.dumps(after, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        if cell.workload in {"cpu-bound", "memory-bound"}:
+            wait_for_terminal(kubectl, target_name, 12)
+            load_output = kubectl.run("logs", target_name)
+            load_metrics = parse_stress_ng(load_output)
+        (cell_dir / "load.txt").write_text(load_output, encoding="utf-8")
+        timestamp = utc_now()
+        metrics.extend(
+            {
+                "timestamp": timestamp,
+                "source": "loadgen",
+                "metric": metric,
+                "value": str(value),
+                "unit": unit,
+                "labels_json": json.dumps({"cell_id": cell.cell_id}, sort_keys=True),
+            }
+            for metric, (value, unit) in load_metrics.items()
         )
         cgroup_rows = [
             *_cgroup_rows(before, "start"),

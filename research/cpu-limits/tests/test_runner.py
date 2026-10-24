@@ -290,3 +290,64 @@ def test_freeze_writes_a_fail_record_and_defaults_without_calibration(
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["status"] == "FAIL"
     assert all(policy["limitation"] for policy in payload["policies"])
+
+
+def test_parse_wrk2_extracts_throughput_and_latency() -> None:
+    text = """\
+Running 15s test @ http://10.0.0.1/
+  2 threads and 16 connections
+  Latency Distribution
+     50%    1.25ms
+     99%    4.50ms
+  Requests/sec: 1234.56
+"""
+    metrics = RUNNER.parse_wrk2(text)
+
+    assert metrics["requests_per_second"][0] == pytest.approx(1234.56)
+    assert metrics["latency_p50_ms"][0] == pytest.approx(1.25)
+    assert metrics["latency_p99_ms"][0] == pytest.approx(4.5)
+
+
+def test_parse_wrk2_rejects_a_missing_percentile() -> None:
+    with pytest.raises(RUNNER.CellRunError, match="latency histogram"):
+        RUNNER.parse_wrk2("Requests/sec: 10\n  50% 1ms\n")
+
+
+def test_parse_stress_ng_extracts_bogo_rate() -> None:
+    metrics = RUNNER.parse_stress_ng(
+        "stress-ng: info: [1] matrixprod: 1234.50 bogo ops/s (real time)\n"
+    )
+
+    assert metrics["bogo_ops_per_second"][0] == pytest.approx(1234.5)
+
+
+def test_parse_stress_ng_extracts_the_table_rate() -> None:
+    text = """\
+stress-ng: info:  [1] stressor       bogo ops real time  usr time  sys time   bogo ops/s   bogo ops/s
+stress-ng: info:  [1]                           (secs)    (secs)    (secs)   (real time) (usr+sys time)
+stress-ng: info:  [1] cpu                1938      8.00      7.47      0.00       242.20       259.44
+"""
+    metrics = RUNNER.parse_stress_ng(text)
+
+    assert metrics["bogo_ops_per_second"][0] == pytest.approx(242.20)
+
+
+def test_parse_ffmpeg_uses_the_last_fps_value() -> None:
+    metrics = RUNNER.parse_ffmpeg("frame= 10 fps=20.0\nframe= 20 fps=25.5\n")
+
+    assert metrics["frames_per_second"][0] == pytest.approx(25.5)
+
+
+def test_parse_wrk2_accepts_the_histogram_output() -> None:
+    text = """\
+       0.500     0.500000          500         2.00
+       0.900     0.900000          900        10.00
+       1.250     0.990000          990       100.00
+       1.500     0.999000          999      1000.00
+Requests/sec:    400.25
+"""
+    metrics = RUNNER.parse_wrk2(text)
+
+    assert metrics["requests_per_second"][0] == pytest.approx(400.25)
+    assert metrics["latency_p50_ms"][0] == pytest.approx(0.5)
+    assert metrics["latency_p99_ms"][0] == pytest.approx(1.25)

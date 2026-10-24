@@ -33,6 +33,13 @@ spec:
       image: nginx@sha256:09369da6b10306312cd908661320086bf87fbae1b6b0c49a1f50ba531fef2eab
       ports:
         - containerPort: 80
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 80
+        initialDelaySeconds: 2
+        periodSeconds: 2
+        failureThreshold: 30
       __RESOURCES__: {}
 ---
 # Memory-bound target: use --stream. The runner may use --vm when stream is unavailable.
@@ -70,10 +77,17 @@ spec:
       image: nginx@sha256:09369da6b10306312cd908661320086bf87fbae1b6b0c49a1f50ba531fef2eab
       ports:
         - containerPort: 80
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 80
+        initialDelaySeconds: 2
+        periodSeconds: 2
+        failureThreshold: 30
       __RESOURCES__: {}
     - name: ffmpeg
       image: jrottenberg/ffmpeg@sha256:8ec1ee1f6a0fcd37c97725827b6b7832795c9596e3439b8da56d7700d61ae778
-      args: ["-stream_loop", "-1", "-re", "-i", "/fixtures/input.mp4", "-f", "null", "-"]
+      args: ["-stream_loop", "-1", "-i", "/fixtures/input.mp4", "-threads", "1", "-f", "null", "-"]
       __RESOURCES__: {}
       volumeMounts:
         - name: fixtures
@@ -82,7 +96,7 @@ spec:
   volumes:
     - name: fixtures
       hostPath:
-        path: /fixtures
+        path: /var/lib/linux-sched/fixtures
         type: Directory
 ---
 # Noisy neighbour: the renderer supplies the fixed one-CPU request and no limit.
@@ -103,7 +117,7 @@ spec:
       args: ["--cpu", "1", "--cpu-method", "matrixprod", "--timeout", "25s"]
       __RESOURCES__: {}
 ---
-# Host-driven load: wrk2 -t 2 -c 16 -d 15s -R 200 http://TARGET_POD_IP/.
+# Host-driven load: wrk2 -t 2 -c 16 -d 15s -R 400 http://TARGET_POD_IP/.
 apiVersion: v1
 kind: Pod
 metadata:
