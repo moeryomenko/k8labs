@@ -24,5 +24,5 @@ help: ## Prints this help message
 	@grep -F -h '##' $(MAKEFILE_LIST) \
 		| grep -F -v fgrep \
 		| sort \
-		| grep -E '^[a-zA-Z_/.-]+:.*?## .*$$' \
+		| grep -E '^[a-zA-Z0-9_/.-]+:.*?## .*$$' \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'

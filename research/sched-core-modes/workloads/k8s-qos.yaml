@@ -1,0 +1,167 @@
+# Secondary QoS validation for the cgroup-mode study.
+#
+# This is not the controlled matrix: the kubelet derives cpu.weight from the
+# CPU requests, and the runtime may add its own accounting. It is a sanity
+# check that the four Kubernetes QoS shapes get different cgroup weights and
+# that the weight-request relationship survives the runtime.
+#
+# Render the worker name and apply:
+#   sed "s/__NODE_NAME__/NODE/g" workloads/k8s-qos.yaml | kubectl apply -f -
+#
+# The stress-ng image is the same digest pinned by the linux-sched series.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sched-core-modes
+  labels:
+    app.kubernetes.io/part-of: k8labs
+    sched-core-modes/run: qos
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qos-guaranteed
+  namespace: sched-core-modes
+  labels:
+    sched-core-modes/run: qos
+    sched-core-modes/qos: guaranteed
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        sched-core-modes/run: qos
+        sched-core-modes/qos: guaranteed
+    spec:
+      nodeName: __NODE_NAME__
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: stress-ng
+          image: docker.io/alexeiled/stress-ng@sha256:91f1313a67e3c8c23f3c75855019d01c4a43e2f872b099f720047f03309d8ad4
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cpu
+            - "2"
+            - --cpu-method
+            - matrixprod
+            - --timeout
+            - 20s
+            - --metrics-brief
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 128Mi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qos-burstable
+  namespace: sched-core-modes
+  labels:
+    sched-core-modes/run: qos
+    sched-core-modes/qos: burstable
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        sched-core-modes/run: qos
+        sched-core-modes/qos: burstable
+    spec:
+      nodeName: __NODE_NAME__
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: stress-ng
+          image: docker.io/alexeiled/stress-ng@sha256:91f1313a67e3c8c23f3c75855019d01c4a43e2f872b099f720047f03309d8ad4
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cpu
+            - "4"
+            - --cpu-method
+            - matrixprod
+            - --timeout
+            - 20s
+            - --metrics-brief
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qos-besteffort
+  namespace: sched-core-modes
+  labels:
+    sched-core-modes/run: qos
+    sched-core-modes/qos: besteffort
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        sched-core-modes/run: qos
+        sched-core-modes/qos: besteffort
+    spec:
+      nodeName: __NODE_NAME__
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: stress-ng
+          image: docker.io/alexeiled/stress-ng@sha256:91f1313a67e3c8c23f3c75855019d01c4a43e2f872b099f720047f03309d8ad4
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cpu
+            - "2"
+            - --cpu-method
+            - matrixprod
+            - --timeout
+            - 20s
+            - --metrics-brief
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qos-quota
+  namespace: sched-core-modes
+  labels:
+    sched-core-modes/run: qos
+    sched-core-modes/qos: quota
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        sched-core-modes/run: qos
+        sched-core-modes/qos: quota
+    spec:
+      nodeName: __NODE_NAME__
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: stress-ng
+          image: docker.io/alexeiled/stress-ng@sha256:91f1313a67e3c8c23f3c75855019d01c4a43e2f872b099f720047f03309d8ad4
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cpu
+            - "2"
+            - --cpu-method
+            - matrixprod
+            - --timeout
+            - 20s
+            - --metrics-brief
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 128Mi
