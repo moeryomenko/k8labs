@@ -29,7 +29,7 @@ if str(SERIES_ROOT) not in sys.path:
     sys.path.insert(0, str(SERIES_ROOT))
 
 from experiments import cgroup_probe, design
-from workloads.render import render
+from workloads.render import pod_name, render
 
 PROTOCOL = "cpu-limits-v1"
 BLOCK_COLUMNS = (
@@ -180,11 +180,11 @@ class Kubectl:
 
 
 def _target_name(cell: design.Cell, run_id: str) -> str:
-    return f"cpu-limits-{cell.workload}-{cell.policy}-{run_id}".lower()
+    return pod_name(cell.workload, cell.policy, run_id)
 
 
 def _support_name(kind: str, cell: design.Cell, run_id: str) -> str:
-    return f"cpu-limits-{kind}-{cell.cell_id}-{run_id}".lower()
+    return pod_name(kind, cell.cell_id, run_id)
 
 
 def _pod_manifest(

@@ -9,8 +9,14 @@ REQUIRED_MOUNTS = {
     "/host/sys/fs/cgroup",
     "/host/sys/kernel/debug",
     "/host/sys/kernel/tracing",
+    "/sys/kernel/tracing",
+    "/host/sys/kernel/btf",
     "/host/boot",
     "/host/lib/modules",
+    "/host/usr/src/kernels",
+    "/fixtures",
+    "/opt/linux-sched/bin",
+    "/opt/cpu-limits",
 }
 
 
@@ -49,10 +55,26 @@ def test_collector_is_not_privileged_and_uses_read_only_host_mounts() -> None:
 
     assert security_context["privileged"] is False
     assert security_context["allowPrivilegeEscalation"] is False
-    assert security_context["readOnlyRootFilesystem"] is True
+    # The collector installs the node-native tracing tools at start, so its
+    # own root is writable. Every host path stays read-only.
+    assert security_context["readOnlyRootFilesystem"] is False
     assert "DAC_READ_SEARCH" in security_context["capabilities"]["add"]
     assert all(mount["readOnly"] is True for mount in mounts)
     assert {mount["mountPath"] for mount in mounts} == REQUIRED_MOUNTS
+
+
+def test_collector_code_is_a_configmap_volume_and_the_image_is_pinned() -> None:
+    daemonset = resource_by_kind(load_resources(), "DaemonSet")
+    pod_spec = daemonset["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+    volumes = {volume["name"]: volume for volume in pod_spec["volumes"]}
+
+    assert "@sha256:" in container["image"]
+    assert volumes["collector"]["configMap"]["name"] == "cpu-limits-collector"
+    assert any(
+        mount["name"] == "collector" and mount["readOnly"] is True
+        for mount in container["volumeMounts"]
+    )
 
 
 def test_rbac_only_lists_pods_in_the_namespace() -> None:

@@ -21,7 +21,7 @@ spec:
   containers:
     - name: target
       image: example.invalid/workload:latest
-      __RESOURCES__
+      __RESOURCES__: {}
 """
 
 

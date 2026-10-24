@@ -11,6 +11,7 @@ import json
 import os
 import re
 import ssl
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -201,11 +202,19 @@ class KubernetesInventory(FixtureInventory):
 
         host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
         port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+        namespace = os.environ.get("POD_NAMESPACE", "")
+        node = os.environ.get("NODE_NAME", "")
         if not host or not port.isdecimal():
             raise ValueError("Kubernetes service host or HTTPS port is invalid")
+        if not namespace:
+            raise ValueError("POD_NAMESPACE is required for the Pod inventory")
         context = _kubernetes_ssl_context()
+        query = f"fieldSelector=spec.nodeName%3D{node}" if node else ""
+        url = f"https://{host}:{port}/api/v1/namespaces/{namespace}/pods"
+        if query:
+            url = f"{url}?{query}"
         request = Request(
-            f"https://{host}:{port}/api/v1/pods",
+            url,
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         )
         with urlopen(request, context=context, timeout=10) as response:
@@ -224,6 +233,32 @@ class KubernetesInventory(FixtureInventory):
                 continue
             targets.extend(_targets_from_kubernetes_pod(item, cgroup_root))
         return cls(targets)
+
+
+class RefreshingKubernetesInventory:
+    """Reload the namespace Pod inventory so new workload Pods are visible."""
+
+    def __init__(self, cgroup_root: Path, refresh_seconds: float = 1.0) -> None:
+        self.cgroup_root = cgroup_root
+        self.refresh_seconds = refresh_seconds
+        self._last = 0.0
+        self._inventory = FixtureInventory(())
+
+    def _refresh(self) -> None:
+        now = time.monotonic()
+        if now - self._last < self.refresh_seconds:
+            return
+        self._inventory = KubernetesInventory.from_service_account(self.cgroup_root)
+        self._last = now
+
+    @property
+    def targets(self) -> tuple[CgroupTarget, ...]:
+        self._refresh()
+        return self._inventory.targets
+
+    def targets_for_uid(self, uid: str) -> tuple[CgroupTarget, ...]:
+        self._refresh()
+        return self._inventory.targets_for_uid(uid)
 
 
 def _required_text(values: Mapping[str, Any], key: str) -> str:
@@ -442,7 +477,10 @@ class Collector:
     """Read registered cgroups and render their metrics without host leakage."""
 
     def __init__(
-        self, cgroup_root: Path, inventory: FixtureInventory, node: str
+        self,
+        cgroup_root: Path,
+        inventory: FixtureInventory | RefreshingKubernetesInventory,
+        node: str,
     ) -> None:
         self.cgroup_root = cgroup_root.resolve()
         self.inventory = inventory
@@ -678,7 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.fixture_inventory is not None:
         inventory = FixtureInventory.from_file(args.fixture_inventory)
     else:
-        inventory = KubernetesInventory.from_service_account(args.cgroup_root)
+        inventory = RefreshingKubernetesInventory(args.cgroup_root)
     collector = Collector(args.cgroup_root, inventory, args.node)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(collector))
     server.serve_forever()

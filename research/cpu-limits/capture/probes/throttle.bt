@@ -10,7 +10,9 @@
  * task supplies pid, comm, and, where bpftrace supports it, `cgroup`.
  *
  * Fallback: a bpftrace build without `cgroup` must replace it with 0. A zero
- * cgroup ID means unavailable. If a kernel lacks one of these symbols, do not
+ * cgroup ID means unavailable. This kernel exposes `throttle_cfs_rq_work`
+ * rather than the notrace `throttle_cfs_rq` symbol; the workqueue event is the
+ * attachable throttle marker. If a kernel lacks one of these symbols, do not
  * claim that event was captured; use the cgroup cpu.stat delta as the throttle
  * counter for that cell and record the missing symbol as a capability failure.
  */
@@ -20,9 +22,9 @@ BEGIN
     printf("timestamp,event,cpu,pid,comm,cgroup_id\n");
 }
 
-kprobe:throttle_cfs_rq
+kprobe:throttle_cfs_rq_work
 {
-    printf("%llu,throttle_cfs_rq,%d,%d,%s,%llu\n",
+    printf("%llu,throttle_cfs_rq_work,%d,%d,%s,%llu\n",
         nsecs, cpu, pid, comm, cgroup);
 }
 

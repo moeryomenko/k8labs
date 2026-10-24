@@ -57,30 +57,70 @@ spec:
         cpu-limits/research: collector
       containers:
         - name: collector
-          image: ghcr.io/eryoma/k8labs-cpu-limits-collector:0.1.0
+          # Fedora carries the kernel tooling used by the runtime gate and the
+          # trace capture. The collector itself is standard-library Python and
+          # arrives through the ConfigMap, so no private image is required.
+          image: registry.fedoraproject.org/fedora@sha256:4a78eff1423dcce55cf68b8fd66e7cdca61c85978283db3ecc3089a8419fbbc0
           imagePullPolicy: IfNotPresent
-          args: ["--host", "0.0.0.0", "--port", "9100"]
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              dnf install -y -q python3 bpftrace perf libbpf-tools procps-ng
+              mkdir -p /var/tmp/linux-sched
+              printf '%s\n' '#!/bin/sh' \
+                'LUA_PATH="/opt/linux-sched/bin/?.lua;/var/tmp/linux-sched/?.lua;;" exec /opt/linux-sched/bin/wrk2 "$@"' \
+                > /usr/local/bin/wrk2
+              chmod 0755 /usr/local/bin/wrk2
+              exec python3 /opt/cpu-limits/collector.py \
+                --cgroup-root /host/sys/fs/cgroup \
+                --node "$NODE_NAME" \
+                --host 0.0.0.0 \
+                --port 9100
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - name: metrics
               containerPort: 9100
               protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9100
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 60
           securityContext:
             privileged: false
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
+            # dnf installs the node-native tracing tools at start. The host
+            # mounts stay read-only; only the container root is writable.
+            readOnlyRootFilesystem: false
             runAsUser: 0
             capabilities:
-              drop: ["ALL"]
-              add: ["DAC_READ_SEARCH"]
-            seccompProfile:
-              type: RuntimeDefault
+              add:
+                - DAC_READ_SEARCH
+                - BPF
+                - PERFMON
+                - SYS_ADMIN
+                - SYS_RESOURCE
+                - SYS_PTRACE
+                - IPC_LOCK
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 250m
+              cpu: 100m
               memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           volumeMounts:
             - name: cgroup
               mountPath: /host/sys/fs/cgroup
@@ -89,13 +129,31 @@ spec:
               mountPath: /host/sys/kernel/debug
               readOnly: true
             - name: tracing
+              mountPath: /sys/kernel/tracing
+              readOnly: true
+            - name: tracing
               mountPath: /host/sys/kernel/tracing
+              readOnly: true
+            - name: btf
+              mountPath: /host/sys/kernel/btf
               readOnly: true
             - name: boot
               mountPath: /host/boot
               readOnly: true
             - name: modules
               mountPath: /host/lib/modules
+              readOnly: true
+            - name: src-kernels
+              mountPath: /host/usr/src/kernels
+              readOnly: true
+            - name: fixtures
+              mountPath: /fixtures
+              readOnly: true
+            - name: tools
+              mountPath: /opt/linux-sched/bin
+              readOnly: true
+            - name: collector
+              mountPath: /opt/cpu-limits
               readOnly: true
       volumes:
         - name: cgroup
@@ -110,6 +168,10 @@ spec:
           hostPath:
             path: /sys/kernel/tracing
             type: Directory
+        - name: btf
+          hostPath:
+            path: /sys/kernel/btf
+            type: Directory
         - name: boot
           hostPath:
             path: /boot
@@ -118,3 +180,36 @@ spec:
           hostPath:
             path: /lib/modules
             type: Directory
+        - name: src-kernels
+          hostPath:
+            path: /usr/src/kernels
+            type: DirectoryOrCreate
+        - name: fixtures
+          hostPath:
+            path: /var/lib/linux-sched/fixtures
+            type: Directory
+        - name: tools
+          hostPath:
+            path: /var/lib/linux-sched/bin
+            type: Directory
+        - name: collector
+          configMap:
+            name: cpu-limits-collector
+            defaultMode: 0444
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpu-limits-collector
+  namespace: cpu-limits
+  labels:
+    app.kubernetes.io/name: cpu-limits-collector
+    app.kubernetes.io/component: observer
+spec:
+  selector:
+    app.kubernetes.io/name: cpu-limits-collector
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+      protocol: TCP

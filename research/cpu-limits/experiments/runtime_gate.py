@@ -14,8 +14,8 @@ CGROUP_CONTROLLERS = Path("/sys/fs/cgroup/cgroup.controllers")
 KERNEL_RELEASE = Path("/proc/sys/kernel/osrelease")
 CGROUP_MODE = Path("/sys/kernel/debug/sched/cgroup_mode")
 BASE_SLICE_NS = Path("/sys/kernel/debug/sched/base_slice_ns")
-CPU_MAX = Path("/sys/fs/cgroup/cpu.max")
-CPU_WEIGHT = Path("/sys/fs/cgroup/cpu.weight")
+CPU_MAX = Path("/sys/fs/cgroup/kubepods.slice/cpu.max")
+CPU_WEIGHT = Path("/sys/fs/cgroup/kubepods.slice/cpu.weight")
 FIXTURE = Path("/fixtures/input.mp4")
 REQUIRED_COMMANDS = ("bpftrace", "perf", "wrk2")
 WRITABLE_DEBUG_PATHS = (CGROUP_MODE, BASE_SLICE_NS)
@@ -72,14 +72,17 @@ def _rooted(root: Path, path: Path) -> Path:
     return root / path.relative_to("/")
 
 
-def _check_readable(root: Path, name: str, path: Path) -> Check:
+def _check_readable(
+    root: Path, name: str, path: Path, *, read_text: bool = True
+) -> Check:
     target = _rooted(root, path)
     try:
         mode = target.stat().st_mode
         if not stat.S_ISREG(mode) or not mode & 0o444:
             raise OSError("not a readable regular file")
-        target.read_text(encoding="utf-8")
-    except OSError as error:
+        if read_text:
+            target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
         return Check(name, "FAIL", f"{path}: {error}")
     return Check(name, "PASS", str(path))
 
@@ -186,7 +189,7 @@ def run_gate(root: Path = Path("/"), *, focused: bool = False) -> GateResult:
         (
             _run_check(
                 lambda checked_root: _check_readable(
-                    checked_root, "fixture_input_mp4", FIXTURE
+                    checked_root, "fixture_input_mp4", FIXTURE, read_text=False
                 ),
                 root,
             ),

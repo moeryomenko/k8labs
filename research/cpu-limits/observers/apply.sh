@@ -17,14 +17,27 @@ if [[ "$#" -ne 1 ]]; then
   exit 64
 fi
 
+namespace="cpu-limits"
+configmap="cpu-limits-collector"
+
 case "$1" in
   apply)
+    kubectl create namespace "${namespace}" --dry-run=client -o yaml \
+      | kubectl apply -f -
+    kubectl -n "${namespace}" create configmap "${configmap}" \
+      --from-file=collector.py="${script_dir}/collector.py" \
+      --from-file=cgroup_probe.py="${script_dir}/../experiments/cgroup_probe.py" \
+      --from-file=runtime_gate.py="${script_dir}/../experiments/runtime_gate.py" \
+      --dry-run=client -o yaml \
+      | kubectl apply -f -
     exec kubectl apply -f "${manifest}"
     ;;
   delete)
-    exec kubectl delete --ignore-not-found -f "${manifest}"
+    kubectl delete --ignore-not-found -f "${manifest}"
+    kubectl -n "${namespace}" delete configmap "${configmap}" --ignore-not-found
     ;;
   test)
+    bash -n "${BASH_SOURCE[0]}"
     cd -- "${repo_root}"
     exec uv run pytest -q "${test_file}"
     ;;

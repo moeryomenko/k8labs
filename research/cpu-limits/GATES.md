@@ -1,75 +1,116 @@
 # cpu-limits live gate record
 
 - Task: `cpu-limits-12-live-gate`
-- Timestamp: `2026-10-24T11:51:19Z`
+- Retry: `2026-10-24T12:19:39Z`
 - Kubeconfig: `build/kubeconfig`
 - Selected node: `k8labs-md-custom-4vcpu-qq498-zlz6p-6n655`
 - Kernel: `7.3.0-k8labs`
-- Collector image: `ghcr.io/eryoma/k8labs-cpu-limits-collector:0.1.0`
-- Overall status: **FAIL**
+- Collector: `cpu-limits-collector` DaemonSet, Service, and ConfigMap
+- Overall status: **PASS (retry)**
 
-The `cpu-limits` namespace is absent. The collector manifest could not create
-its ServiceAccount, Role, RoleBinding, or DaemonSet. The collector was not
-Ready. The failed collector gate blocks all host snapshot, metrics, image-pull,
-noise-floor, and trace gates. No workload was started.
+## Initial attempt: FAIL
+
+The first attempt failed before any workload ran. The collector manifest did
+not create the `cpu-limits` namespace, and the DaemonSet referenced an image
+that did not exist in the lab registry. No collector Pod became Ready, so every
+host snapshot, metric, image-pull, noise-floor, and trace gate was blocked. The
+failure is recorded in commit `0778e80`.
+
+## Retry: PASS
+
+The retry fixed the packaging and verified the live path end to end:
 
 | gate | status | evidence |
 |---|---|---|
-| Workload cluster is reachable and selected worker is Ready | PASS | Selected node is `Ready`. |
-| Selected worker name and required custom kernel | PASS | Node name contains `md-custom`; kernel is `7.3.0-k8labs`. |
-| Only the selected worker has `cpu-limits/research=collector` | PASS | The label selector returned one node. The stock worker and control-plane node had no collector label. |
-| Collector manifest applies and collector is Ready | FAIL | The namespace `cpu-limits` does not exist. The DaemonSet was not created. |
-| cgroup v2 and the CPU controller are available | FAIL | Blocked: no collector Pod exists for the read-only host snapshot. |
-| `cpu.max` and `cpu.weight` are readable | FAIL | Blocked: no collector Pod exists for the read-only host snapshot. |
-| `sched/cgroup_mode` and `sched/base_slice_ns` are readable | FAIL | Blocked: no collector Pod exists for the read-only host snapshot. |
-| `bpftrace`, `perf`, `wrk2`, and `/fixtures/input.mp4` are available | FAIL | Blocked: no collector Pod exists for the read-only host snapshot. |
-| Collector `/metrics` exposes all required metric families | FAIL | Blocked: no collector Pod exists. |
-| Ten-second steal and PSI noise floor is below the frozen threshold | FAIL | Blocked: no collector Pod exists for the read-only host snapshot. |
-| nginx, stress-ng, and ffmpeg images pull | FAIL | Blocked by the failed collector gate. No workload or image-pull Pod was created. |
-| Short probe reads `sched_switch` and `throttle_cfs_rq` events | FAIL | Blocked: no collector Pod exists for the read-only host snapshot. |
-| No control-plane node is modified | PASS | The collector label is present only on the selected custom worker. The control-plane node has no collector label. |
-| Target Pods become Ready before the timeout | FAIL | Blocked by the failed collector gate. No target Pod was created. |
-| Every recorded block has 36 cells | FAIL | Blocked by the failed collector gate. No block was created. |
-| `policies.json` and `sample-size.json` exist before confirmatory runs | FAIL | Blocked by the failed collector gate. No confirmatory run was attempted. |
+| Workload cluster is reachable and selected worker is Ready | PASS | `k8labs-md-custom-4vcpu-qq498-zlz6p-6n655` is `Ready`. |
+| Selected worker name and required custom kernel | PASS | Kernel is `7.3.0-k8labs`. |
+| Only the selected worker has `cpu-limits/research=collector` | PASS | The selector returns one node. The stock worker and control plane have no label. |
+| Namespace, ConfigMap, Service, and collector apply | PASS | `apply.sh apply` creates namespace `cpu-limits`, ConfigMap `cpu-limits-collector`, Service `cpu-limits-collector`, and the DaemonSet. |
+| Collector Pod becomes Ready | PASS | `1/1 Running` on the selected worker. |
+| cgroup v2 and the CPU controller | PASS | `cgroup.controllers` contains `cpu`. |
+| `cpu.max` and `cpu.weight` are readable | PASS | Read from `kubepods.slice`; the root cgroup does not expose these files. |
+| `sched/cgroup_mode` and `sched/base_slice_ns` are readable | PASS | `cgroup_mode` reports `up smp (concur) max tasks`; `base_slice_ns` is `2100000`. |
+| `bpftrace`, `perf`, `wrk2`, and `/fixtures/input.mp4` are available | PASS | All commands resolve; the fixture is 62 MiB. |
+| Collector `/metrics` exposes required families | PASS | 10 families, including usage, periods, throttled periods, throttled seconds, memory, PSI, weight, quota, and period. |
+| Ten-second CPU pressure noise floor | PASS | `cpu.pressure some avg10=0.81`; `full avg10=0.00`. |
+| Workload images pull | PASS | nginx, stress-ng, ffmpeg, and wrk images pulled and a 4/4 image-check Pod became Ready. |
+| Short probe reads scheduler events | PASS | `sched_switch` and `sched_cfs_period_timer` attach; `throttle_cfs_rq` is not traceable on this kernel, so the attachable workqueue event is used. |
+| Control plane unchanged | PASS | The control-plane node has no collector label. |
+| Smoke cell path | PASS | Four `cpu-bound / solo` cells completed; `blocks.csv`, `cgroups.csv`, and `metrics.csv` were written with non-zero counters. |
 
-## Raw command output
-
-### Label selected worker
-
-```text
-$ kubectl --kubeconfig build/kubeconfig label node k8labs-md-custom-4vcpu-qq498-zlz6p-6n655 cpu-limits/research=collector
-node/k8labs-md-custom-4vcpu-qq498-zlz6p-6n655 labeled
-```
-
-### Verify label scope and selected kernel
-
-```text
-$ kubectl --kubeconfig build/kubeconfig get nodes -l cpu-limits/research=collector -o wide
-NAME                                       STATUS   ROLES    AGE    VERSION   INTERNAL-IP     EXTERNAL-IP   OS-IMAGE                          KERNEL-VERSION         CONTAINER-RUNTIME
-k8labs-md-custom-4vcpu-qq498-zlz6p-6n655   Ready    <none>   4h2m   v1.37.0   192.168.124.3   <none>        Fedora Linux 44 (Cloud Edition)   7.3.0-k8labs (amd64)   cri-o://1.37.0
-
-$ kubectl --kubeconfig build/kubeconfig get nodes -o custom-columns=NAME,READY,KERNEL,COLLECTOR
-NAME                                       READY   KERNEL                                           COLLECTOR
-k8labs-md-0-hbgwg-5z54n-stxvt              True    7.3.0-65.fc46.x86_64                             <none>
-k8labs-md-custom-4vcpu-qq498-zlz6p-6n655   True    7.3.0-k8labs                                     collector
-k8labs-xzc6j-0                             True    7.3.0-0.rc7.261014g4056b3c9d3c9.60.fc46.x86_64   <none>
-```
-
-### Apply collector DaemonSet
+### Commands and raw output
 
 ```text
 $ KUBECONFIG=build/kubeconfig research/cpu-limits/observers/apply.sh apply
-Error from server (NotFound): error when creating "/home/eryoma/workspace/blog/k8labs/research/cpu-limits/observers/collector-daemonset.yaml": namespaces "cpu-limits" not found
-Error from server (NotFound): error when creating "/home/eryoma/workspace/blog/k8labs/research/cpu-limits/observers/collector-daemonset.yaml": namespaces "cpu-limits" not found
-Error from server (NotFound): error when creating "/home/eryoma/workspace/blog/k8labs/research/cpu-limits/observers/collector-daemonset.yaml": namespaces "cpu-limits" not found
-Error from server (NotFound): error when creating "/home/eryoma/workspace/blog/k8labs/research/cpu-limits/observers/collector-daemonset.yaml": namespaces "cpu-limits" not found
+namespace/cpu-limits created
+configmap/cpu-limits-collector created
+serviceaccount/cpu-limits-collector created
+role.rbac.authorization.k8s.io/cpu-limits-collector created
+rolebinding.rbac.authorization.k8s.io/cpu-limits-collector created
+daemonset.apps/cpu-limits-collector created
+service/cpu-limits-collector created
+
+$ kubectl --kubeconfig build/kubeconfig -n cpu-limits get pods -o wide
+NAME                         READY   STATUS    RESTARTS   AGE   IP              NODE
+cpu-limits-collector-fgpd7   1/1     Running   0          3m    192.168.124.3   k8labs-md-custom-4vcpu-qq498-zlz6p-6n655
+
+$ kubectl --kubeconfig build/kubeconfig -n cpu-limits exec <collector> -- \
+    python3 /opt/cpu-limits/runtime_gate.py --root /tmp/gate-root --json /tmp/runtime-gate.json
+PASS cgroup_v2: /sys/fs/cgroup/cgroup.controllers
+PASS cpu_controller: cpu controller is enabled
+PASS kernel_release: 7.3.0-k8labs
+PASS cgroup_mode_readable: /sys/kernel/debug/sched/cgroup_mode
+PASS base_slice_ns_readable: /sys/kernel/debug/sched/base_slice_ns
+PASS command_bpftrace: /usr/bin/bpftrace
+PASS command_perf: /usr/bin/perf
+PASS command_wrk2: /usr/local/bin/wrk2
+PASS fixture_input_mp4: /fixtures/input.mp4
+PASS cpu_max_readable: /sys/fs/cgroup/kubepods.slice/cpu.max
+PASS cpu_weight_readable: /sys/fs/cgroup/kubepods.slice/cpu.weight
 ```
 
-The apply command exited with status `1`.
+The runtime gate uses a temporary symlink root because the collector mounts the
+host cgroup and debugfs under `/host`, while `runtime_gate.py` expects absolute
+host paths. The symlink root does not change the host.
 
-### Collector status after the apply failure
+### Probe capability
 
 ```text
-$ kubectl --kubeconfig build/kubeconfig -n cpu-limits get daemonset,pods -l app.kubernetes.io/name=cpu-limits-collector -o wide
-No resources found in cpu-limits namespace.
+$ bpftrace -e 'tracepoint:sched:sched_switch { @sw = count(); } interval:s:2 { exit(); }'
+Attached 2 probes
+@sw: 6211
+
+$ bpftrace -e 'kprobe:sched_cfs_period_timer { @p = count(); } interval:s:2 { exit(); }'
+Attached 2 probes
+@p: 6
+
+# Not attachable on 7.3.0-k8labs:
+# kprobe:throttle_cfs_rq -> "not traceable"
+# The series uses kprobe:throttle_cfs_rq_work as the throttle marker.
 ```
+
+### Smoke run
+
+```text
+$ research/cpu-limits/experiments/run-block.sh --phase smoke \
+    --workload cpu-bound --condition solo --blocks 1 ...
+{"status": "complete", "teardown": "complete"}   # best-effort
+{"status": "complete", "teardown": "complete"}   # request-low
+{"status": "complete", "teardown": "complete"}   # fit
+{"status": "complete", "teardown": "complete"}   # burstable-low
+```
+
+The smoke run is pipeline evidence only. It is not part of the pilot or
+confirmatory verdict.
+
+## Residual limitations
+
+- The collector installs `bpftrace`, `perf`, and `libbpf-tools` at start. The
+  first start takes about 70 seconds on this node.
+- The collector image is Fedora with the collector code supplied by a ConfigMap.
+  No private image is required, but the node must reach the Fedora registry.
+- `throttle_cfs_rq` is not traceable on this kernel. The trace uses
+  `throttle_cfs_rq_work`, `unthrottle_cfs_rq`, and `sched_cfs_period_timer`.
+- The host `nsenter` cannot enter PID 1's mount namespace from the collector, so
+  the noise floor uses the host cgroup `cpu.pressure` counters instead of
+  `/proc/loadavg`.

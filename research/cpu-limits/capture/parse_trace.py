@@ -32,7 +32,9 @@ TRACE_COLUMNS = (
 )
 
 _WAKEUP_EVENTS = frozenset({"sched_wakeup", "sched_wakeup_new"})
-_THROTTLE_EVENTS = frozenset({"throttle_cfs_rq", "unthrottle_cfs_rq"})
+_THROTTLE_EVENTS = frozenset(
+    {"throttle_cfs_rq", "throttle_cfs_rq_work", "unthrottle_cfs_rq"}
+)
 _DURATION_RE = re.compile(
     r"^\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>ns|us|µs|ms|s)?\s*$"
 )

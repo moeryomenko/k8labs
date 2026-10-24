@@ -6,6 +6,7 @@ limit is the sum of the two container limits.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -30,7 +31,24 @@ PLACEHOLDERS = (
 )
 DEFAULT_MANIFEST_PATH = Path(__file__).with_name("manifests.yaml")
 _PLACEHOLDER = re.compile(r"__[A-Z][A-Z0-9_]*__")
-_RESOURCES_LINE = re.compile(r"(?m)^([ \t]*)__RESOURCES__[ \t]*$")
+_RESOURCES_LINE = re.compile(r"(?m)^([ \t]*)__RESOURCES__:[ \t]*(?:\{\})?[ \t]*$")
+
+
+def _pod_name(workload: str, policy: str, run_id: str) -> str:
+    """Return a DNS-safe Pod name no longer than the 63-character limit."""
+
+    normalized = re.sub(r"[^a-z0-9.-]+", "-", run_id.lower()).strip("-")
+    name = f"cl-{workload}-{policy}-{normalized}"
+    if len(name) <= 63:
+        return name
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+    return f"{name[:54]}-{digest}"
+
+
+def pod_name(workload: str, policy: str, run_id: str) -> str:
+    """Return the DNS-safe Pod name shared by the renderer and the runner."""
+
+    return _pod_name(workload, policy, run_id)
 
 
 def _cpu_value(value: str | int, name: str) -> str:
@@ -111,21 +129,29 @@ def _validate_placeholders(template: str) -> None:
         raise ValueError(f"unknown placeholder: {unknown[0]}")
     for placeholder in PLACEHOLDERS:
         count = template.count(placeholder)
-        if count != 1:
+        if placeholder == "__RESOURCES__":
+            if count < 1:
+                raise ValueError("placeholder __RESOURCES__ must occur at least once")
+        elif count != 1:
             raise ValueError(
                 f"placeholder {placeholder} must occur exactly once, found {count}"
             )
 
 
 def _replace_resources(template: str, resources: str) -> str:
-    """Insert an indented complete YAML resources mapping."""
+    """Insert the same complete YAML resources mapping at every placeholder."""
 
-    match = _RESOURCES_LINE.search(template)
-    if not match:
+    matches = list(_RESOURCES_LINE.finditer(template))
+    if not matches:
         raise ValueError("__RESOURCES__ must occupy one indented YAML line")
-    indent = match.group(1)
-    block = resources.replace("\n", f"\n{indent}")
-    return template[: match.start()] + f"{indent}{block}" + template[match.end() :]
+    rendered = template
+    for match in reversed(matches):
+        indent = match.group(1)
+        block = resources.replace("\n", f"\n{indent}")
+        rendered = (
+            rendered[: match.start()] + f"{indent}{block}" + rendered[match.end() :]
+        )
+    return rendered
 
 
 def render(
@@ -155,7 +181,7 @@ def render(
         template, _resources_yaml(resources_for(policy, fit_cpu, low_cpu))
     )
     replacements = {
-        "__NAME__": f"cpu-limits-{workload}-{policy}-{run_id}",
+        "__NAME__": _pod_name(workload, policy, run_id),
         "__NODE__": node,
         "__RUN_ID__": run_id,
         "__WORKLOAD__": workload,

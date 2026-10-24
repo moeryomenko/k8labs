@@ -22,8 +22,8 @@ def make_root(tmp_path: Path, *, focused: bool = False) -> Path:
     for path in runtime_gate.WRITABLE_DEBUG_PATHS:
         (root / path.relative_to("/")).chmod(0o444)
     write(root, "/fixtures/input.mp4", "fixture\n")
-    write(root, "/sys/fs/cgroup/cpu.max", "max 100000\n")
-    write(root, "/sys/fs/cgroup/cpu.weight", "100\n")
+    write(root, "/sys/fs/cgroup/kubepods.slice/cpu.max", "max 100000\n")
+    write(root, "/sys/fs/cgroup/kubepods.slice/cpu.weight", "100\n")
     for command in runtime_gate.REQUIRED_COMMANDS:
         write(root, f"/usr/bin/{command}", "#!/bin/sh\n")
         (root / "usr" / "bin" / command).chmod(0o755)
@@ -78,8 +78,8 @@ def test_every_required_path_and_command_has_a_check(tmp_path: Path) -> None:
         ("command_perf", "usr/bin/perf"),
         ("command_wrk2", "usr/bin/wrk2"),
         ("fixture_input_mp4", "fixtures/input.mp4"),
-        ("cpu_max_readable", "sys/fs/cgroup/cpu.max"),
-        ("cpu_weight_readable", "sys/fs/cgroup/cpu.weight"),
+        ("cpu_max_readable", "sys/fs/cgroup/kubepods.slice/cpu.max"),
+        ("cpu_weight_readable", "sys/fs/cgroup/kubepods.slice/cpu.weight"),
     ),
 )
 def test_missing_required_path_fails_closed(
@@ -128,7 +128,7 @@ def test_cli_writes_json_and_returns_failure_for_missing_path(
     tmp_path: Path, capsys
 ) -> None:
     root = make_root(tmp_path)
-    (root / "sys" / "fs" / "cgroup" / "cpu.max").unlink()
+    (root / "sys" / "fs" / "cgroup" / "kubepods.slice" / "cpu.max").unlink()
     output = tmp_path / "gate.json"
 
     assert runtime_gate.main(["--root", str(root), "--json", str(output)]) == 1
