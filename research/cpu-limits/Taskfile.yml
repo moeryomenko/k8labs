@@ -1,17 +1,33 @@
 # k8labs CPU requests and limits research series
 version: '3'
 
+shell: bash
+
 vars:
   CPU_LIMITS_DIR: '{{.TASKFILE_DIR}}'
+  CPU_LIMITS_REPO_ROOT:
+    sh: git -C '{{.CPU_LIMITS_DIR}}' rev-parse --show-toplevel
+
   CPU_LIMITS_EXPERIMENTS_DIR: '{{.CPU_LIMITS_DIR}}/experiments'
+  CPU_LIMITS_ANALYSIS_DIR: '{{.CPU_LIMITS_DIR}}/analysis'
+  CPU_LIMITS_OBSERVERS_DIR: '{{.CPU_LIMITS_DIR}}/observers'
+  CPU_LIMITS_TEST_DIR: '{{.CPU_LIMITS_DIR}}/tests'
+  CPU_LIMITS_RUNNER: '{{.CPU_LIMITS_EXPERIMENTS_DIR}}/run-block.sh'
+  CPU_LIMITS_KUBECONFIG: '{{.CPU_LIMITS_REPO_ROOT}}/build/kubeconfig'
+  CPU_LIMITS_NODE: '{{.CPU_LIMITS_NODE | default ""}}'
+  CPU_LIMITS_COLLECTOR_URL: '{{.CPU_LIMITS_COLLECTOR_URL | default ""}}'
+  CPU_LIMITS_COLLECTOR_POD: '{{.CPU_LIMITS_COLLECTOR_POD | default ""}}'
+  CPU_LIMITS_WORKLOAD: '{{.CPU_LIMITS_WORKLOAD | default ""}}'
+  CPU_LIMITS_CONDITION: '{{.CPU_LIMITS_CONDITION | default ""}}'
+  CPU_LIMITS_BLOCKS: '{{.CPU_LIMITS_BLOCKS | default "1"}}'
+  CPU_LIMITS_TRACE_CELLS: '{{.CPU_LIMITS_TRACE_CELLS | default ""}}'
   CPU_LIMITS_DATA_ROOT:
     sh: |
-      if [ -n "${K8LABS_RESEARCH_DATA_ROOT:-}" ]; then
-        printf '%s/cpu-limits' "$K8LABS_RESEARCH_DATA_ROOT"
-      else
-        printf '%s/build/research/cpu-limits' '{{.ROOT_DIR}}'
-      fi
+      base="${K8LABS_RESEARCH_DATA_ROOT:-{{.CPU_LIMITS_REPO_ROOT}}/build}"
+      printf '%s/research/cpu-limits' "$base"
 
+# Live tasks require a kubeconfig, a selected worker, and a collector endpoint.
+# Every data-dependent task checks its input before it starts a command.
 tasks:
   cpu-limits-plan:
     desc: Print the frozen seeded CPU-limits cell plan
@@ -20,3 +36,217 @@ tasks:
   cpu-limits-validate:
     desc: Validate the frozen CPU-limits design
     cmd: python3 '{{.CPU_LIMITS_EXPERIMENTS_DIR}}/design.py' --validate
+
+  cpu-limits-test:
+    desc: Run CPU-limits offline tests
+    cmd: |
+      set -eu
+      uv run pytest -q "{{.CPU_LIMITS_TEST_DIR}}"
+      if command -v bats >/dev/null 2>&1; then
+        bats "{{.CPU_LIMITS_TEST_DIR}}/test-cpu-limits.bats"
+      else
+        echo "INFO: bats is not installed; shell contracts were not run" >&2
+      fi
+
+  cpu-limits-collector-apply:
+    desc: Apply the CPU-limits collector DaemonSet
+    cmd: |
+      set -eu
+      test -f "{{.CPU_LIMITS_KUBECONFIG}}" || {
+        echo "ERROR: kubeconfig is missing: {{.CPU_LIMITS_KUBECONFIG}}" >&2
+        exit 1
+      }
+      KUBECONFIG="{{.CPU_LIMITS_KUBECONFIG}}" \
+        "{{.CPU_LIMITS_OBSERVERS_DIR}}/apply.sh" apply
+
+  cpu-limits-collector-delete:
+    desc: Delete the CPU-limits collector DaemonSet
+    cmd: |
+      set -eu
+      test -f "{{.CPU_LIMITS_KUBECONFIG}}" || {
+        echo "ERROR: kubeconfig is missing: {{.CPU_LIMITS_KUBECONFIG}}" >&2
+        exit 1
+      }
+      KUBECONFIG="{{.CPU_LIMITS_KUBECONFIG}}" \
+        "{{.CPU_LIMITS_OBSERVERS_DIR}}/apply.sh" delete
+
+  cpu-limits-gate:
+    desc: Run the fail-closed CPU-limits runtime gate
+    cmd: |
+      set -eu
+      mkdir -p "{{.CPU_LIMITS_DATA_ROOT}}"
+      python3 "{{.CPU_LIMITS_EXPERIMENTS_DIR}}/runtime_gate.py" \
+        --json "{{.CPU_LIMITS_DATA_ROOT}}/runtime-gate.json"
+
+  cpu-limits-smoke:
+    desc: Run one smoke block (set CPU_LIMITS_NODE and collector variables)
+    cmd: |
+      set -eu
+      test -f "{{.CPU_LIMITS_KUBECONFIG}}" || {
+        echo "ERROR: kubeconfig is missing: {{.CPU_LIMITS_KUBECONFIG}}" >&2
+        exit 1
+      }
+      set -- \
+        --phase smoke \
+        --blocks 1 \
+        --node "{{.CPU_LIMITS_NODE}}" \
+        --collector-url "{{.CPU_LIMITS_COLLECTOR_URL}}" \
+        --collector-pod "{{.CPU_LIMITS_COLLECTOR_POD}}" \
+        --kubeconfig "{{.CPU_LIMITS_KUBECONFIG}}" \
+        --data-root "{{.CPU_LIMITS_DATA_ROOT}}"
+      if [ -n "{{.CPU_LIMITS_WORKLOAD}}" ]; then
+        set -- "$@" --workload "{{.CPU_LIMITS_WORKLOAD}}"
+      fi
+      if [ -n "{{.CPU_LIMITS_CONDITION}}" ]; then
+        set -- "$@" --condition "{{.CPU_LIMITS_CONDITION}}"
+      fi
+      "{{.CPU_LIMITS_RUNNER}}" "$@"
+
+  cpu-limits-pilot:
+    desc: Run pilot blocks (set CPU_LIMITS_NODE and collector variables)
+    cmd: |
+      set -eu
+      test -f "{{.CPU_LIMITS_KUBECONFIG}}" || {
+        echo "ERROR: kubeconfig is missing: {{.CPU_LIMITS_KUBECONFIG}}" >&2
+        exit 1
+      }
+      "{{.CPU_LIMITS_RUNNER}}" \
+        --phase pilot \
+        --blocks 3 \
+        --node "{{.CPU_LIMITS_NODE}}" \
+        --collector-url "{{.CPU_LIMITS_COLLECTOR_URL}}" \
+        --collector-pod "{{.CPU_LIMITS_COLLECTOR_POD}}" \
+        --kubeconfig "{{.CPU_LIMITS_KUBECONFIG}}" \
+        --data-root "{{.CPU_LIMITS_DATA_ROOT}}"
+
+  cpu-limits-freeze:
+    desc: Freeze policy values from complete pilot cgroup observations
+    cmd: |
+      set -eu
+      for path in \
+        "{{.CPU_LIMITS_DATA_ROOT}}/pilot/blocks.csv" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/pilot/cgroups.csv"; do
+        test -f "$path" || {
+          echo "ERROR: pilot input is missing: $path" >&2
+          exit 1
+        }
+      done
+      python3 "{{.CPU_LIMITS_EXPERIMENTS_DIR}}/freeze_policies.py" \
+        --data-root "{{.CPU_LIMITS_DATA_ROOT}}"
+
+  cpu-limits-sample-size:
+    desc: Freeze confirmatory sample size from complete pilot data
+    cmd: |
+      set -eu
+      for path in \
+        "{{.CPU_LIMITS_DATA_ROOT}}/pilot/blocks.csv" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/policies.json"; do
+        test -f "$path" || {
+          echo "ERROR: required pilot output is missing: $path" >&2
+          exit 1
+        }
+      done
+      python3 "{{.CPU_LIMITS_ANALYSIS_DIR}}/sample_size.py" \
+        --data-root "{{.CPU_LIMITS_DATA_ROOT}}" \
+        --output "{{.CPU_LIMITS_DATA_ROOT}}/sample-size.json"
+
+  cpu-limits-confirm:
+    desc: Run confirmatory blocks after policy and sample-size freeze
+    cmd: |
+      set -eu
+      missing=0
+      for path in \
+        "{{.CPU_LIMITS_DATA_ROOT}}/policies.json" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/sample-size.json"; do
+        if [ ! -f "$path" ]; then
+          echo "ERROR: confirmatory phase requires $path" >&2
+          missing=1
+        fi
+      done
+      (( missing == 0 )) || exit 1
+      test -f "{{.CPU_LIMITS_KUBECONFIG}}" || {
+        echo "ERROR: kubeconfig is missing: {{.CPU_LIMITS_KUBECONFIG}}" >&2
+        exit 1
+      }
+      "{{.CPU_LIMITS_RUNNER}}" \
+        --phase confirmatory \
+        --blocks "{{.CPU_LIMITS_BLOCKS}}" \
+        --node "{{.CPU_LIMITS_NODE}}" \
+        --collector-url "{{.CPU_LIMITS_COLLECTOR_URL}}" \
+        --collector-pod "{{.CPU_LIMITS_COLLECTOR_POD}}" \
+        --kubeconfig "{{.CPU_LIMITS_KUBECONFIG}}" \
+        --data-root "{{.CPU_LIMITS_DATA_ROOT}}"
+
+  cpu-limits-focused:
+    desc: Run the focused writable-control gate before focused experiments
+    cmd: |
+      set -eu
+      mkdir -p "{{.CPU_LIMITS_DATA_ROOT}}/focused"
+      python3 "{{.CPU_LIMITS_EXPERIMENTS_DIR}}/runtime_gate.py" \
+        --focused \
+        --json "{{.CPU_LIMITS_DATA_ROOT}}/focused/runtime-gate.json"
+
+  cpu-limits-analyze:
+    desc: Analyze complete confirmatory blocks with frozen inputs
+    cmd: |
+      set -eu
+      for path in \
+        "{{.CPU_LIMITS_DATA_ROOT}}/policies.json" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/sample-size.json" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/confirmatory/blocks.csv"; do
+        test -f "$path" || {
+          echo "ERROR: analysis input is missing: $path" >&2
+          exit 1
+        }
+      done
+      python3 "{{.CPU_LIMITS_ANALYSIS_DIR}}/analyze.py" \
+        --data-root "{{.CPU_LIMITS_DATA_ROOT}}" \
+        --output-dir "{{.CPU_LIMITS_DATA_ROOT}}/analysis"
+
+  cpu-limits-plots:
+    desc: Generate figures from complete analysis output
+    cmd: |
+      set -eu
+      test -f "{{.CPU_LIMITS_DATA_ROOT}}/analysis/summary.json" || {
+        echo "ERROR: analysis summary is missing: {{.CPU_LIMITS_DATA_ROOT}}/analysis/summary.json" >&2
+        exit 1
+      }
+      python3 "{{.CPU_LIMITS_ANALYSIS_DIR}}/plots.py" \
+        --input "{{.CPU_LIMITS_DATA_ROOT}}/analysis/summary.json" \
+        --output-dir "{{.CPU_LIMITS_DATA_ROOT}}/analysis/figures"
+
+  cpu-limits-report:
+    desc: Build the CPU-limits report from analysis and figures
+    cmd: |
+      set -eu
+      for path in \
+        "{{.CPU_LIMITS_DATA_ROOT}}/analysis/summary.json" \
+        "{{.CPU_LIMITS_DATA_ROOT}}/analysis/figures"; do
+        test -e "$path" || {
+          echo "ERROR: report input is missing: $path" >&2
+          exit 1
+        }
+      done
+      python3 "{{.CPU_LIMITS_ANALYSIS_DIR}}/report.py" \
+        --data-root "{{.CPU_LIMITS_DATA_ROOT}}" \
+        --output "{{.CPU_LIMITS_DATA_ROOT}}/analysis/report.md"
+
+  cpu-limits-data-usage:
+    desc: Show CPU-limits data-root usage
+    cmd: |
+      set -eu
+      test -d "{{.CPU_LIMITS_DATA_ROOT}}" || {
+        echo "ERROR: data root is missing: {{.CPU_LIMITS_DATA_ROOT}}" >&2
+        exit 1
+      }
+      du -sh "{{.CPU_LIMITS_DATA_ROOT}}"
+
+  cpu-limits-clean:
+    desc: Remove the CPU-limits data root
+    cmd: |
+      set -eu
+      test -d "{{.CPU_LIMITS_DATA_ROOT}}" || {
+        echo "ERROR: data root is missing: {{.CPU_LIMITS_DATA_ROOT}}" >&2
+        exit 1
+      }
+      rm -rf -- "{{.CPU_LIMITS_DATA_ROOT}}"
