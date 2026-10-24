@@ -48,6 +48,13 @@ tasks:
         echo "INFO: bats is not installed; shell contracts were not run" >&2
       fi
 
+  cpu-limits-dry-run:
+    desc: Run the marked synthetic CPU-limits analysis path offline
+    cmd: |
+      set -eu
+      python3 "{{.CPU_LIMITS_ANALYSIS_DIR}}/dry_run.py" \
+        --output-dir "{{.CPU_LIMITS_DATA_ROOT}}/dry-run"
+
   cpu-limits-collector-apply:
     desc: Apply the CPU-limits collector DaemonSet
     cmd: |

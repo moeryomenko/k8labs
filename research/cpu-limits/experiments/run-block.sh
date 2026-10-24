@@ -102,18 +102,6 @@ validate_args() {
     fi
 }
 
-is_trace_cell() {
-    local cell_id="$1"
-    [[ -n "${trace_cells}" ]] || return 1
-    [[ "${trace_cells}" == "all" ]] && return 0
-    local item
-    IFS=',' read -r -a items <<< "${trace_cells}"
-    for item in "${items[@]}"; do
-        [[ "${item}" == "${cell_id}" ]] && return 0
-    done
-    return 1
-}
-
 emit_schedule() {
     python3 - "${script_dir}/design.py" "${blocks}" "${seed}" "${workload}" "${condition}" <<'PY'
 import importlib.util
@@ -140,7 +128,9 @@ PY
 main() {
     parse_args "$@"
     validate_args
-    local block_id position cell_id
+    local block_id position cell_id schedule_file
+    schedule_file="$(mktemp "${TMPDIR:-/tmp}/cpu-limits-schedule.XXXXXX")"
+    emit_schedule > "${schedule_file}"
     while IFS=$'\t' read -r block_id position cell_id; do
         [[ -n "${cell_id}" ]] || continue
         if (( dry_run )); then
@@ -163,9 +153,13 @@ main() {
             --ready-timeout "${ready_timeout}"
         )
         if [[ -n "${kubeconfig}" ]]; then command+=(--kubeconfig "${kubeconfig}"); fi
-        if is_trace_cell "${cell_id}"; then command+=(--trace); fi
+        case ",${trace_cells}," in
+            ",all," | *,"${cell_id}",*) command+=(--trace) ;;
+            *) ;;
+        esac
         "${command[@]}"
-    done < <(emit_schedule)
+    done < "${schedule_file}"
+    rm -f -- "${schedule_file}"
 }
 
 main "$@"
