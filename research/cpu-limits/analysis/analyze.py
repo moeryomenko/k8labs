@@ -98,15 +98,12 @@ FAMILIES = (
     ("throttle_gap", "fit", "burstable-low", "solo", THROTTLE_MARGIN, 8),
 )
 LOWER_IS_BETTER = frozenset({"latency_p50_ms", "latency_p99_ms"})
-THROUGHPUT_NAMES = frozenset(
-    {
-        "throughput",
-        "requests_per_second",
-        "ops_per_second",
-        "bogo_ops_per_second",
-        "frames_per_second",
-    }
-)
+THROUGHPUT_METRICS = {
+    "cpu-bound": ("bogo_ops_per_second", "ops_per_second", "throughput"),
+    "io-bound": ("requests_per_second", "throughput"),
+    "memory-bound": ("bogo_ops_per_second", "ops_per_second", "throughput"),
+    "hybrid": ("frames_per_second", "throughput"),
+}
 LATENCY_NAMES = frozenset(
     {"latency_p50_ms", "latency_p99_ms", "p50_latency_ms", "p99_latency_ms"}
 )
@@ -299,7 +296,12 @@ def load_campaign(
         cgroup_summary, parameters = _cgroup_summary(cgroup_by_cell[key])
         values = _metric_values(metric_by_cell[key])
         throughput = next(
-            (values[name] for name in THROUGHPUT_NAMES if name in values), None
+            (
+                values[name]
+                for name in THROUGHPUT_METRICS.get(row["workload"], ())
+                if name in values
+            ),
+            None,
         )
         latency = next(
             (

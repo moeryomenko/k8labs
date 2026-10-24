@@ -17,7 +17,7 @@ This file classifies the sources used by [GUIDE.md](GUIDE.md). It separates offi
 - **Type:** Measured.
 - **Claim:** Three complete pilot blocks produced 108 complete cells on one 4-vCPU custom-kernel worker. Requests mapped to observed `cpu.weight`. Limits mapped to observed `cpu.max`. Low-limit CPU-bound and memory-bound cells showed descriptive throughput reductions and high throttled-period ratios in several cases.
 - **Campaign relationship:** Supports directly. This is the campaign evidence.
-- **Limit:** This report is pilot descriptive, not confirmatory. Calibration failed for CPU-bound, I/O-bound, and hybrid low policies. The confirmatory campaign did not run. It contains no sched_ext measurement and no numerical trace finding.
+- **Limit:** This report is pilot descriptive, not confirmatory. Calibration failed for CPU-bound, I/O-bound, and hybrid low policies. The confirmatory campaign did not run. It contains no sched_ext measurement. Its numerical run-queue result is pilot-descriptive trace evidence from selected five-second slices only.
 
 ## Official Kubernetes documentation
 

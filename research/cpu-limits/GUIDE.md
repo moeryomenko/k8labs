@@ -162,7 +162,7 @@ Collect these signals on the same time interval:
 - `cpu.weight`, `cpu.max`, `cpu.stat`, and `cpu.pressure` at the Pod and container levels. [L-Cgroup-v2]
 - CPU use, CFS periods, throttled periods, and throttled seconds from cAdvisor-compatible metrics. [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
 - Application throughput, errors, and latency. [RESULTS](RESULTS.md#application-outcomes-by-workload-and-policy)
-- Scheduler evidence from bounded `perf sched` and reviewed trace probes when the node policy permits it. The pilot figures do not support numerical trace findings. [RESULTS](RESULTS.md#trace-evidence)
+- Scheduler evidence from bounded `perf sched` and reviewed trace probes when the node policy permits it. The recorded run-queue p50 and p99 are pilot-descriptive trace evidence for selected cells only. [RESULTS](RESULTS.md#trace-evidence)
 
 **Recommendation:** alert on a combination of service failure signals, throttling, and CPU pressure. Do not alert on a throttled-time value alone because workload concurrency changes its meaning. [L-Cgroup-v2] [B-Indeed]
 

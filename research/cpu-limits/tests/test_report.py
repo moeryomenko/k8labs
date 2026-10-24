@@ -70,3 +70,24 @@ def test_pilot_report_uses_descriptive_labels_without_confirmatory_decisions() -
     assert "pilot descriptive, not confirmatory" in report
     assert "| family | workload | metric | decision |" not in report
     assert "complete confirmatory rows" not in report
+
+
+def test_pilot_trace_result_is_labelled_descriptive() -> None:
+    report = compose_report(
+        {
+            "phase": "pilot",
+            "cells": [{"block_id": "1", "workload": "cpu-bound"}],
+            "contrasts": [],
+            "trace_rows": [
+                {
+                    "cell_id": "solo-cpu-bound-fit",
+                    "event": "runqueue_delay",
+                    "latency_ns": 3_000,
+                }
+            ],
+        },
+        summary_markdown="# Summary\n",
+    )
+
+    assert "Trace evidence is pilot descriptive" in report
+    assert "Run-queue delay p50/p99: 0.003 / 0.003 ms" in report

@@ -278,3 +278,22 @@ def test_pilot_analysis_is_descriptive_and_sets_the_phase(tmp_path: Path) -> Non
     assert "pilot descriptive summary" in (
         tmp_path / "analysis" / "summary.md"
     ).read_text(encoding="utf-8")
+
+
+def test_hybrid_throughput_uses_frames_per_second(tmp_path: Path) -> None:
+    """Use hybrid frame rate instead of an arbitrary metric order."""
+
+    blocks_path, cgroups_path, metrics_path = write_campaign(tmp_path)
+    blocks, _cgroups, metrics = campaign_rows()
+    for row in blocks:
+        row["workload"] = "hybrid"
+    hybrid_metrics = list(metrics)
+    hybrid_metrics.extend(
+        {**row, "metric": "frames_per_second", "value": "300"} for row in metrics
+    )
+    write_csv(blocks_path, BLOCK_COLUMNS, blocks)
+    write_csv(metrics_path, METRIC_COLUMNS, hybrid_metrics)
+
+    cells = load_campaign(blocks_path, cgroups_path, metrics_path)
+
+    assert {cell["throughput"] for cell in cells} == {300.0}

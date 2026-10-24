@@ -342,6 +342,9 @@ def compose_report(
                 f"- Trace cells: {len(trace_cells)}",
                 "- Trace cells: "
                 + ", ".join(f"`{_markdown(cell)}`" for cell in trace_cells),
+                "- Trace evidence is pilot descriptive and covers bounded slices only."
+                if is_pilot
+                else "- Trace evidence covers the recorded confirmatory slices only.",
             )
         )
         if delays:

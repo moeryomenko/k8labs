@@ -223,14 +223,15 @@ confirmatory campaign did not run.
 Data: `build/research/cpu-limits/pilot/cells/*/*/trace/raw/{sched-trace,throttle}.csv`;
 3 blocks and 108 complete cells, with traces in 4 selected cells per block.
 
-The trace parser matched target workload PIDs and produced 34,898 trace rows
-across the four trace cells: `solo-cpu-bound-fit`,
+This is pilot-descriptive trace evidence, not a confirmatory finding. The
+trace parser matched target workload PIDs and produced 34,898 trace rows across
+the four trace cells: `solo-cpu-bound-fit`,
 `solo-cpu-bound-burstable-low`, `solo-io-bound-fit`, and
 `solo-io-bound-burstable-low`. The target-task run-queue delay was
 p50 = 0.003 ms and p99 = 0.087 ms in these pilot slices. The run-queue
 histogram and on-CPU/off-CPU timeline figures are generated from those rows.
-The trace slice is five seconds inside the measured window and is not a
-whole-window sample.
+The trace slice is five seconds inside the measured window. It is not a
+whole-window sample and applies only to the recorded cells and worker.
 
 ## Figure references
 
@@ -246,6 +247,8 @@ whole-window sample.
 
 - Calibration failed, so the confirmatory campaign did not run.
 - The report has three blocks, 108 cells, and one worker only.
-- The CSV inputs do not contain trace rows; the trace section relies on the
-  artifact inventory in `PILOT.md` and makes no numerical trace finding.
+- The numerical trace result is pilot descriptive. It uses the recorded
+  `trace-rows.json` artifact, not the campaign CSV inputs.
+- The trace slice covers selected cells only. It does not describe a full
+  measurement window or every workload policy.
 - No sched_ext measurement was run.

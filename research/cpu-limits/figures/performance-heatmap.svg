@@ -9,57 +9,57 @@
 <text x="637.50" y="105" text-anchor="middle" font-family="sans-serif" font-size="12">io-bound</text>
 <text x="812.50" y="105" text-anchor="middle" font-family="sans-serif" font-size="12">memory-bound</text>
 <text x="190" y="151.67" text-anchor="end" font-family="sans-serif" font-size="12">best-effort</text>
-<rect x="200.00" y="125.00" width="173.00" height="51.33" fill="rgb(35,182,255)" stroke="#555"/>
+<rect x="200.00" y="125.00" width="173.00" height="51.33" fill="rgb(244,252,255)" stroke="#555"/>
 <text x="287.50" y="151.67" text-anchor="middle" font-family="monospace" font-size="12">463.010</text>
-<rect x="375.00" y="125.00" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
-<text x="462.50" y="151.67" text-anchor="middle" font-family="monospace" font-size="12">400.107</text>
-<rect x="550.00" y="125.00" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
+<rect x="375.00" y="125.00" width="173.00" height="51.33" fill="rgb(35,182,255)" stroke="#555"/>
+<text x="462.50" y="151.67" text-anchor="middle" font-family="monospace" font-size="12">9235.667</text>
+<rect x="550.00" y="125.00" width="173.00" height="51.33" fill="rgb(245,252,255)" stroke="#555"/>
 <text x="637.50" y="151.67" text-anchor="middle" font-family="monospace" font-size="12">400.093</text>
-<rect x="725.00" y="125.00" width="173.00" height="51.33" fill="rgb(252,254,255)" stroke="#555"/>
+<rect x="725.00" y="125.00" width="173.00" height="51.33" fill="rgb(255,255,255)" stroke="#555"/>
 <text x="812.50" y="151.67" text-anchor="middle" font-family="monospace" font-size="12">6.487</text>
 <text x="190" y="205.00" text-anchor="end" font-family="sans-serif" font-size="12">burstable-low</text>
-<rect x="200.00" y="178.33" width="173.00" height="51.33" fill="rgb(199,237,255)" stroke="#555"/>
+<rect x="200.00" y="178.33" width="173.00" height="51.33" fill="rgb(252,254,255)" stroke="#555"/>
 <text x="287.50" y="205.00" text-anchor="middle" font-family="monospace" font-size="12">118.078</text>
-<rect x="375.00" y="178.33" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
-<text x="462.50" y="205.00" text-anchor="middle" font-family="monospace" font-size="12">400.107</text>
-<rect x="550.00" y="178.33" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
+<rect x="375.00" y="178.33" width="173.00" height="51.33" fill="rgb(209,240,255)" stroke="#555"/>
+<text x="462.50" y="205.00" text-anchor="middle" font-family="monospace" font-size="12">1945.833</text>
+<rect x="550.00" y="178.33" width="173.00" height="51.33" fill="rgb(245,252,255)" stroke="#555"/>
 <text x="637.50" y="205.00" text-anchor="middle" font-family="monospace" font-size="12">400.102</text>
-<rect x="725.00" y="178.33" width="173.00" height="51.33" fill="rgb(254,255,255)" stroke="#555"/>
+<rect x="725.00" y="178.33" width="173.00" height="51.33" fill="rgb(255,255,255)" stroke="#555"/>
 <text x="812.50" y="205.00" text-anchor="middle" font-family="monospace" font-size="12">3.137</text>
 <text x="190" y="258.33" text-anchor="end" font-family="sans-serif" font-size="12">fit</text>
-<rect x="200.00" y="231.67" width="173.00" height="51.33" fill="rgb(41,184,255)" stroke="#555"/>
+<rect x="200.00" y="231.67" width="173.00" height="51.33" fill="rgb(244,252,255)" stroke="#555"/>
 <text x="287.50" y="258.33" text-anchor="middle" font-family="monospace" font-size="12">449.668</text>
-<rect x="375.00" y="231.67" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
-<text x="462.50" y="258.33" text-anchor="middle" font-family="monospace" font-size="12">400.077</text>
-<rect x="550.00" y="231.67" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
+<rect x="375.00" y="231.67" width="173.00" height="51.33" fill="rgb(162,224,255)" stroke="#555"/>
+<text x="462.50" y="258.33" text-anchor="middle" font-family="monospace" font-size="12">3890.667</text>
+<rect x="550.00" y="231.67" width="173.00" height="51.33" fill="rgb(245,252,255)" stroke="#555"/>
 <text x="637.50" y="258.33" text-anchor="middle" font-family="monospace" font-size="12">400.087</text>
-<rect x="725.00" y="231.67" width="173.00" height="51.33" fill="rgb(252,254,255)" stroke="#555"/>
+<rect x="725.00" y="231.67" width="173.00" height="51.33" fill="rgb(255,255,255)" stroke="#555"/>
 <text x="812.50" y="258.33" text-anchor="middle" font-family="monospace" font-size="12">6.247</text>
 <text x="190" y="311.67" text-anchor="end" font-family="sans-serif" font-size="12">guaranteed-low</text>
-<rect x="200.00" y="285.00" width="173.00" height="51.33" fill="rgb(200,237,255)" stroke="#555"/>
+<rect x="200.00" y="285.00" width="173.00" height="51.33" fill="rgb(252,254,255)" stroke="#555"/>
 <text x="287.50" y="311.67" text-anchor="middle" font-family="monospace" font-size="12">116.073</text>
-<rect x="375.00" y="285.00" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
-<text x="462.50" y="311.67" text-anchor="middle" font-family="monospace" font-size="12">400.093</text>
-<rect x="550.00" y="285.00" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
+<rect x="375.00" y="285.00" width="173.00" height="51.33" fill="rgb(208,240,255)" stroke="#555"/>
+<text x="462.50" y="311.67" text-anchor="middle" font-family="monospace" font-size="12">1952.333</text>
+<rect x="550.00" y="285.00" width="173.00" height="51.33" fill="rgb(245,252,255)" stroke="#555"/>
 <text x="637.50" y="311.67" text-anchor="middle" font-family="monospace" font-size="12">400.097</text>
-<rect x="725.00" y="285.00" width="173.00" height="51.33" fill="rgb(254,255,255)" stroke="#555"/>
+<rect x="725.00" y="285.00" width="173.00" height="51.33" fill="rgb(255,255,255)" stroke="#555"/>
 <text x="812.50" y="311.67" text-anchor="middle" font-family="monospace" font-size="12">3.013</text>
 <text x="190" y="365.00" text-anchor="end" font-family="sans-serif" font-size="12">request-high</text>
-<rect x="200.00" y="338.33" width="173.00" height="51.33" fill="rgb(43,185,255)" stroke="#555"/>
+<rect x="200.00" y="338.33" width="173.00" height="51.33" fill="rgb(244,252,255)" stroke="#555"/>
 <text x="287.50" y="365.00" text-anchor="middle" font-family="monospace" font-size="12">447.070</text>
-<rect x="375.00" y="338.33" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
-<text x="462.50" y="365.00" text-anchor="middle" font-family="monospace" font-size="12">400.063</text>
-<rect x="550.00" y="338.33" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
+<rect x="375.00" y="338.33" width="173.00" height="51.33" fill="rgb(76,196,255)" stroke="#555"/>
+<text x="462.50" y="365.00" text-anchor="middle" font-family="monospace" font-size="12">7497.000</text>
+<rect x="550.00" y="338.33" width="173.00" height="51.33" fill="rgb(245,252,255)" stroke="#555"/>
 <text x="637.50" y="365.00" text-anchor="middle" font-family="monospace" font-size="12">400.103</text>
-<rect x="725.00" y="338.33" width="173.00" height="51.33" fill="rgb(252,254,255)" stroke="#555"/>
+<rect x="725.00" y="338.33" width="173.00" height="51.33" fill="rgb(255,255,255)" stroke="#555"/>
 <text x="812.50" y="365.00" text-anchor="middle" font-family="monospace" font-size="12">6.040</text>
 <text x="190" y="418.33" text-anchor="end" font-family="sans-serif" font-size="12">request-low</text>
-<rect x="200.00" y="391.67" width="173.00" height="51.33" fill="rgb(39,183,255)" stroke="#555"/>
+<rect x="200.00" y="391.67" width="173.00" height="51.33" fill="rgb(244,252,255)" stroke="#555"/>
 <text x="287.50" y="418.33" text-anchor="middle" font-family="monospace" font-size="12">454.362</text>
-<rect x="375.00" y="391.67" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
-<text x="462.50" y="418.33" text-anchor="middle" font-family="monospace" font-size="12">400.098</text>
-<rect x="550.00" y="391.67" width="173.00" height="51.33" fill="rgb(65,192,255)" stroke="#555"/>
+<rect x="375.00" y="391.67" width="173.00" height="51.33" fill="rgb(57,189,255)" stroke="#555"/>
+<text x="462.50" y="418.33" text-anchor="middle" font-family="monospace" font-size="12">8332.333</text>
+<rect x="550.00" y="391.67" width="173.00" height="51.33" fill="rgb(245,252,255)" stroke="#555"/>
 <text x="637.50" y="418.33" text-anchor="middle" font-family="monospace" font-size="12">400.103</text>
-<rect x="725.00" y="391.67" width="173.00" height="51.33" fill="rgb(252,254,255)" stroke="#555"/>
+<rect x="725.00" y="391.67" width="173.00" height="51.33" fill="rgb(255,255,255)" stroke="#555"/>
 <text x="812.50" y="418.33" text-anchor="middle" font-family="monospace" font-size="12">6.268</text>
 </svg>
