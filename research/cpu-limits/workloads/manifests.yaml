@@ -1,0 +1,121 @@
+# CPU-bound target: two stress-ng workers use matrix multiplication.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cpu-bound-__NAME__
+  labels:
+    app.kubernetes.io/name: cpu-bound
+    cpu-limits.k8labs.io/run-id: __RUN_ID__
+    cpu-limits.k8labs.io/workload: __WORKLOAD__
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  containers:
+    - name: stress-ng
+      image: polinux/stress-ng@sha256:aa26e8ffd2c0a1192de691a22401a5fd008a940bb8f30dc2a4ddfe72e0dfdc10
+      args: ["--cpu", "2", "--cpu-method", "matrixprod", "--metrics-brief", "--timeout", "25s"]
+      resources: __RESOURCES__
+---
+# I/O-bound target: node-baked wrk2 drives this nginx endpoint.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: io-bound-__NAME__
+  labels:
+    app.kubernetes.io/name: io-bound
+    cpu-limits.k8labs.io/run-id: __RUN_ID__
+    cpu-limits.k8labs.io/workload: __WORKLOAD__
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  containers:
+    - name: nginx
+      image: nginx@sha256:09369da6b10306312cd908661320086bf87fbae1b6b0c49a1f50ba531fef2eab
+      ports:
+        - containerPort: 80
+      resources: __RESOURCES__
+---
+# Memory-bound target: use --stream. The runner may use --vm when stream is unavailable.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: memory-bound-__NAME__
+  labels:
+    app.kubernetes.io/name: memory-bound
+    cpu-limits.k8labs.io/run-id: __RUN_ID__
+    cpu-limits.k8labs.io/workload: __WORKLOAD__
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  containers:
+    - name: stress-ng
+      image: polinux/stress-ng@sha256:aa26e8ffd2c0a1192de691a22401a5fd008a940bb8f30dc2a4ddfe72e0dfdc10
+      args: ["--stream", "1", "--metrics-brief", "--timeout", "25s"]
+      resources: __RESOURCES__
+---
+# Hybrid target: nginx serves requests while ffmpeg reads the node fixture.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hybrid-__NAME__
+  labels:
+    app.kubernetes.io/name: hybrid
+    cpu-limits.k8labs.io/run-id: __RUN_ID__
+    cpu-limits.k8labs.io/workload: __WORKLOAD__
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  containers:
+    - name: nginx
+      image: nginx@sha256:09369da6b10306312cd908661320086bf87fbae1b6b0c49a1f50ba531fef2eab
+      ports:
+        - containerPort: 80
+      resources: __RESOURCES__
+    - name: ffmpeg
+      image: jrottenberg/ffmpeg@sha256:8ec1ee1f6a0fcd37c97725827b6b7832795c9596e3439b8da56d7700d61ae778
+      args: ["-stream_loop", "-1", "-re", "-i", "/fixtures/input.mp4", "-f", "null", "-"]
+      volumeMounts:
+        - name: fixtures
+          mountPath: /fixtures
+          readOnly: true
+  volumes:
+    - name: fixtures
+      hostPath:
+        path: /fixtures
+        type: Directory
+---
+# Noisy neighbour: the renderer supplies the fixed one-CPU request and no limit.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: noisy-neighbor-__NAME__
+  labels:
+    app.kubernetes.io/name: noisy-neighbor
+    cpu-limits.k8labs.io/run-id: __RUN_ID__
+    cpu-limits.k8labs.io/workload: __WORKLOAD__
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  containers:
+    - name: stress-ng
+      image: polinux/stress-ng@sha256:aa26e8ffd2c0a1192de691a22401a5fd008a940bb8f30dc2a4ddfe72e0dfdc10
+      args: ["--cpu", "1", "--cpu-method", "matrixprod", "--timeout", "25s"]
+      resources: __RESOURCES__
+---
+# Host-driven load: wrk2 -t 2 -c 16 -d 15s -R 200 http://TARGET_POD_IP/.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: loadgen-__NAME__
+  labels:
+    app.kubernetes.io/name: loadgen
+    cpu-limits.k8labs.io/run-id: __RUN_ID__
+    cpu-limits.k8labs.io/workload: __WORKLOAD__
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  containers:
+    - name: loadgen
+      image: williamyeh/wrk@sha256:78adc0d9d51a99e6759e702a08d03eaece81c890ffcc9790ef9e5b199d54f091
+      command: ["sh", "-c", "sleep 25"]
+      resources: __RESOURCES__

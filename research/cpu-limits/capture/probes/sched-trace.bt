@@ -1,0 +1,46 @@
+#!/usr/bin/env bpftrace
+/*
+ * Scheduler events for one CPU limits trace slice.
+ *
+ * CSV columns:
+ * timestamp,event,cpu,pid,comm,prev_state,next_pid,next_comm,runtime_ns,cgroup_id
+ *
+ * `cgroup` is the current-task cgroup ID supplied by bpftrace. It can describe
+ * the scheduler context rather than the task in an event field. A bpftrace
+ * build without `cgroup` must replace it with 0. A cgroup ID of 0 means that
+ * this field was unavailable. Empty columns mean that the event has no value.
+ *
+ * sched_stat_runtime is not present on every supported kernel. If it is absent,
+ * do not attach this probe and use the other three scheduler events. The
+ * capture must record that capability failure; it must not invent runtime data.
+ */
+
+BEGIN
+{
+    printf("timestamp,event,cpu,pid,comm,prev_state,next_pid,next_comm,runtime_ns,cgroup_id\n");
+}
+
+tracepoint:sched:sched_switch
+{
+    printf("%llu,sched_switch,%d,%d,%s,%ld,%d,%s,,%llu\n",
+        nsecs, cpu, pid, comm, args->prev_state, args->next_pid,
+        args->next_comm, cgroup);
+}
+
+tracepoint:sched:sched_wakeup
+{
+    printf("%llu,sched_wakeup,%d,%d,%s,,%d,%s,,%llu\n",
+        nsecs, cpu, pid, comm, args->pid, args->comm, cgroup);
+}
+
+tracepoint:sched:sched_wakeup_new
+{
+    printf("%llu,sched_wakeup_new,%d,%d,%s,,%d,%s,,%llu\n",
+        nsecs, cpu, pid, comm, args->pid, args->comm, cgroup);
+}
+
+tracepoint:sched:sched_stat_runtime
+{
+    printf("%llu,sched_stat_runtime,%d,%d,%s,,,,%llu,%llu\n",
+        nsecs, cpu, pid, comm, args->runtime, cgroup);
+}

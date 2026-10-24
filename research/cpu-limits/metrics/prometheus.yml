@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 1s
+  scrape_timeout: 500ms
+
+scrape_configs:
+  - job_name: cpu-limits-collector
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [cpu-limits]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: keep
+        regex: cpu-limits-collector
+      - source_labels: [__meta_kubernetes_pod_container_name]
+        action: keep
+        regex: collector
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        action: keep
+        regex: "9100"

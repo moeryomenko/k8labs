@@ -1,0 +1,39 @@
+#!/usr/bin/env bpftrace
+/*
+ * CFS bandwidth events for one CPU limits trace slice.
+ *
+ * CSV columns:
+ * timestamp,event,cpu,pid,comm,cgroup_id
+ *
+ * The probes do not dereference cfs_rq or task-group pointers. Kernel releases
+ * can change those structures, so this avoids a layout assumption. The current
+ * task supplies pid, comm, and, where bpftrace supports it, `cgroup`.
+ *
+ * Fallback: a bpftrace build without `cgroup` must replace it with 0. A zero
+ * cgroup ID means unavailable. If a kernel lacks one of these symbols, do not
+ * claim that event was captured; use the cgroup cpu.stat delta as the throttle
+ * counter for that cell and record the missing symbol as a capability failure.
+ */
+
+BEGIN
+{
+    printf("timestamp,event,cpu,pid,comm,cgroup_id\n");
+}
+
+kprobe:throttle_cfs_rq
+{
+    printf("%llu,throttle_cfs_rq,%d,%d,%s,%llu\n",
+        nsecs, cpu, pid, comm, cgroup);
+}
+
+kprobe:unthrottle_cfs_rq
+{
+    printf("%llu,unthrottle_cfs_rq,%d,%d,%s,%llu\n",
+        nsecs, cpu, pid, comm, cgroup);
+}
+
+kprobe:sched_cfs_period_timer
+{
+    printf("%llu,sched_cfs_period_timer,%d,%d,%s,%llu\n",
+        nsecs, cpu, pid, comm, cgroup);
+}
