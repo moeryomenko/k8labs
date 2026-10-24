@@ -1,0 +1,22 @@
+# k8labs CPU requests and limits research series
+version: '3'
+
+vars:
+  CPU_LIMITS_DIR: '{{.TASKFILE_DIR}}'
+  CPU_LIMITS_EXPERIMENTS_DIR: '{{.CPU_LIMITS_DIR}}/experiments'
+  CPU_LIMITS_DATA_ROOT:
+    sh: |
+      if [ -n "${K8LABS_RESEARCH_DATA_ROOT:-}" ]; then
+        printf '%s/cpu-limits' "$K8LABS_RESEARCH_DATA_ROOT"
+      else
+        printf '%s/build/research/cpu-limits' '{{.ROOT_DIR}}'
+      fi
+
+tasks:
+  cpu-limits-plan:
+    desc: Print the frozen seeded CPU-limits cell plan
+    cmd: python3 '{{.CPU_LIMITS_EXPERIMENTS_DIR}}/design.py' --plan
+
+  cpu-limits-validate:
+    desc: Validate the frozen CPU-limits design
+    cmd: python3 '{{.CPU_LIMITS_EXPERIMENTS_DIR}}/design.py' --validate

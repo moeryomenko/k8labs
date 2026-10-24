@@ -14,6 +14,9 @@ includes:
   research:
     taskfile: ./research/Taskfile.yml
     flatten: true
+  cpu-limits:
+    taskfile: ./research/cpu-limits/Taskfile.yml
+    flatten: true
 
 vars:
   PROJECT_ROOT: '{{.ROOT_DIR}}'
