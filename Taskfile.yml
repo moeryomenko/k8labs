@@ -798,6 +798,54 @@ tasks:
       echo 'Removing build artifacts...'
       rm -rf build/ extensions/release/*.raw
 
+  prune-build:
+    desc: Remove reproducible build-only files from build/ (keeps runtime inputs and research data)
+    aliases: [clean-build]
+    vars:
+      DRY_RUN: '{{.DRY_RUN | default "0"}}'
+    cmd: |
+      targets=(
+        build/kernel-custom-7.3.0
+        build/kernel-custom-next
+        build/linux-custom-src
+        build/linux-next-src
+        build/rpmbuild-custom
+        build/rpmbuild-next
+        build/guest-upgrade-stages-*
+        build/k8labs-base-5g.qcow2
+        build/fedora-cloud-base.qcow2
+        build/fedora-cloud-base.raw
+        build/fedora-cloud-base-esp.qcow2
+        build/cloudinit.img
+        build/capi-addons
+        build/superseded-scratch
+        build/CLOUDHV-scratch.fd
+        build/uki-scratch.crt
+        build/uki-scratch.key
+        build/base-image-bake.log
+        build/manifest.json
+      )
+      total=0
+      printf 'Reclaimable build-only artifacts:\n'
+      for target in "${targets[@]}"; do
+        for path in $target; do
+          [[ -e ${path} ]] || continue
+          size=$(du -sm -- "${path}" | cut -f1)
+          total=$((total + size))
+          if [[ "{{.DRY_RUN}}" == "1" ]]; then
+            printf '  would remove %6s MB  %s\n' "${size}" "${path}"
+          else
+            printf '  removing     %6s MB  %s\n' "${size}" "${path}"
+            rm -rf -- "${path}"
+          fi
+        done
+      done
+      rmdir build/firmware 2>/dev/null || true
+      printf 'Total: %s MB\n' "${total}"
+      if [[ "{{.DRY_RUN}}" != "1" ]]; then
+        echo 'Kept: k8labs-base.qcow2, CLOUDHV.fd, kernel-rpms*/, kubeconfig, packer-ssh-key*, uki-material/, research/, fixtures/, runs/'
+      fi
+
   node-tools:
     desc: Sync Python tooling with uv (creates .venv, idempotent)
     cmd: |
