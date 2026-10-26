@@ -1,0 +1,91 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: bpf-collector
+  namespace: cpu-limits-research
+  labels:
+    app: bpf-collector
+spec:
+  selector:
+    matchLabels:
+      app: bpf-collector
+  template:
+    metadata:
+      labels:
+        app: bpf-collector
+    spec:
+      hostPID: true
+      hostNetwork: true
+      hostIPC: true
+      
+      containers:
+      - name: collector
+        image: quay.io/fedora/fedora:40
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "Installing BPF tools..."
+          dnf install -y bpftrace bcc-tools procps-ng iproute util-linux python3 2>&1 | tail -20
+          
+          echo ""
+          echo "BPF Collector ready"
+          echo "Available traces:"
+          ls -1 /bpf-traces/
+          
+          echo ""
+          echo "Waiting for trace requests..."
+          tail -f /dev/null
+        
+        securityContext:
+          privileged: true
+          runAsUser: 0
+        
+        volumeMounts:
+        - name: host-sys
+          mountPath: /host-sys
+        - name: host-proc
+          mountPath: /host-proc
+        - name: kernel-debug
+          mountPath: /sys/kernel/debug
+        - name: bpf-traces
+          mountPath: /bpf-traces
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      
+      volumes:
+      - name: host-sys
+        hostPath:
+          path: /sys
+          type: Directory
+      - name: host-proc
+        hostPath:
+          path: /proc
+          type: Directory
+      - name: kernel-debug
+        hostPath:
+          path: /sys/kernel/debug
+          type: Directory
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+          type: Directory
+      - name: bpf-traces
+        configMap:
+          name: bpf-trace-scripts
+          defaultMode: 0755
+      
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists

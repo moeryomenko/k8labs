@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: latency-heavy-throttle
+  labels:
+    test-type: latency-test
+    config: latency-heavy-throttle
+spec:
+  restartPolicy: Never
+  containers:
+  - name: stress
+    image: polinux/stress-ng
+    args:
+    - "--cpu"
+    - "2"
+    - "--cpu-method"
+    - "ackermann"
+    - "--timeout"
+    - "60s"
+    - "--metrics-brief"
+    resources:
+      requests:
+        cpu: "100m"
+      limits:
+        cpu: "500m"

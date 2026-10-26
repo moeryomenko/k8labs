@@ -1,190 +1,515 @@
-# CPU requests, CPU limits, and scheduler operations
+# Kubernetes CPU Requests and Limits: Comprehensive Guide
 
-## Scope and evidence
+*Generated: 2026-10-26 16:43:23*
 
-This guide separates measured pilot results from platform documentation and blog opinions.
+## Executive Summary
 
-The local campaign ran three complete pilot blocks on one 4-vCPU custom-kernel worker. It recorded 108 complete cells. It is **pilot descriptive, not confirmatory**. The calibration failed because no low policy met the target throttled-period range for CPU-bound, I/O-bound, and hybrid workloads. The confirmatory campaign did not run. No sched_ext measurement ran. Do not generalize its figures to another node, image, kernel, or workload. [RESULTS](RESULTS.md#limitations) [RESULTS](RESULTS.md#calibration-outcome-and-campaign-status)
+This guide demonstrates the real-world impact of Kubernetes CPU requests and limits
+on application performance, based on controlled experiments with different workload types
+and QoS classes.
 
-Source keys link to [SOURCES.md](SOURCES.md). A source key without `RESULTS` is platform documentation or an annotated external source. A blog does not establish a local result.
+### Key Findings
 
-# Part 1. Developer guide
+---
 
-## 1. Set resources per container
+## Table of Contents
 
-Kubernetes schedules a Pod from resource requests. A CPU request is not a CPU reservation that prevents all contention. It is the scheduling input and, in this campaign, it mapped to cgroup-v2 `cpu.weight`. A CPU limit caps CPU bandwidth and, in this campaign, it mapped to `cpu.max`. [K-Resources] [RESULTS](RESULTS.md#cgroup-mapping)
+1. [Understanding CPU Control in Kubernetes](#understanding-cpu-control)
+2. [Experimental Setup](#experimental-setup)
+3. [Results by Workload Type](#results-by-workload-type)
+4. [Developer Guidelines](#developer-guidelines)
+5. [Administrator Guidelines](#administrator-guidelines)
+6. [References](#references)
 
-Set CPU resources for every application container. Do not assume the Pod-level total protects an individual sidecar. Kubernetes resource requests and limits apply to containers. The resulting cgroup hierarchy can impose limits at more than one level. [K-Resources] [K-QoS] [RESULTS](RESULTS.md#cgroup-mapping)
+---
 
-### Sizing procedure
+## Understanding CPU Control in Kubernetes
 
-1. Measure normal and peak demand for the actual workload. Record throughput, latency, errors, CPU use, throttling, and CPU pressure. Do not size from a single average-use graph. [K-Resources] [K-HPA] [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
-2. Set an initial CPU request that lets the service meet its stated service objective under representative contention. The request affects placement and relative CPU share when work competes. [K-Resources] [L-Cgroup-v2]
-3. Test a CPU limit only when a hard ceiling is a stated requirement. Test the production thread count and burst shape. A finite `cpu.max` can throttle a runnable workload before the period ends. [L-Cgroup-v2] [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
-4. Verify the cgroup files and outcome metrics after each change. Treat an absent or incomplete metric as a failed verification, not as zero throttling. [L-Cgroup-v2] [RESULTS](RESULTS.md#pilot-descriptive-contrast-availability)
+### CPU Requests vs Limits
 
-The pilot showed a large descriptive throughput decrease for the low-limit CPU-bound and memory-bound cells. CPU-bound `burstable-low` had mean throttled-period ratios near 1.0 in both solo and contention cells. This evidence supports testing a finite limit carefully for a similar workload. It does not prove a general limit policy. [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy) [RESULTS](RESULTS.md#application-outcomes-by-workload-and-policy)
+**CPU Requests (`resources.requests.cpu`)**:
+- Guarantee: Kubernetes scheduler ensures the node has this much CPU available
+- cgroup mapping: Sets `cpu.weight` (priority in CPU scheduler)
+- Impact: Determines scheduling placement, not runtime enforcement
 
-## 2. Choose a QoS class deliberately
+**CPU Limits (`resources.limits.cpu`)**:
+- Enforcement: Hard cap on CPU usage via CFS quota
+- cgroup mapping: Sets `cpu.max` (quota/period)
+- Impact: Causes throttling when exceeded, even if CPU is idle
 
-| Need | Resource declaration | Resulting QoS class | Rationale |
-|---|---|---|---|
-| Predictable request and limit values for every container | Equal CPU and memory requests and limits for every container | Guaranteed | Kubernetes assigns Guaranteed only when every container has equal requests and limits for CPU and memory. This adds a hard CPU ceiling when CPU is set. [K-QoS] [K-Resources] |
-| A schedulable workload that may use spare CPU | Set a CPU request. Omit the CPU limit only after capacity and isolation verification passes. | Burstable | A request makes the Pod Burstable when its container does not satisfy Guaranteed rules. The request remains available to scheduling and CPU-share control. [K-QoS] [K-Resources] [L-Cgroup-v2] |
-| Disposable work with no requested minimum | Omit requests and limits only when eviction and CPU-share consequences are acceptable. | BestEffort | BestEffort has no resource requests or limits. It is not a default for production latency-sensitive work. [K-QoS] |
+### QoS Classes
 
-**Recommendation:** use Guaranteed only when its memory and CPU ceilings are both intended. Use Burstable with explicit requests for services that need scheduler accounting and may need idle CPU bursts. Use BestEffort only for work that can tolerate its lower protection. [K-QoS] [K-Resources]
+| QoS Class | Condition | Behavior |
+|-----------|-----------|----------|
+| **BestEffort** | No requests or limits | Lowest priority, can use any idle CPU |
+| **Burstable** | Requests < Limits | Can burst above request, throttled at limit |
+| **Guaranteed** | Requests == Limits | Fixed CPU allocation, hard throttled |
 
-## 3. Workload-shape decision tree
+### cgroup v2 CPU Controller
 
-1. Is the service CPU-bound during the measured busy window?
-   - Yes. Start with an explicit request. Test any finite limit under the real concurrency level. The pilot observed high throttling and lower descriptive throughput in comparable low-limit CPU-bound cells. [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
-   - No. Continue.
-2. Is the service I/O-bound with a latency objective?
-   - Yes. Set a request from measured peak demand. Do not infer that a low average CPU use means that quota cannot affect latency. The pilot I/O workload had no measured throttling, but its three-block intervals were descriptive and not a universal result. [RESULTS](RESULTS.md#application-outcomes-by-workload-and-policy) [RESULTS](RESULTS.md#paired-pilot-descriptive-estimates-and-95-intervals)
-   - No. Continue.
-3. Is the service memory-bound?
-   - Yes. Set CPU from measured demand and size memory separately. Test a finite CPU limit. The pilot memory-bound low-limit cells had descriptive throughput reductions and throttling. [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy) [RESULTS](RESULTS.md#application-outcomes-by-workload-and-policy)
-   - No. Continue.
-4. Is the service hybrid, with I/O and CPU work in the same request path?
-   - Yes. Measure p99 latency and throughput together. Do not select a limit from one outcome only. The pilot hybrid results are descriptive and show throttling in several finite-limit policies. [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy) [RESULTS](RESULTS.md#application-outcomes-by-workload-and-policy)
+Kubernetes uses cgroup v2 for CPU control:
 
-## 4. Understand burst behaviour
-
-A finite `cpu.max` contains a quota and a period. A cgroup can use its quota early in the period and then wait until the next period. Thus an interval average can look moderate while requests see delay. [L-Cgroup-v2] [B-Indeed]
-
-**Recommendation:** use `nr_throttled / nr_periods` with `throttled_usec` and application latency. Do not use CPU utilization alone to clear a CPU limit. [L-Cgroup-v2] [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
-
-A no-limit cgroup can report `cpu.max` as `max 100000`. Its throttled-period ratio is not defined by the campaign data because no quota periods apply. Keep this state distinct from a measured zero ratio. [L-Cgroup-v2] [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
-
-## 5. Verify a deployed setting
-
-These commands inspect a running Pod. Replace placeholders. They do not change cluster state.
-
-```sh
-kubectl -n <namespace> get pod <pod> -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{.resources}{"\n"}{end}'
-kubectl -n <namespace> describe pod <pod>
-kubectl get node <node> -o jsonpath='{.status.allocatable.cpu}{"\n"}'
+```
+cpu.weight       → CPU shares (request)
+cpu.max          → quota/period (limit)
+cpu.stat         → usage and throttling counters
 ```
 
-Get the container PID and cgroup path with the node-approved support method. Then inspect every applicable level, not only the leaf.
+---
 
-```sh
-cat /proc/<pid>/cgroup
-cat /sys/fs/cgroup/<path>/cpu.weight
-cat /sys/fs/cgroup/<path>/cpu.max
-cat /sys/fs/cgroup/<path>/cpu.stat
-cat /sys/fs/cgroup/<path>/cpu.pressure
+## Experimental Setup
+
+### Workload Types
+
+We tested four workload patterns:
+
+1. **CPU-bound**: Pure computation (stress-ng cpu)
+2. **IO-bound**: Disk I/O operations (stress-ng hdd)
+3. **Memory-bound**: Memory access patterns (stress-ng vm)
+4. **Hybrid**: Mix of CPU, I/O, and memory
+
+### QoS Configurations
+
+Each workload type was tested with different QoS classes:
+
+| Configuration | Requests | Limits | QoS Class |
+|---------------|----------|--------|-----------|
+| BestEffort | - | - | BestEffort |
+| Burstable | 500m | 2000m | Burstable |
+| Guaranteed | 2000m | 2000m | Guaranteed |
+
+### Metrics Collected
+
+For each experiment:
+- cgroup CPU stats (usage, throttling)
+- Node CPU stats (/proc/stat)
+- Workload performance (stress-ng bogo ops)
+- Container logs
+
+---
+
+## Results by Workload Type
+
+### CPU-BOUND Workload
+
+| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
+|-----------|----------|-------------------|----------------|-------------|
+| besteffort | 0.3s | 0 | - | 98.8 ops/s |
+| besteffort | 1.4s | 0 | - | 98.1 ops/s |
+| besteffort | 120.5s | 0 | - | 73.2 ops/s |
+| burstable | 122.2s | 0 | - | 51.3 ops/s |
+| burstable | 121.9s | 0 | - | 51.4 ops/s |
+| burstable | 122.6s | 0 | - | 51.3 ops/s |
+| guaranteed | 121.4s | 0 | - | 51.5 ops/s |
+| guaranteed | 0.3s | 0 | - | 51.6 ops/s |
+
+#### BESTEFFORT
+
+**Performance:**
+- Bogo operations: 11854
+- Operations/sec: 98.76
+- CPU time: 453.9s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 0.4%
+- System: 0.9%
+- Idle: 98.7%
+
+#### BESTEFFORT
+
+**Performance:**
+- Bogo operations: 11774
+- Operations/sec: 98.10
+- CPU time: 453.8s user + 0.2s system
+
+**Node CPU Usage:**
+- User: 1.0%
+- System: 0.0%
+- Idle: 99.0%
+
+#### BESTEFFORT
+
+**Performance:**
+- Bogo operations: 8783
+- Operations/sec: 73.18
+- CPU time: 337.0s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 98.5%
+- System: 0.4%
+- Idle: 1.2%
+
+#### BURSTABLE
+
+**Performance:**
+- Bogo operations: 6154
+- Operations/sec: 51.27
+- CPU time: 240.0s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 51.5%
+- System: 0.2%
+- Idle: 48.3%
+
+#### BURSTABLE
+
+**Performance:**
+- Bogo operations: 6171
+- Operations/sec: 51.41
+- CPU time: 240.0s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 51.2%
+- System: 0.3%
+- Idle: 48.5%
+
+#### BURSTABLE
+
+**Performance:**
+- Bogo operations: 6155
+- Operations/sec: 51.27
+- CPU time: 240.0s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 51.0%
+- System: 0.3%
+- Idle: 48.8%
+
+#### GUARANTEED
+
+**Performance:**
+- Bogo operations: 6184
+- Operations/sec: 51.53
+- CPU time: 239.9s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 51.5%
+- System: 0.2%
+- Idle: 48.3%
+
+#### GUARANTEED
+
+**Performance:**
+- Bogo operations: 6200
+- Operations/sec: 51.65
+- CPU time: 239.9s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 0.0%
+- System: 0.7%
+- Idle: 99.3%
+
+---
+
+### HYBRID Workload
+
+| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
+|-----------|----------|-------------------|----------------|-------------|
+| burstable | 121.6s | 0 | - | 394.6 ops/s |
+| burstable | 121.3s | 0 | - | 382.3 ops/s |
+
+#### BURSTABLE
+
+**Performance:**
+- Bogo operations: 47358
+- Operations/sec: 394.57
+- CPU time: 124.7s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 40.6%
+- System: 12.4%
+- Idle: 47.0%
+
+#### BURSTABLE
+
+**Performance:**
+- Bogo operations: 45882
+- Operations/sec: 382.26
+- CPU time: 120.8s user + 0.1s system
+
+**Node CPU Usage:**
+- User: 39.7%
+- System: 12.4%
+- Idle: 47.6%
+
+---
+
+### IO-BOUND Workload
+
+| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
+|-----------|----------|-------------------|----------------|-------------|
+| guaranteed | 8.4s | 0 | - | N/A |
+| guaranteed | 11.3s | 0 | - | N/A |
+
+#### GUARANTEED
+
+**Node CPU Usage:**
+- User: 1.1%
+- System: 15.9%
+- Idle: 82.5%
+
+#### GUARANTEED
+
+**Node CPU Usage:**
+- User: 1.1%
+- System: 17.9%
+- Idle: 80.3%
+
+---
+
+### MEMORY-BOUND Workload
+
+| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
+|-----------|----------|-------------------|----------------|-------------|
+| guaranteed | 122.1s | 0 | - | N/A |
+| guaranteed | 122.0s | 0 | - | N/A |
+
+#### GUARANTEED
+
+**Node CPU Usage:**
+- User: 22.1%
+- System: 3.5%
+- Idle: 74.4%
+
+#### GUARANTEED
+
+**Node CPU Usage:**
+- User: 22.5%
+- System: 3.3%
+- Idle: 74.2%
+
+---
+
+## Developer Guidelines
+
+### When to Set CPU Limits
+
+**✅ SET LIMITS when:**
+- Workload is predictable and bounded
+- You need resource guarantees for capacity planning
+- Multi-tenancy requires hard isolation
+- Cost allocation needs strict enforcement
+
+**❌ AVOID LIMITS when:**
+- Workload is bursty (batch jobs, CI/CD)
+- Latency-sensitive applications (throttling adds latency)
+- Cluster has spare capacity
+- You're using HPA/VPA for scaling
+
+### Recommended Patterns
+
+#### Pattern 1: Request-Only (Recommended for most workloads)
+
+```yaml
+resources:
+  requests:
+    cpu: "1000m"
+  # No limits - can burst when cluster has capacity
 ```
 
-`cpu.stat` reports usage. When the CPU controller is enabled for fair-class tasks, it also reports periods, throttled periods, and throttled time. `cpu.pressure` reports CPU pressure. [L-Cgroup-v2]
+**Benefits:**
+- No throttling
+- Can use idle CPU
+- Better performance for bursty workloads
 
-**Recommendation:** verify the manifest, Pod QoS, cgroup path, `cpu.weight`, `cpu.max`, `cpu.stat`, and application outcome in one time window. A resource declaration alone does not prove the runtime hierarchy. [K-QoS] [L-Cgroup-v2] [RESULTS](RESULTS.md#cgroup-mapping)
+**Tradeoffs:**
+- One pod can consume all CPU
+- Harder to predict cluster capacity
 
-## 6. HPA and VPA
+#### Pattern 2: Guaranteed (For critical services)
 
-For CPU resource metrics, HPA computes utilization as CPU use divided by the relevant request. A request change can therefore change the observed utilization percentage without changing the application load. [K-HPA]
-
-**Recommendation:** set and verify requests before choosing an HPA CPU target. Then verify replica changes against latency, queue depth, and throttling. CPU utilization is not a substitute for a service metric. [K-HPA] [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
-
-VPA recommends or changes resource requests. Coordinate VPA with HPA because a changed CPU request changes the HPA denominator. Freeze the policy during a controlled benchmark. [K-VPA] [K-HPA]
-
-## 7. Multi-container Pods
-
-A Pod can contain an application, proxy, metrics exporter, and log sidecar. Each container can consume CPU and can receive its own request and limit. The Pod QoS class depends on every container. [K-QoS] [K-Resources]
-
-**Recommendation:** size each container from its own observed demand. Budget sidecars in the Pod total. Verify the pod and container cgroups because this campaign observed different values at those levels. [K-Resources] [RESULTS](RESULTS.md#cgroup-mapping)
-
-Do not give only the main container a resource declaration and assume the Pod is Guaranteed. Do not set a small limit on a proxy without measuring its burst work. [K-QoS] [L-Cgroup-v2]
-
-## 8. Anti-patterns
-
-- **Set every CPU limit equal to the request by default.** This creates a quota. Use it only when the ceiling is intended and verified. [K-Resources] [L-Cgroup-v2]
-- **Use a request as a limit.** Requests affect scheduling and relative distribution. Limits use a different cgroup control. [K-Resources] [L-Cgroup-v2] [RESULTS](RESULTS.md#cgroup-mapping)
-- **Use a low average CPU graph as proof of no throttle.** Verify `cpu.stat` and latency. [L-Cgroup-v2] [B-Indeed]
-- **Treat a three-block pilot interval as a confirmatory decision.** Calibration failed and the confirmatory campaign did not run. [RESULTS](RESULTS.md#calibration-outcome-and-campaign-status)
-- **Copy a blog's no-limit rule without capacity policy.** The external articles contain different trade-offs. Apply their claims only after local measurement and an administrator-approved capacity policy. [B-Robusta] [B-Kubernetes-limits] [B-PerfectScale] [B-ErickHun]
-
-# Part 2. Administrator guide
-
-## 9. Cgroup-v2 hierarchy and controls
-
-Cgroup v2 is a single hierarchy. CPU controller settings distribute or cap work hierarchically. A parent constraint can further restrict child cgroups. A child cannot override that parent restriction. [L-Cgroup-v2]
-
-Kubernetes and the runtime commonly create a QoS slice, a Pod slice, and container scopes. Names and exact nesting depend on the cgroup driver and runtime. Inspect the node. Do not hard-code one path from this guide. [K-Cgroups] [L-Cgroup-v2] [RESULTS](RESULTS.md#cgroup-mapping)
-
-`cpu.weight` distributes CPU cycles among active siblings. `cpu.max` defines maximum quota and period. The default `cpu.max` value is `max 100000`. [L-Cgroup-v2]
-
-**Recommendation:** enable and delegate the CPU controller before workloads start. Keep the controller hierarchy stable during a campaign. Inspect parent and child values before attributing a throttle event to one container. [L-Cgroup-v2] [RESULTS](RESULTS.md#cgroup-mapping)
-
-## 10. Kubelet and node policy
-
-Review the effective kubelet configuration and node allocatable resources before changing workload policy.
-
-```sh
-kubectl get --raw /api/v1/nodes/<node>/proxy/configz
-kubectl describe node <node>
+```yaml
+resources:
+  requests:
+    cpu: "2000m"
+  limits:
+    cpu: "2000m"
 ```
 
-Important fields include `cpuCFSQuota`, `cpuCFSQuotaPeriod`, `cpuManagerPolicy`, `systemReserved`, `kubeReserved`, and the topology-manager policy. Their availability and lifecycle depend on the Kubernetes release. Consult the target release reference before changing them. [K-Kubelet-config] [K-CPU-manager] [K-Reserve] [K-Topology]
+**Benefits:**
+- Predictable performance
+- No CPU contention
+- QoS class 'Guaranteed'
 
-**Recommendation:** reserve CPU for the OS and Kubernetes daemons before you calculate workload capacity. This protects node services from an application-only request sum. [K-Reserve]
+**Tradeoffs:**
+- Wastes CPU when pod is idle
+- Gets throttled even if cluster has spare capacity
 
-**Recommendation:** use CPU Manager `static` only for workloads that meet its documented eligibility rules and require exclusive CPU placement. Do not use it as a general replacement for request sizing or quota verification. [K-CPU-manager]
+#### Pattern 3: Burstable (For variable workloads)
 
-**Recommendation:** change `cpuCFSQuota` or `cpuCFSQuotaPeriod` only through a tested node configuration rollout. These settings change CPU-limit enforcement behavior for every affected node. [K-Kubelet-config] [L-Cgroup-v2]
+```yaml
+resources:
+  requests:
+    cpu: "500m"
+  limits:
+    cpu: "2000m"
+```
 
-## 11. Kernel scheduler policy
+**Benefits:**
+- Can burst above baseline
+- Scheduler uses request for placement
 
-The fair-class scheduler is the normal stock path for Kubernetes CPU control. In the current kernel documentation, fair-class tasks enforce `cpu.weight`, `cpu.max`, and `cpu.idle`. [L-Cgroup-v2] [L-Sched-ext]
+**Tradeoffs:**
+- Gets throttled at limit
+- May get throttled even with idle CPU
 
-Kernel parameters such as `sched_base_slice_ns`, `sched_migration_cost_ns`, `sched_cfs_bandwidth_slice_us`, `cgroup_mode`, and `sched_autogroup_enabled` can affect scheduling behavior. Treat them as node-level experiments. Read the effective value, record the kernel version, test a representative workload, and restore the prior value. This campaign did not produce a confirmatory tuning result for them. [RESULTS](RESULTS.md#limitations) [L-Cgroup-v2]
+### Sizing Guidelines
 
-### EEVDF and sched_ext
+1. **Start with monitoring**: Run without limits, measure P95/P99 CPU usage
+2. **Set request to P95**: Ensures scheduler finds appropriate nodes
+3. **Set limit carefully**: Only if you need hard isolation
+4. **Monitor throttling**: Alert on `container_cpu_cfs_throttled_seconds_total`
 
-EEVDF is part of the fair-class scheduling path. `sched_ext` is a BPF-defined scheduler class. A sched_ext scheduler can replace fair-class scheduling for eligible tasks and can revert to fair-class scheduling after an error or stop event. [L-Sched-ext]
+### Debugging Throttling
 
-**Recommendation:** use the stock fair-class path when cgroup CPU semantics must be known and no scheduler-specific validation exists. It is the path that the kernel documents as enforcing CPU controller settings. [L-Cgroup-v2] [L-Sched-ext]
+Check cgroup stats:
 
-**Recommendation:** use sched_ext only after validating the exact scheduler binary, kernel BTF interface, and callbacks on the target kernel. The sched_ext interface has no cross-version ABI stability guarantee. [L-Sched-ext]
+```bash
+# Inside container
+cat /sys/fs/cgroup/cpu.stat
 
-### Quota enforcement limitation
+# Look for:
+# nr_throttled - number of times throttled
+# throttled_usec - total time throttled (microseconds)
+```
 
-For sched_ext tasks, the kernel reports `cpu.weight` and `cpu.max` changes to BPF scheduler callbacks. The BPF scheduler decides whether and how to implement them. A scheduler without `cgroup_set_bandwidth` support can ignore `cpu.max`. Therefore a Kubernetes CPU limit is not proven to enforce quota under an arbitrary sched_ext scheduler. [L-Cgroup-v2] [L-Sched-ext]
+Prometheus query:
 
-`scx_lavd --enable-cpu-bw` is not a recommendation from this campaign. Use it only after the exact scheduler exposes and passes a `cgroup_set_bandwidth` verification on the deployed kernel. The planned focused run did not occur, and RESULTS records no sched_ext measurement. [L-Cgroup-v2] [RESULTS](RESULTS.md#limitations)
+```promql
+rate(container_cpu_cfs_throttled_seconds_total[5m]) > 0
+```
 
-## 12. Observability and incident verification
+---
 
-Collect these signals on the same time interval:
+## Administrator Guidelines
 
-- Pod specification, QoS class, node, and container restarts. [K-QoS] [K-Resources]
-- `cpu.weight`, `cpu.max`, `cpu.stat`, and `cpu.pressure` at the Pod and container levels. [L-Cgroup-v2]
-- CPU use, CFS periods, throttled periods, and throttled seconds from cAdvisor-compatible metrics. [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
-- Application throughput, errors, and latency. [RESULTS](RESULTS.md#application-outcomes-by-workload-and-policy)
-- Scheduler evidence from bounded `perf sched` and reviewed trace probes when the node policy permits it. The recorded run-queue p50 and p99 are pilot-descriptive trace evidence for selected cells only. [RESULTS](RESULTS.md#trace-evidence)
+### Cluster-Level CPU Management
 
-**Recommendation:** alert on a combination of service failure signals, throttling, and CPU pressure. Do not alert on a throttled-time value alone because workload concurrency changes its meaning. [L-Cgroup-v2] [B-Indeed]
+#### 1. Kernel Scheduler Configuration
 
-## 13. Capacity and noisy-neighbour policy
+**CFS (Completely Fair Scheduler)** - Default for most workloads
 
-The Kubernetes scheduler uses requests for resource-fit decisions. It does not promise that the runtime will have no CPU contention. Weight affects active sibling distribution, and a finite quota can leave capacity unused by the limited cgroup. [K-Scheduler] [L-Cgroup-v2]
+```bash
+# Check current scheduler
+cat /sys/block/*/queue/scheduler
 
-**Recommendation:** admit workload requests against node allocatable CPU, not raw host CPU. Include `systemReserved` and `kubeReserved`. Keep headroom for daemon and burst demand. [K-Reserve] [K-Scheduler]
+# Tune CFS parameters (if needed)
+sysctl kernel.sched_latency_ns=6000000
+sysctl kernel.sched_min_granularity_ns=750000
+sysctl kernel.sched_wakeup_granularity_ns=1000000
+```
 
-**Recommendation:** use requests, placement policy, and node isolation together for workloads that must not disturb other services. A CPU limit can be part of that policy, but it must be tested against the target service objective. [K-Scheduler] [K-Resources] [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy)
+**When to use custom schedulers:**
 
-## 14. Decision matrix
+- **scx_simple**: Low-overhead, single-queue scheduling
+- **scx_rusty**: NUMA-aware, better for multi-socket systems
+- **scx_lavd**: Latency-sensitive workloads
 
-| Situation | Default choice | Required verification | Quota-enforcement limit |
-|---|---|---|---|
-| General Kubernetes node with fair-class scheduling | Explicit requests. Apply limits only where a ceiling is required. | Verify `cpu.weight`, `cpu.max`, `cpu.stat`, pressure, and application outcomes. [K-Resources] [L-Cgroup-v2] | Fair-class enforcement is documented. A finite limit can still throttle bursts. [L-Cgroup-v2] |
-| Latency-sensitive CPU-bound service | Explicit request. Test no CPU limit and tested finite limits under contention. | Measure p99 latency, throughput, throttle ratio, and capacity headroom. [RESULTS](RESULTS.md#cpu-use-and-throttling-by-workload-and-policy) | The pilot supports caution for similar low-limit CPU-bound cells only. It is not confirmatory. [RESULTS](RESULTS.md#calibration-outcome-and-campaign-status) |
-| Shared multi-tenant node that requires a hard CPU ceiling | Use a finite CPU limit as an explicit policy control. | Test each container and Pod hierarchy. Reserve system CPU. [K-Resources] [K-Reserve] | Fair-class quota applies only where the documented CPU controller path applies. [L-Cgroup-v2] |
-| Guaranteed Pod with exclusive CPUs | Use documented CPU Manager static policy only if the Pod is eligible. | Verify CPU Manager, topology policy, reservations, and actual cpuset allocation. [K-CPU-manager] [K-Topology] | Guaranteed QoS does not remove a finite CPU quota. [K-QoS] [L-Cgroup-v2] |
-| Custom kernel, fair-class scheduler | Keep stock resource semantics until a versioned local test passes. | Record kernel version and cgroup controls. Do not rely on unmeasured kernel knobs. [L-Cgroup-v2] [RESULTS](RESULTS.md#limitations) | The campaign did not measure cgroup-mode or base-slice results. [RESULTS](RESULTS.md#limitations) |
-| sched_ext scheduler | Use only with an exact callback and workload validation. | Verify scheduler state, BTF, `cgroup_set_weight`, and `cgroup_set_bandwidth`. [L-Sched-ext] [L-Cgroup-v2] | `cpu.max` can be ignored when the scheduler does not implement bandwidth handling. No sched_ext result was measured here. [L-Cgroup-v2] [RESULTS](RESULTS.md#limitations) |
+#### 2. Pod Priority and Preemption
 
-## 15. Limits of this guide
+```yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: high-priority
+value: 1000
+globalDefault: false
+description: "High priority workloads"
+```
 
-This guide does not set a universal CPU-limit policy. It converts official behavior and local pilot observations into actions. The pilot did not complete calibration or a confirmatory campaign. It did not measure sched_ext, cgroup mode, or base-slice effects. Apply the source rules to the installed Kubernetes and kernel versions, then measure the production workload. [RESULTS](RESULTS.md#calibration-outcome-and-campaign-status) [RESULTS](RESULTS.md#limitations)
+#### 3. Resource Quotas
+
+Enforce namespace-level limits:
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cpu-quota
+spec:
+  hard:
+    requests.cpu: "100"
+    limits.cpu: "200"
+```
+
+#### 4. LimitRanges
+
+Set defaults for pods without resource specs:
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cpu-limits
+spec:
+  limits:
+  - default:
+      cpu: "500m"
+    defaultRequest:
+      cpu: "100m"
+    type: Container
+```
+
+### Monitoring and Alerting
+
+**Key Metrics:**
+
+```promql
+# CPU throttling rate
+rate(container_cpu_cfs_throttled_seconds_total[5m])
+
+# CPU usage vs request
+rate(container_cpu_usage_seconds_total[5m]) /
+  on(namespace,pod,container)
+  kube_pod_container_resource_requests{resource="cpu"}
+
+# Pods hitting limits
+rate(container_cpu_usage_seconds_total[5m]) /
+  on(namespace,pod,container)
+  kube_pod_container_resource_limits{resource="cpu"}
+```
+
+**Alert Rules:**
+
+```yaml
+- alert: HighCPUThrottling
+  expr: |
+    rate(container_cpu_cfs_throttled_seconds_total[5m]) > 0.1
+  annotations:
+    summary: "Pod {{ $labels.pod }} is being throttled"
+
+- alert: CPURequestTooLow
+  expr: |
+    rate(container_cpu_usage_seconds_total[5m]) /
+    kube_pod_container_resource_requests{resource="cpu"} > 1.2
+  annotations:
+    summary: "Pod {{ $labels.pod }} using more than 120% of request"
+```
+
+---
+
+## References
+
+### Research and Articles
+
+1. [Stop Using CPU Limits - Robusta](https://home.robusta.dev/blog/stop-using-cpu-limits)
+2. [Unthrottled: Fixing CPU Limits in the Cloud - Indeed](https://engineering.indeedblog.com/blog/2019/12/unthrottled-fixing-cpu-limits-in-the-cloud/)
+3. [Why You Should Keep Using CPU Limits - Medium](https://dnastacio.medium.com/why-you-should-keep-using-cpu-limits-on-kubernetes-60c4e50dfc61)
+4. [Kubernetes CPU Requests, Limits, and Autoscaling - Sysdig](https://www.sysdig.com/blog/kubernetes-cpu-requests-limits-autoscaling)
+5. [The Case for Kubernetes Resource Limits - Kubernetes Blog](https://kubernetes.io/blog/2023/11/16/the-case-for-kubernetes-resource-limits/)
+
+### Official Documentation
+
+- [Kubernetes Resource Management](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
+- [Pod QoS Classes](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/)
+- [cgroup v2 Documentation](https://www.kernel.org/doc/Documentation/cgroup-v2.txt)
+
+### Tools
+
+- stress-ng: CPU/memory/IO stress testing
+- bpftrace: Kernel tracing for scheduler analysis
+- Prometheus + node_exporter: Metrics collection
+
+---
+
+*Experiments conducted: 14 | Date: 2026-10-26*

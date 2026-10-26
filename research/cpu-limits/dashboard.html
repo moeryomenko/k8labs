@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kubernetes CPU Limits Research - Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0F172A;
+            color: #F8FAFC;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+        }
+        
+        header {
+            border-bottom: 1px solid #1E293B;
+            padding-bottom: 2rem;
+            margin-bottom: 3rem;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: #F8FAFC;
+        }
+        
+        .subtitle {
+            color: #94A3B8;
+            font-size: 1.1rem;
+        }
+        
+        .meta {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: #64748B;
+        }
+        
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            background: #22D3EE;
+            color: #0F172A;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        
+        .card {
+            background: #1E293B;
+            border: 1px solid #334155;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: all 0.2s;
+        }
+        
+        .card:hover {
+            border-color: #38BDF8;
+            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.1);
+        }
+        
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+        
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #F8FAFC;
+        }
+        
+        .qos-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .qos-besteffort {
+            background: #F97316;
+            color: #FFF;
+        }
+        
+        .qos-burstable {
+            background: #22D3EE;
+            color: #0F172A;
+        }
+        
+        .qos-guaranteed {
+            background: #4ADE80;
+            color: #0F172A;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .metric:last-child {
+            border-bottom: none;
+        }
+        
+        .metric-label {
+            color: #94A3B8;
+            font-size: 0.875rem;
+        }
+        
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #F8FAFC;
+        }
+        
+        .metric-unit {
+            font-size: 0.875rem;
+            color: #64748B;
+            margin-left: 0.25rem;
+        }
+        
+        .comparison-table {
+            background: #1E293B;
+            border: 1px solid #334155;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            margin-bottom: 3rem;
+        }
+        
+        .table-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .table-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #F8FAFC;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        thead {
+            background: #334155;
+        }
+        
+        th {
+            padding: 1rem 1.5rem;
+            text-align: left;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #F8FAFC;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        tbody tr {
+            border-bottom: 1px solid #334155;
+        }
+        
+        tbody tr:last-child {
+            border-bottom: none;
+        }
+        
+        tbody tr:hover {
+            background: #2D3748;
+        }
+        
+        td {
+            padding: 1rem 1.5rem;
+            color: #E2E8F0;
+        }
+        
+        .perf-bar {
+            width: 100%;
+            height: 1.5rem;
+            background: #334155;
+            border-radius: 0.25rem;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .perf-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #22D3EE, #38BDF8);
+            transition: width 0.3s ease;
+        }
+        
+        .perf-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #F8FAFC;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+        
+        .key-findings {
+            background: #1E293B;
+            border: 1px solid #334155;
+            border-left: 4px solid #22D3EE;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        
+        .findings-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #22D3EE;
+        }
+        
+        .findings-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .findings-list li {
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+        
+        .findings-list li::before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: #22D3EE;
+        }
+        
+        footer {
+            margin-top: 4rem;
+            padding-top: 2rem;
+            border-top: 1px solid #1E293B;
+            text-align: center;
+            color: #64748B;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Kubernetes CPU Limits Research</h1>
+            <p class="subtitle">Comprehensive analysis of CPU requests, limits, and QoS classes</p>
+            <div class="meta">
+                <div class="meta-item">
+                    <span class="status-badge">COMPLETE</span>
+                </div>
+                <div class="meta-item">
+                    <strong>Experiments:</strong> 14
+                </div>
+                <div class="meta-item">
+                    <strong>Generated:</strong> 2026-10-26 16:45
+                </div>
+            </div>
+        </header>
+        
+        <div class="key-findings">
+            <div class="findings-title">🔍 Key Findings</div>
+            <ul class="findings-list">
+                <li><strong>BestEffort QoS</strong> achieved highest performance (98.8 ops/sec) by utilizing all available CPU</li>
+                <li><strong>Burstable and Guaranteed</strong> showed similar performance (~51 ops/sec) when limited to 2 cores</li>
+                <li><strong>No CPU throttling</strong> observed across all experiments - limits were appropriately sized</li>
+                <li><strong>Setting limits</strong> reduces performance even when cluster has spare capacity</li>
+            </ul>
+        </div>
+
+        <div class="comparison-table">
+            <div class="table-header">
+                <div class="table-title">Performance by Workload Type and QoS Class</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Workload Type</th>
+                        <th>QoS Class</th>
+                        <th>Avg Performance</th>
+                        <th>Visual Comparison</th>
+                    </tr>
+                </thead>
+                <tbody>
+
+                    <tr>
+                        <td><strong>cpu-bound</strong></td>
+                        <td><span class="qos-badge qos-besteffort">besteffort</span></td>
+                        <td><strong>90.0</strong> ops/sec</td>
+                        <td>
+                            <div class="perf-bar">
+                                <div class="perf-fill" style="width: 23.174525528966015%"></div>
+                                <div class="perf-text">23%</div>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td><strong>cpu-bound</strong></td>
+                        <td><span class="qos-badge qos-burstable">burstable</span></td>
+                        <td><strong>51.3</strong> ops/sec</td>
+                        <td>
+                            <div class="perf-bar">
+                                <div class="perf-fill" style="width: 13.211813824560501%"></div>
+                                <div class="perf-text">13%</div>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td><strong>cpu-bound</strong></td>
+                        <td><span class="qos-badge qos-guaranteed">guaranteed</span></td>
+                        <td><strong>51.6</strong> ops/sec</td>
+                        <td>
+                            <div class="perf-bar">
+                                <div class="perf-fill" style="width: 13.282185291505222%"></div>
+                                <div class="perf-text">13%</div>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td><strong>hybrid</strong></td>
+                        <td><span class="qos-badge qos-burstable">burstable</span></td>
+                        <td><strong>388.4</strong> ops/sec</td>
+                        <td>
+                            <div class="perf-bar">
+                                <div class="perf-fill" style="width: 100.0%"></div>
+                                <div class="perf-text">100%</div>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td><strong>io-bound</strong></td>
+                        <td><span class="qos-badge qos-guaranteed">guaranteed</span></td>
+                        <td><strong>0.0</strong> ops/sec</td>
+                        <td>
+                            <div class="perf-bar">
+                                <div class="perf-fill" style="width: 0.0%"></div>
+                                <div class="perf-text">0%</div>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td><strong>memory-bound</strong></td>
+                        <td><span class="qos-badge qos-guaranteed">guaranteed</span></td>
+                        <td><strong>0.0</strong> ops/sec</td>
+                        <td>
+                            <div class="perf-bar">
+                                <div class="perf-fill" style="width: 0.0%"></div>
+                                <div class="perf-text">0%</div>
+                            </div>
+                        </td>
+                    </tr>
+
+                </tbody>
+            </table>
+        </div>
+<div class="grid">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-besteffort">besteffort</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">98.8<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">11854<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">0.3<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-besteffort">besteffort</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">98.1<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">11774<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">1.4<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-besteffort">besteffort</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">73.2<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">8783<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">120.5<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-burstable">burstable</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">51.3<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">6154<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">122.2<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-burstable">burstable</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">51.4<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">6171<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">121.9<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-burstable">burstable</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">51.3<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">6155<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">122.6<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-guaranteed">guaranteed</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">51.5<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">6184<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">121.4<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">CPU-BOUND</div>
+                    <span class="qos-badge qos-guaranteed">guaranteed</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">51.6<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">6200<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">0.3<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">HYBRID</div>
+                    <span class="qos-badge qos-burstable">burstable</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">394.6<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">47358<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">121.6<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">HYBRID</div>
+                    <span class="qos-badge qos-burstable">burstable</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Performance</span>
+                    <span class="metric-value">382.3<span class="metric-unit">ops/sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Bogo Operations</span>
+                    <span class="metric-value">45882<span class="metric-unit">ops</span></span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">121.3<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">IO-BOUND</div>
+                    <span class="qos-badge qos-guaranteed">guaranteed</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">8.4<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">IO-BOUND</div>
+                    <span class="qos-badge qos-guaranteed">guaranteed</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">11.3<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">MEMORY-BOUND</div>
+                    <span class="qos-badge qos-guaranteed">guaranteed</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">122.1<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">MEMORY-BOUND</div>
+                    <span class="qos-badge qos-guaranteed">guaranteed</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Duration</span>
+                    <span class="metric-value">122.0<span class="metric-unit">sec</span></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exit Code</span>
+                    <span class="metric-value">0</span>
+                </div>
+            </div>
+</div>
+        <footer>
+            <p>Full analysis available in <code>research/cpu-limits/GUIDE.md</code></p>
+            <p>Evidence files: <code>research/cpu-limits/phase2/evidence/</code></p>
+        </footer>
+    </div>
+</body>
+</html>

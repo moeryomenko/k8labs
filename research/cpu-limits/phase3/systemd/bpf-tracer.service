@@ -1,0 +1,26 @@
+[Unit]
+Description=Kubernetes Container BPF Tracer
+Documentation=https://github.com/k8labs/cpu-limits-research
+After=network.target kubelet.service
+Wants=kubelet.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/k8s-bpf-tracer
+Restart=always
+RestartSec=10
+User=root
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/k8s-bpf-tracer
+PrivateTmp=true
+
+# Resource limits
+MemoryMax=256M
+TasksMax=10
+
+[Install]
+WantedBy=multi-user.target

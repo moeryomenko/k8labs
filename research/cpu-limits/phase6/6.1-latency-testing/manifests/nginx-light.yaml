@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-light
+  labels:
+    app: nginx
+    config: light
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.25-alpine
+    ports:
+    - containerPort: 80
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "256Mi"
+      limits:
+        cpu: "3000m"
+        memory: "512Mi"
+    # Light: Moderate request, good limit → ~5% throttling expected

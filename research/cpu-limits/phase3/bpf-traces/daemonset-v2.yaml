@@ -1,0 +1,80 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cpu-limits-research
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: bpf-collector
+  namespace: cpu-limits-research
+spec:
+  selector:
+    matchLabels:
+      app: bpf-collector
+  template:
+    metadata:
+      labels:
+        app: bpf-collector
+    spec:
+      hostPID: true
+      hostNetwork: true
+      
+      # Use an image that already has BPF tools
+      # quay.io/iovisor/bpftrace:latest has bpftrace pre-installed
+      containers:
+      - name: collector
+        image: quay.io/iovisor/bpftrace:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "BPF Collector ready on node $(hostname)"
+          echo "Kernel: $(uname -r)"
+          echo "Available tracepoints:"
+          bpftrace -l 'tracepoint:sched:*' | head -5
+          echo "..."
+          echo ""
+          echo "Ready to run traces. Exec into this pod to run bpftrace commands."
+          tail -f /dev/null
+        
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_RESOURCE
+            - SYS_PTRACE
+        
+        volumeMounts:
+        - name: sys
+          mountPath: /sys
+        - name: kernel-debug
+          mountPath: /sys/kernel/debug
+        - name: trace-scripts
+          mountPath: /traces
+        
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      
+      volumes:
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: kernel-debug
+        hostPath:
+          path: /sys/kernel/debug
+      - name: trace-scripts
+        configMap:
+          name: bpf-trace-scripts
+          defaultMode: 0755
+      
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists

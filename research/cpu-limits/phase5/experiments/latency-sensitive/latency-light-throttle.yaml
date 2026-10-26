@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: latency-light-throttle
+  labels:
+    test-type: latency-test
+    config: latency-light-throttle
+spec:
+  restartPolicy: Never
+  containers:
+  - name: stress
+    image: polinux/stress-ng
+    args:
+    - "--cpu"
+    - "2"
+    - "--cpu-method"
+    - "ackermann"
+    - "--timeout"
+    - "60s"
+    - "--metrics-brief"
+    resources:
+      requests:
+        cpu: "1000m"
+      limits:
+        cpu: "3000m"

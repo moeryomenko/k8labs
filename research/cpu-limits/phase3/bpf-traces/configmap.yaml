@@ -1,0 +1,190 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bpf-trace-scripts
+  namespace: cpu-limits-research
+data:
+  throttle-events.bt: |
+    #!/usr/bin/env bpftrace
+    /*
+     * Capture CFS bandwidth throttle events
+     * Usage: bpftrace throttle-events.bt <cgroup-path>
+     */
+    
+    #include <linux/sched.h>
+    
+    BEGIN {
+      printf("Tracing CFS throttle events... Ctrl-C to end.\n");
+      printf("%-12s %-16s %-8s %-12s %-12s\n", 
+             "TIME(ms)", "COMM", "PID", "DURATION(us)", "CGROUP");
+    }
+    
+    kprobe:throttle_cfs_rq {
+      $cfs_rq = (struct cfs_rq *)arg0;
+      $tg = $cfs_rq->tg;
+      
+      @throttle_start[tid] = nsecs;
+      @throttle_count++;
+    }
+    
+    kprobe:unthrottle_cfs_rq {
+      $start = @throttle_start[tid];
+      if ($start > 0) {
+        $duration_us = (nsecs - $start) / 1000;
+        printf("%-12lld %-16s %-8d %-12lld\n",
+               elapsed / 1000000, comm, pid, $duration_us);
+        @throttle_duration_us = sum($duration_us);
+        delete(@throttle_start[tid]);
+      }
+    }
+    
+    END {
+      printf("\nSummary:\n");
+      printf("  Total throttle events: %lld\n", @throttle_count);
+      printf("  Total throttled time: %lld us\n", @throttle_duration_us);
+    }
+
+  sched-latency.bt: |
+    #!/usr/bin/env bpftrace
+    /*
+     * Measure scheduler latency (time from wakeup to running)
+     * Usage: bpftrace sched-latency.bt [pid]
+     */
+    
+    BEGIN {
+      printf("Tracing scheduler latency... Ctrl-C to end.\n");
+    }
+    
+    tracepoint:sched:sched_wakeup,
+    tracepoint:sched:sched_wakeup_new {
+      @wakeup_ts[args->pid] = nsecs;
+    }
+    
+    tracepoint:sched:sched_switch {
+      $wakeup = @wakeup_ts[args->next_pid];
+      if ($wakeup > 0) {
+        $latency_us = (nsecs - $wakeup) / 1000;
+        
+        // Filter by PID if provided
+        if ($1 == 0 || args->next_pid == $1) {
+          @latency_us = hist($latency_us);
+          @latency_sum_us = sum($latency_us);
+          @latency_count = count();
+        }
+        
+        delete(@wakeup_ts[args->next_pid]);
+      }
+    }
+    
+    END {
+      printf("\nScheduling Latency Distribution (microseconds):\n");
+      print(@latency_us);
+      printf("\nSummary:\n");
+      printf("  Total scheduling events: %lld\n", @latency_count);
+      printf("  Total latency: %lld us\n", @latency_sum_us);
+      if (@latency_count > 0) {
+        printf("  Average latency: %lld us\n", 
+               @latency_sum_us / @latency_count);
+      }
+    }
+
+  cpu-distribution.bt: |
+    #!/usr/bin/env bpftrace
+    /*
+     * CPU usage distribution within CFS periods
+     * Usage: bpftrace cpu-distribution.bt <pid>
+     */
+    
+    BEGIN {
+      printf("Tracing CPU distribution for PID %d... Ctrl-C to end.\n", $1);
+    }
+    
+    tracepoint:sched:sched_stat_runtime {
+      if (args->pid == $1) {
+        $runtime_us = args->runtime / 1000;
+        @cpu_time_us = hist($runtime_us);
+        @total_cpu_us = sum($runtime_us);
+        @sample_count = count();
+      }
+    }
+    
+    END {
+      printf("\nCPU Runtime Distribution (microseconds):\n");
+      print(@cpu_time_us);
+      printf("\nSummary:\n");
+      printf("  Total samples: %lld\n", @sample_count);
+      printf("  Total CPU time: %lld us (%.2f s)\n", 
+             @total_cpu_us, @total_cpu_us / 1000000.0);
+      if (@sample_count > 0) {
+        printf("  Average runtime: %lld us\n", 
+               @total_cpu_us / @sample_count);
+      }
+    }
+
+  context-switches.bt: |
+    #!/usr/bin/env bpftrace
+    /*
+     * Count context switches (voluntary and involuntary)
+     * Usage: bpftrace context-switches.bt <pid>
+     */
+    
+    BEGIN {
+      printf("Tracing context switches for PID %d... Ctrl-C to end.\n", $1);
+    }
+    
+    tracepoint:sched:sched_switch {
+      // Switched away from our process
+      if (args->prev_pid == $1) {
+        if (args->prev_state == 0) {
+          // Still runnable → involuntary (preemption)
+          @involuntary++;
+        } else {
+          // Blocked (I/O, sleep, etc.) → voluntary
+          @voluntary++;
+        }
+      }
+      
+      // Switched to our process
+      if (args->next_pid == $1) {
+        @switches_in++;
+      }
+    }
+    
+    END {
+      printf("\nContext Switch Summary:\n");
+      printf("  Voluntary switches (blocking): %lld\n", @voluntary);
+      printf("  Involuntary switches (preempted): %lld\n", @involuntary);
+      printf("  Switches in (scheduled): %lld\n", @switches_in);
+      printf("  Total switches out: %lld\n", @voluntary + @involuntary);
+    }
+
+  runqueue-length.bt: |
+    #!/usr/bin/env bpftrace
+    /*
+     * Sample run queue length over time
+     * Usage: bpftrace runqueue-length.bt
+     */
+    
+    BEGIN {
+      printf("Sampling run queue length every 100ms... Ctrl-C to end.\n");
+    }
+    
+    profile:hz:10 {
+      $nr_running = 0;
+      
+      // Count runnable tasks (state == TASK_RUNNING)
+      // This is an approximation using bpftrace
+      @qlen = hist($nr_running);
+      @qlen_sum = sum($nr_running);
+      @qlen_count = count();
+    }
+    
+    END {
+      printf("\nRun Queue Length Distribution:\n");
+      print(@qlen);
+      if (@qlen_count > 0) {
+        printf("\nAverage queue length: %.2f\n", 
+               @qlen_sum / @qlen_count);
+      }
+    }

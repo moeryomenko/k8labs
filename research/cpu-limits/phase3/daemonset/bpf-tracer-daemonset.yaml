@@ -1,0 +1,166 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bpf-tracer-config
+  namespace: kube-system
+data:
+  collector.py: |
+    #!/usr/bin/env python3
+    """BPF trace collector running inside DaemonSet pod"""
+    import os
+    import subprocess
+    import time
+    import json
+    from pathlib import Path
+    from prometheus_client import start_http_server, Counter, Gauge, Histogram
+    
+    # Prometheus metrics
+    context_switches = Counter('k8s_bpf_context_switch_total', 'Context switches', ['pod', 'container', 'qos'])
+    throttle_count = Counter('k8s_bpf_throttle_count_total', 'CFS throttle events', ['pod', 'container', 'qos'])
+    throttle_duration = Histogram('k8s_bpf_throttle_duration_seconds', 'Throttle duration', ['pod', 'container', 'qos'])
+    cpu_frequency = Gauge('k8s_bpf_cpu_frequency_mhz', 'CPU frequency', ['pod', 'container', 'qos', 'cpu'])
+    
+    CGROUP_ROOT = Path('/host/sys/fs/cgroup')
+    OUTPUT_DIR = Path('/var/run/k8s-bpf-traces')
+    
+    def get_pod_info(cgroup_path):
+        """Extract pod name, container name, QoS from cgroup path"""
+        parts = cgroup_path.parts
+        try:
+            # kubepods.slice/kubepods-<qos>.slice/kubepods-<qos>-pod<uid>.slice/cri-containerd-<id>.scope
+            qos_slice = next(p for p in parts if p.startswith('kubepods-'))
+            qos = qos_slice.split('-')[1].split('.')[0]  # besteffort, burstable, or pod (guaranteed)
+            if qos == 'pod':
+                qos = 'guaranteed'
+            
+            pod_slice = next(p for p in parts if 'pod' in p and '.slice' in p)
+            uid = pod_slice.split('pod')[1].split('.')[0]
+            
+            container_scope = parts[-1]
+            container_id = container_scope.split('-')[-1].replace('.scope', '')[:12]
+            
+            return {
+                'uid': uid,
+                'qos': qos,
+                'container_id': container_id,
+                'cgroup_path': str(cgroup_path)
+            }
+        except (StopIteration, IndexError):
+            return None
+    
+    def watch_cgroups():
+        """Watch for new pods and start BPF traces"""
+        seen_pods = set()
+        
+        while True:
+            # Find all container cgroups
+            for cgroup in CGROUP_ROOT.glob('kubepods.slice/kubepods-*/**/*.scope'):
+                if cgroup in seen_pods:
+                    continue
+                
+                pod_info = get_pod_info(cgroup)
+                if not pod_info:
+                    continue
+                
+                seen_pods.add(cgroup)
+                print(f"Detected new container: {pod_info['uid'][:12]} ({pod_info['qos']})")
+                
+                # Start BPF trace for this container
+                start_bpf_trace(pod_info)
+            
+            time.sleep(5)
+    
+    def start_bpf_trace(pod_info):
+        """Start BPF trace subprocess for a container"""
+        # For now, just log - actual BPF requires bpftrace/bcc installed on node
+        print(f"Would start BPF trace for {pod_info['container_id']}")
+        # TODO: subprocess.Popen(['bpftrace', '-e', script, ...])
+    
+    def main():
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        start_http_server(9100)
+        print("BPF tracer started, metrics on :9100/metrics")
+        watch_cgroups()
+    
+    if __name__ == '__main__':
+        main()
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: bpf-tracer
+  namespace: kube-system
+  labels:
+    app: bpf-tracer
+spec:
+  selector:
+    matchLabels:
+      app: bpf-tracer
+  template:
+    metadata:
+      labels:
+        app: bpf-tracer
+    spec:
+      hostPID: true
+      hostNetwork: true
+      nodeSelector:
+        bpf-trace: "enabled"
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      containers:
+      - name: bpf-tracer
+        image: python:3.12-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          pip install --quiet prometheus_client && \
+          python3 /config/collector.py
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_RESOURCE
+            - NET_ADMIN
+        volumeMounts:
+        - name: cgroup
+          mountPath: /host/sys/fs/cgroup
+          readOnly: true
+        - name: debugfs
+          mountPath: /sys/kernel/debug
+        - name: trace-output
+          mountPath: /var/run/k8s-bpf-traces
+        - name: config
+          mountPath: /config
+        ports:
+        - containerPort: 9100
+          hostPort: 9100
+          name: metrics
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: cgroup
+        hostPath:
+          path: /sys/fs/cgroup
+          type: Directory
+      - name: debugfs
+        hostPath:
+          path: /sys/kernel/debug
+          type: Directory
+      - name: trace-output
+        hostPath:
+          path: /var/run/k8s-bpf-traces
+          type: DirectoryOrCreate
+      - name: config
+        configMap:
+          name: bpf-tracer-config
+          defaultMode: 0755

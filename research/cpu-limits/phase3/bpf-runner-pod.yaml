@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bpf-runner
+  namespace: cpu-limits-research
+spec:
+  hostPID: true
+  hostNetwork: true
+  hostIPC: true
+  nodeSelector:
+    kubernetes.io/hostname: k8labs-md-custom-4vcpu-qq498-zlz6p-6n655
+  containers:
+  - name: bpf
+    image: fedora:40
+    command: ["/bin/sleep", "infinity"]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: sys
+      mountPath: /sys
+      readOnly: false
+    - name: boot
+      mountPath: /boot
+      readOnly: true
+    - name: lib-modules
+      mountPath: /lib/modules
+      readOnly: true
+    - name: debugfs
+      mountPath: /sys/kernel/debug
+  volumes:
+  - name: sys
+    hostPath:
+      path: /sys
+  - name: boot
+    hostPath:
+      path: /boot
+  - name: lib-modules
+    hostPath:
+      path: /lib/modules
+  - name: debugfs
+    hostPath:
+      path: /sys/kernel/debug
+  tolerations:
+  - operator: Exists

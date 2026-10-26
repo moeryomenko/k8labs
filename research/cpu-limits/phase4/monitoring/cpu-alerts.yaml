@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cpu-throttling-alerts
+  namespace: monitoring
+data:
+  cpu-alerts.yaml: |
+    groups:
+      - name: cpu-throttling
+        interval: 30s
+        rules:
+          # Alert when CPU throttling exceeds 10%
+          - alert: CPUThrottlingHigh
+            expr: |
+              rate(container_cpu_cfs_throttled_seconds_total{namespace!="", container!=""}[5m]) /
+              rate(container_cpu_cfs_periods_total{namespace!="", container!=""}[5m]) > 0.10
+            for: 5m
+            labels:
+              severity: warning
+              component: cpu
+            annotations:
+              summary: "High CPU throttling detected"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} container {{$labels.container}} is being throttled {{$value | humanizePercentage}} of the time"
+              dashboard: "/d/cpu-throttling/kubernetes-cpu-throttling-analysis"
+          
+          # Alert when CPU throttling is critical (>25%)
+          - alert: CPUThrottlingCritical
+            expr: |
+              rate(container_cpu_cfs_throttled_seconds_total{namespace!="", container!=""}[5m]) /
+              rate(container_cpu_cfs_periods_total{namespace!="", container!=""}[5m]) > 0.25
+            for: 5m
+            labels:
+              severity: critical
+              component: cpu
+            annotations:
+              summary: "Critical CPU throttling detected"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} container {{$labels.container}} is being severely throttled {{$value | humanizePercentage}} of the time. Performance is significantly degraded."
+              runbook: "Increase CPU limit or reduce workload intensity"
+          
+          # Alert when CPU usage is near limit (>90%)
+          - alert: CPUNearLimit
+            expr: |
+              rate(container_cpu_usage_seconds_total{namespace!="", container!=""}[5m]) /
+              on(namespace,pod,container)
+              kube_pod_container_resource_limits{resource="cpu"} > 0.90
+            for: 10m
+            labels:
+              severity: warning
+              component: cpu
+            annotations:
+              summary: "CPU usage near limit"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} container {{$labels.container}} is using {{$value | humanizePercentage}} of its CPU limit. May be throttled."
+          
+          # Alert when CPU usage exceeds request significantly
+          - alert: CPURequestTooLow
+            expr: |
+              rate(container_cpu_usage_seconds_total{namespace!="", container!=""}[5m]) /
+              on(namespace,pod,container)
+              kube_pod_container_resource_requests{resource="cpu"} > 2.0
+            for: 15m
+            labels:
+              severity: info
+              component: cpu
+            annotations:
+              summary: "CPU request may be too low"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} container {{$labels.container}} is using {{$value | humanize}}x its CPU request. Consider increasing request for better scheduling."
+          
+          # Alert when CPU is idle but throttled (indicates aggressive limit)
+          - alert: CPUThrottledDespiteIdleCluster
+            expr: |
+              (
+                rate(container_cpu_cfs_throttled_seconds_total{namespace!="", container!=""}[5m]) > 0.05
+              )
+              and
+              (
+                avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.50
+              )
+            for: 10m
+            labels:
+              severity: warning
+              component: cpu
+            annotations:
+              summary: "CPU throttling with idle cluster capacity"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} is being throttled despite >50% idle cluster CPU. Consider removing CPU limit or increasing it."
+              recommendation: "Use request-only pattern (no limits) to allow bursting"
+          
+          # Alert on high number of throttling events
+          - alert: FrequentCPUThrottling
+            expr: |
+              rate(container_cpu_cfs_throttled_periods_total{namespace!="", container!=""}[5m]) > 10
+            for: 5m
+            labels:
+              severity: info
+              component: cpu
+            annotations:
+              summary: "Frequent CPU throttling events"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} container {{$labels.container}} is experiencing {{$value | humanize}} throttling events/second"
+          
+          # Alert when QoS is BestEffort but workload is CPU-intensive
+          - alert: BestEffortCPUIntensive
+            expr: |
+              rate(container_cpu_usage_seconds_total{namespace!="", container!=""}[5m]) > 1.0
+              and
+              kube_pod_status_qos_class{qos_class="besteffort"} == 1
+            for: 15m
+            labels:
+              severity: info
+              component: cpu
+            annotations:
+              summary: "CPU-intensive workload with BestEffort QoS"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} is using >1 CPU but has BestEffort QoS (no requests/limits). Consider setting CPU request for better scheduling."
+          
+          # Alert when limits are set but requests are not (bad practice)
+          - alert: CPULimitWithoutRequest
+            expr: |
+              kube_pod_container_resource_limits{resource="cpu"} > 0
+              unless
+              kube_pod_container_resource_requests{resource="cpu"} > 0
+            for: 5m
+            labels:
+              severity: warning
+              component: cpu
+            annotations:
+              summary: "CPU limit set without request"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} container {{$labels.container}} has CPU limit but no request. This creates Burstable QoS with minimum CPU share. Set matching request for Guaranteed QoS."
+              recommendation: "Always set request when setting limit"
+
+      - name: cpu-efficiency
+        interval: 60s
+        rules:
+          # Alert on very low CPU utilization with high requests
+          - alert: CPURequestOverprovisioned
+            expr: |
+              (
+                rate(container_cpu_usage_seconds_total{namespace!="", container!=""}[30m]) /
+                on(namespace,pod,container)
+                kube_pod_container_resource_requests{resource="cpu"}
+              ) < 0.20
+            for: 4h
+            labels:
+              severity: info
+              component: cpu
+            annotations:
+              summary: "CPU request significantly overprovisioned"
+              description: "Pod {{$labels.namespace}}/{{$labels.pod}} container {{$labels.container}} is using only {{$value | humanizePercentage}} of its CPU request over 4 hours. Consider reducing request."
+              impact: "Wastes cluster capacity and may block scheduling of other pods"
+          
+          # Alert on cluster-wide throttling
+          - alert: ClusterWideCPUThrottling
+            expr: |
+              sum(rate(container_cpu_cfs_throttled_seconds_total[5m])) /
+              sum(rate(container_cpu_cfs_periods_total[5m])) > 0.05
+            for: 10m
+            labels:
+              severity: warning
+              component: cpu
+            annotations:
+              summary: "Cluster-wide CPU throttling detected"
+              description: "{{$value | humanizePercentage}} of CPU time across the cluster is being throttled. Review CPU limits cluster-wide."
+              recommendation: "Consider increasing node capacity or removing aggressive limits"

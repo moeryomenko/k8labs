@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kubernetes CPU Research: Complete Analysis</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+            background: linear-gradient(135deg, #0B0E14 0%, #1E293B 100%);
+            color: #F8FAFC;
+            line-height: 1.6;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem;
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 16px;
+            border: 1px solid rgba(248, 250, 252, 0.1);
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #38BDF8 0%, #22D3EE 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            color: #94A3B8;
+            font-size: 1.1rem;
+        }
+        .phase-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        .phase-card {
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid rgba(248, 250, 252, 0.1);
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .phase-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(56, 189, 248, 0.5);
+        }
+        .phase-number {
+            display: inline-block;
+            background: #38BDF8;
+            color: #0B0E14;
+            font-weight: 700;
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+        .phase-title {
+            font-size: 1.3rem;
+            margin-bottom: 0.5rem;
+            color: #F8FAFC;
+        }
+        .phase-status {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        .status-complete {
+            background: rgba(79, 209, 197, 0.2);
+            color: #4FD1C5;
+        }
+        .phase-description {
+            color: #94A3B8;
+            margin-bottom: 1rem;
+        }
+        .phase-metrics {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .metric {
+            background: rgba(56, 189, 248, 0.1);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+        .metric-value {
+            font-weight: 700;
+            color: #38BDF8;
+        }
+        .chart-section {
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            border: 1px solid rgba(248, 250, 252, 0.1);
+        }
+        .chart-title {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-bottom: 1rem;
+        }
+        .findings {
+            background: rgba(249, 115, 22, 0.1);
+            border-left: 4px solid #F97316;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+        .findings h2 {
+            color: #F97316;
+            margin-bottom: 1rem;
+        }
+        .findings ul {
+            margin-left: 1.5rem;
+            color: #E2E8F0;
+        }
+        .findings li {
+            margin-bottom: 0.5rem;
+        }
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #64748B;
+            border-top: 1px solid rgba(248, 250, 252, 0.1);
+        }
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        .comparison-table th,
+        .comparison-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(248, 250, 252, 0.1);
+        }
+        .comparison-table th {
+            background: rgba(56, 189, 248, 0.1);
+            color: #38BDF8;
+            font-weight: 600;
+        }
+        .comparison-table tr:hover {
+            background: rgba(56, 189, 248, 0.05);
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .badge-danger { background: rgba(239, 68, 68, 0.2); color: #EF4444; }
+        .badge-warning { background: rgba(249, 115, 22, 0.2); color: #F97316; }
+        .badge-success { background: rgba(79, 209, 197, 0.2); color: #4FD1C5; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Kubernetes CPU Requests/Limits Research</h1>
+            <p class="subtitle">Complete Analysis: cgroup Parameters, Scheduler Behavior, and Throttling Impact</p>
+            <p class="subtitle" style="margin-top: 0.5rem; font-size: 0.95rem;">October 26, 2026 • k8labs</p>
+        </header>
+
+        <div class="findings">
+            <h2>🎯 Key Research Findings</h2>
+            <ul>
+                <li><strong>Well-sized limits</strong> (Phase 2): 0% throttling, 51.5 ops/sec, predictable performance</li>
+                <li><strong>Heavy throttling</strong> (Phase 4): 69.8% throttling, 19.2 ops/sec, 62.7% performance loss</li>
+                <li><strong>No limits</strong> (Phase 4): 0% throttling, 139.1 ops/sec, 170% performance gain (with more workers)</li>
+                <li><strong>Throttling formula:</strong> throttled_usec / (usage_usec + throttled_usec) × 100</li>
+                <li><strong>Recommendation:</strong> Monitor throttling in production, set limit = P99 + 20% headroom</li>
+            </ul>
+        </div>
+
+        <div class="phase-grid">
+            <div class="phase-card">
+                <span class="phase-number">PHASE 1</span>
+                <div class="phase-status status-complete">✅ COMPLETE</div>
+                <h3 class="phase-title">Foundation</h3>
+                <p class="phase-description">
+                    Baseline workload patterns and measurement infrastructure
+                </p>
+                <div class="phase-metrics">
+                    <div class="metric">
+                        <span class="metric-value">4</span> Workload Types
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value">cgroup</span> Metrics
+                    </div>
+                </div>
+            </div>
+
+            <div class="phase-card">
+                <span class="phase-number">PHASE 2</span>
+                <div class="phase-status status-complete">✅ COMPLETE</div>
+                <h3 class="phase-title">QoS Classes</h3>
+                <p class="phase-description">
+                    Compare BestEffort, Burstable, and Guaranteed classes
+                </p>
+                <div class="phase-metrics">
+                    <div class="metric">
+                        <span class="metric-value">6</span> Experiments
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value">0%</span> Throttling
+                    </div>
+                </div>
+            </div>
+
+            <div class="phase-card">
+                <span class="phase-number">PHASE 3</span>
+                <div class="phase-status status-complete">✅ COMPLETE</div>
+                <h3 class="phase-title">BPF Tracing</h3>
+                <p class="phase-description">
+                    Low-level kernel scheduler observation with eBPF
+                </p>
+                <div class="phase-metrics">
+                    <div class="metric">
+                        <span class="metric-value">systemd</span> Service
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value">Guest</span> BPF
+                    </div>
+                </div>
+            </div>
+
+            <div class="phase-card">
+                <span class="phase-number">PHASE 4</span>
+                <div class="phase-status status-complete">✅ COMPLETE</div>
+                <h3 class="phase-title">Throttling</h3>
+                <p class="phase-description">
+                    Controlled CPU throttling impact analysis
+                </p>
+                <div class="phase-metrics">
+                    <div class="metric">
+                        <span class="metric-value">69.8%</span> Max Throttle
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value">-62.7%</span> Perf Loss
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chart-section">
+            <h2 class="chart-title">Phase 4: Throttling vs Performance</h2>
+            <div class="chart-container">
+                <canvas id="throttlingChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-section">
+            <h2 class="chart-title">Phase 2 vs Phase 4: Performance Comparison</h2>
+            <div class="chart-container">
+                <canvas id="performanceChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-section">
+            <h2 class="chart-title">Detailed Comparison Table</h2>
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>Configuration</th>
+                        <th>Phase</th>
+                        <th>Request</th>
+                        <th>Limit</th>
+                        <th>Workers</th>
+                        <th>Throttling</th>
+                        <th>Performance</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>BestEffort</td>
+                        <td>Phase 2</td>
+                        <td>-</td>
+                        <td>-</td>
+                        <td>2</td>
+                        <td>0%</td>
+                        <td>0.3s completion</td>
+                        <td><span class="badge badge-success">Optimal</span></td>
+                    </tr>
+                    <tr>
+                        <td>Burstable</td>
+                        <td>Phase 2</td>
+                        <td>2000m</td>
+                        <td>2000m</td>
+                        <td>2</td>
+                        <td>0%</td>
+                        <td>51.5 ops/s</td>
+                        <td><span class="badge badge-success">Baseline</span></td>
+                    </tr>
+                    <tr>
+                        <td>Heavy Throttle</td>
+                        <td>Phase 4</td>
+                        <td>100m</td>
+                        <td>500m</td>
+                        <td>4</td>
+                        <td>69.8%</td>
+                        <td>19.2 ops/s</td>
+                        <td><span class="badge badge-danger">Severe</span></td>
+                    </tr>
+                    <tr>
+                        <td>Moderate Throttle</td>
+                        <td>Phase 4</td>
+                        <td>500m</td>
+                        <td>1500m</td>
+                        <td>4</td>
+                        <td>33.2%</td>
+                        <td>53.6 ops/s</td>
+                        <td><span class="badge badge-warning">Moderate</span></td>
+                    </tr>
+                    <tr>
+                        <td>Light Throttle</td>
+                        <td>Phase 4</td>
+                        <td>1000m</td>
+                        <td>3000m</td>
+                        <td>4</td>
+                        <td>4.7%</td>
+                        <td>108.8 ops/s</td>
+                        <td><span class="badge badge-success">Acceptable</span></td>
+                    </tr>
+                    <tr>
+                        <td>No Throttle</td>
+                        <td>Phase 4</td>
+                        <td>2000m</td>
+                        <td>4000m</td>
+                        <td>4</td>
+                        <td>0%</td>
+                        <td>139.1 ops/s</td>
+                        <td><span class="badge badge-success">Optimal</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            <p><strong>Research Repository:</strong> /research/cpu-limits/</p>
+            <p>Complete documentation: RESEARCH_COMPLETE.md | Developer guide: GUIDE.md | Throttling analysis: phase4/THROTTLING_ANALYSIS.md</p>
+            <p style="margin-top: 1rem;">Generated: October 26, 2026 • k8labs CPU Research Project</p>
+        </footer>
+    </div>
+
+    <script>
+        // Throttling vs Performance Chart
+        const throttlingCtx = document.getElementById('throttlingChart').getContext('2d');
+        new Chart(throttlingCtx, {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Phase 4 Experiments',
+                    data: [
+                        {x: 69.8, y: 19.2, label: 'Heavy Throttle (500m)'},
+                        {x: 33.2, y: 53.6, label: 'Moderate Throttle (1500m)'},
+                        {x: 4.7, y: 108.8, label: 'Light Throttle (3000m)'},
+                        {x: 0, y: 139.1, label: 'No Throttle (4000m)'}
+                    ],
+                    backgroundColor: 'rgba(56, 189, 248, 0.8)',
+                    borderColor: '#38BDF8',
+                    borderWidth: 2,
+                    pointRadius: 8,
+                    pointHoverRadius: 10
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Throttling Percentage (%)',
+                            color: '#F8FAFC',
+                            font: { size: 14, weight: 600 }
+                        },
+                        grid: { color: 'rgba(248, 250, 252, 0.1)' },
+                        ticks: { color: '#94A3B8' }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Performance (bogo ops/sec)',
+                            color: '#F8FAFC',
+                            font: { size: 14, weight: 600 }
+                        },
+                        grid: { color: 'rgba(248, 250, 252, 0.1)' },
+                        ticks: { color: '#94A3B8' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const point = context.raw;
+                                return [
+                                    point.label,
+                                    `Throttling: ${point.x}%`,
+                                    `Performance: ${point.y} ops/s`
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Performance Comparison Chart
+        const perfCtx = document.getElementById('performanceChart').getContext('2d');
+        new Chart(perfCtx, {
+            type: 'bar',
+            data: {
+                labels: ['Phase 2\nBurstable', 'Heavy\nThrottle', 'Moderate\nThrottle', 'Light\nThrottle', 'No\nThrottle'],
+                datasets: [{
+                    label: 'Performance (ops/sec)',
+                    data: [51.5, 19.2, 53.6, 108.8, 139.1],
+                    backgroundColor: [
+                        'rgba(79, 209, 197, 0.8)',
+                        'rgba(239, 68, 68, 0.8)',
+                        'rgba(249, 115, 22, 0.8)',
+                        'rgba(56, 189, 248, 0.8)',
+                        'rgba(79, 209, 197, 0.8)'
+                    ],
+                    borderColor: [
+                        '#4FD1C5',
+                        '#EF4444',
+                        '#F97316',
+                        '#38BDF8',
+                        '#4FD1C5'
+                    ],
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(248, 250, 252, 0.1)' },
+                        ticks: { color: '#94A3B8' }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Performance (bogo ops/sec)',
+                            color: '#F8FAFC',
+                            font: { size: 14, weight: 600 }
+                        },
+                        grid: { color: 'rgba(248, 250, 252, 0.1)' },
+                        ticks: { color: '#94A3B8' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            afterLabel: function(context) {
+                                const throttling = [0, 69.8, 33.2, 4.7, 0][context.dataIndex];
+                                return `Throttling: ${throttling}%`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
