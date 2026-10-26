@@ -21,7 +21,7 @@ spec:
     cpu-limits/research: collector
   containers:
   - name: stress-ng
-    image: docker.io/library/fedora:44
+    image: docker.io/alexeiled/stress-ng:latest
     command:
     - stress-ng
     - --cpu=2
