@@ -1,11 +1,12 @@
-# CPU-bound workload with Burstable QoS (request < limit)
+# CPU-bound workload with Burstable QoS
 #
-# This workload performs pure CPU computation with room to burst.
+# This workload has 500m CPU request but 2 CPU limit.
 # Expected behavior:
-# - cpu.weight enforces 500m baseline share
-# - cpu.max allows burst to 2 CPUs
-# - Should observe throttling only when consuming >2 CPUs
-# - Can use <500m without throttling when node is idle
+# - cpu.weight derived from 500m request
+# - cpu.max = 200000 100000 (2 CPU limit)
+# - Can use <500m without contention
+# - Gets throttled at 2 CPU limit
+# - Under contention, gets share based on 500m weight
 apiVersion: v1
 kind: Pod
 metadata:

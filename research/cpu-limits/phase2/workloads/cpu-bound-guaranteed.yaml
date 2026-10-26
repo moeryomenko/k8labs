@@ -1,16 +1,11 @@
-# CPU-bound workload with Guaranteed QoS (request == limit)
+# CPU-bound workload with Guaranteed QoS
 #
-# This workload performs pure CPU computation (stress-ng --cpu).
+# This workload performs pure CPU computation with 2 CPU request and limit.
 # Expected behavior:
-# - Should consume exactly 2 CPUs worth of quota
-# - cpu.max should enforce 200000/100000 (2 CPUs)
-# - Should observe throttling when attempting to use >2 CPUs
-# - Scheduler should distribute work across available cores
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cpu-limits-research
----
+# - cpu.weight derived from 2 CPU request
+# - cpu.max = 200000 100000 (2 CPUs)
+# - Should be throttled when attempting to use >2 CPUs
+# - Shows hard limit enforcement
 apiVersion: v1
 kind: Pod
 metadata:
