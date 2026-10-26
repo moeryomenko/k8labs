@@ -202,15 +202,35 @@ def apply_workload(workload_file: Path) -> tuple[str, str, str, str]:
     if rc != 0:
         raise RuntimeError(f"Failed to apply workload: {stderr}")
 
-    # Extract pod name from manifest
-    with workload_file.open() as f:
-        for line in f:
-            if "name:" in line and "namespace:" not in line:
-                pod_name = line.split("name:")[1].strip()
-                break
+    # Extract pod name from kubectl output (e.g., "pod/cpu-bound-besteffort created" or "pod/name unchanged")
+    # Handle multi-pod manifests by taking the first pod
+    first_line = stdout.strip().split("\n")[0]
+    if "/" in first_line:
+        pod_name = first_line.split("/")[1].split()[0]
+    else:
+        raise RuntimeError(f"Could not extract pod name from: {stdout}")
 
-    # Wait for pod to be scheduled
-    time.sleep(2)
+    # Wait for pod to be running or completed
+    print(f"  Waiting for pod {pod_name} to start...")
+    for _ in range(60):
+        rc, phase_out, _ = _exec(
+            [
+                "kubectl",
+                "--kubeconfig",
+                "build/kubeconfig",
+                "-n",
+                "cpu-limits-research",
+                "get",
+                "pod",
+                pod_name,
+                "-o",
+                "jsonpath={.status.phase}",
+            ]
+        )
+        phase = phase_out.strip()
+        if phase in ("Running", "Succeeded", "Failed"):
+            break
+        time.sleep(1)
 
     # Get pod details
     rc, stdout, _ = _exec(
@@ -421,8 +441,10 @@ def main() -> int:
     evidence_dir = Path("research/cpu-limits/phase2/evidence")
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find all workload manifests
-    workloads = sorted(workload_dir.glob("*.yaml"))
+    # Find all workload manifests (skip contention-scenario, it has its own runner)
+    workloads = sorted(
+        [w for w in workload_dir.glob("*.yaml") if "contention" not in w.name]
+    )
     print(f"Found {len(workloads)} workload manifests")
 
     experiments = []

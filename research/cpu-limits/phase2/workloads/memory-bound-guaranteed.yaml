@@ -22,7 +22,7 @@ spec:
   - name: stress-ng
     image: docker.io/alexeiled/stress-ng:latest
     command:
-    - stress-ng
+    - /stress-ng
     - --vm=2
     - --vm-bytes=1G
     - --vm-method=flip

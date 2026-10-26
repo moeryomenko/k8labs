@@ -25,7 +25,7 @@ spec:
   - name: stress-ng
     image: docker.io/alexeiled/stress-ng:latest
     command:
-    - stress-ng
+    - /stress-ng
     - --cpu=2
     - --cpu-method=ackermann
     - --metrics-brief
@@ -57,7 +57,7 @@ spec:
   - name: stress-ng
     image: docker.io/alexeiled/stress-ng:latest
     command:
-    - stress-ng
+    - /stress-ng
     - --cpu=2
     - --cpu-method=ackermann
     - --metrics-brief
@@ -89,7 +89,7 @@ spec:
   - name: stress-ng
     image: docker.io/alexeiled/stress-ng:latest
     command:
-    - stress-ng
+    - /stress-ng
     - --cpu=2
     - --cpu-method=ackermann
     - --metrics-brief

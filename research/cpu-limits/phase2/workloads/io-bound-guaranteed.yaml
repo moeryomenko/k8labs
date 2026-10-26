@@ -22,7 +22,7 @@ spec:
   - name: stress-ng
     image: docker.io/alexeiled/stress-ng:latest
     command:
-    - stress-ng
+    - /stress-ng
     - --io=4
     - --io-ops=100000
     - --metrics-brief
