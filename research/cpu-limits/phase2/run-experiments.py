@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 -u
 """Phase 2 experiment runner.
 
 Orchestrates workload execution and evidence collection for CPU limits research.
@@ -35,6 +35,9 @@ class ExperimentRun:
     # Post-run measurements
     final_cgroup: Optional[dict]
     final_node_cpu: Optional[dict]
+
+    # Time series of cgroup snapshots during execution
+    cgroup_samples: Optional[list[dict]]
 
     # BPF trace artifacts
     bpf_runqlat_output: Optional[str]
@@ -153,7 +156,7 @@ def get_container_cgroup(
     rc, stdout, _ = _exec_in_observer(
         [
             "find",
-            "/sys/fs/cgroup/kubepods.slice",
+            "/host-sys/fs/cgroup/kubepods.slice",
             "-name",
             f"*{container_id[:12]}*",
             "-type",
@@ -328,65 +331,135 @@ def run_experiment(workload_file: Path, evidence_dir: Path) -> ExperimentRun:
     experiment_id = (
         f"{workload_file.stem}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     )
-    print(f"\n{'=' * 60}")
-    print(f"Experiment: {experiment_id}")
-    print(f"{'=' * 60}")
+    print(f"\n{'=' * 60}", flush=True)
+    print(f"Experiment: {experiment_id}", flush=True)
+    print(f"{'=' * 60}", flush=True)
 
     # Apply workload
-    print(f"Applying workload: {workload_file.name}")
+    print(f"Applying workload: {workload_file.name}", flush=True)
     pod_name, workload_type, qos_class, container_name = apply_workload(workload_file)
-    print(f"  Pod: {pod_name}")
-    print(f"  Type: {workload_type}, QoS: {qos_class}")
+    print(f"  Pod: {pod_name}", flush=True)
+    print(f"  Type: {workload_type}, QoS: {qos_class}", flush=True)
 
     start_time = datetime.now(timezone.utc).isoformat()
 
+    # Wait for container to actually start (pod phase=Running doesn't guarantee containerStatus is populated)
+    print("Waiting for container to start...", flush=True)
+    for _ in range(30):
+        rc, stdout, _ = _exec(
+            [
+                "kubectl",
+                "--kubeconfig",
+                "build/kubeconfig",
+                "-n",
+                "cpu-limits-research",
+                "get",
+                "pod",
+                pod_name,
+                "-o",
+                "jsonpath={.status.containerStatuses[0].containerID}",
+            ]
+        )
+        if rc == 0 and stdout.strip():
+            break
+        time.sleep(1)
+
     # Collect baseline
-    print("Collecting baseline...")
+    print("Collecting baseline...", flush=True)
     baseline_cgroup = get_container_cgroup(
         pod_name, "cpu-limits-research", container_name
     )
     baseline_node_cpu = get_node_cpu_usage()
 
     # Start BPF traces in background
-    print("Starting BPF traces...")
+    print("Starting BPF traces...", flush=True)
     # Note: These would run in background, capturing data during the workload
     # For now, we'll collect post-run
 
-    # Wait for pod completion
-    print("Waiting for workload completion...")
-    exit_code, logs = wait_for_pod_completion(pod_name, "cpu-limits-research")
+    # Collect cgroup samples during workload execution
+    print("Monitoring workload...", flush=True)
+    cgroup_samples = []
+    sample_interval = 10  # seconds
+    last_sample = time.time()
+
+    # Poll for completion and collect samples
+    while True:
+        rc, stdout, _ = _exec(
+            [
+                "kubectl",
+                "--kubeconfig",
+                "build/kubeconfig",
+                "-n",
+                "cpu-limits-research",
+                "get",
+                "pod",
+                pod_name,
+                "-o",
+                "jsonpath={.status.phase}",
+            ]
+        )
+
+        phase = stdout.strip()
+        if phase in ("Succeeded", "Failed"):
+            break
+
+        # Collect sample if interval elapsed
+        now = time.time()
+        if now - last_sample >= sample_interval:
+            sample = get_container_cgroup(
+                pod_name, "cpu-limits-research", container_name
+            )
+            if sample:  # Only append if we successfully got the data
+                sample["timestamp"] = datetime.now(timezone.utc).isoformat()
+                cgroup_samples.append(sample)
+            last_sample = now
+
+        time.sleep(1)
+
+    # Get final pod status
+    exit_code, logs = wait_for_pod_completion(
+        pod_name, "cpu-limits-research", timeout=5
+    )
 
     end_time = datetime.now(timezone.utc).isoformat()
     duration = (
         datetime.fromisoformat(end_time) - datetime.fromisoformat(start_time)
     ).total_seconds()
 
-    print(f"Workload completed with exit code {exit_code} in {duration:.1f}s")
+    print(
+        f"Workload completed with exit code {exit_code} in {duration:.1f}s ({len(cgroup_samples)} samples)",
+        flush=True,
+    )
 
-    # Collect final measurements
-    print("Collecting final measurements...")
-    final_cgroup = get_container_cgroup(pod_name, "cpu-limits-research", container_name)
+    # Collect final measurements (may fail if cgroup already cleaned up)
+    print("Collecting final measurements...", flush=True)
+    final_cgroup = None  # Will be the last sample or None
+    if cgroup_samples:
+        final_cgroup = cgroup_samples[-1]  # Use last sample as "final"
     final_node_cpu = get_node_cpu_usage()
 
     # Collect BPF traces (post-run for now)
-    print("Collecting BPF traces...")
-    # runqlat
-    rc, runqlat_out, _ = _exec_in_observer(
-        [
-            "bpf-runqlat",
-            "-m",
-            "5",
-        ]
-    )
+    # TODO: BPF tools hang waiting for events - need to revisit
+    print("Skipping BPF traces for now...", flush=True)
+    runqlat_out = ""
+    runqlen_out = ""
+    # # runqlat
+    # rc, runqlat_out, _ = _exec_in_observer(
+    #     [
+    #         "bpf-runqlat",
+    #         "-m",
+    #         "5",
+    #     ]
+    # )
 
-    # runqlen
-    rc, runqlen_out, _ = _exec_in_observer(
-        [
-            "bpf-runqlen",
-            "-T",
-            "5",
-        ]
-    )
+    # # runqlen
+    # rc, runqlen_out, _ = _exec_in_observer(
+    #     [
+    #         "bpf-runqlen",
+    #         "-T",
+    #         "5",
+    #     ]
+    # )
 
     # Create experiment result
     experiment = ExperimentRun(
@@ -401,6 +474,7 @@ def run_experiment(workload_file: Path, evidence_dir: Path) -> ExperimentRun:
         baseline_node_cpu=baseline_node_cpu,
         final_cgroup=final_cgroup,
         final_node_cpu=final_node_cpu,
+        cgroup_samples=cgroup_samples if cgroup_samples else None,
         bpf_runqlat_output=runqlat_out if runqlat_out else None,
         bpf_runqlen_output=runqlen_out if runqlen_out else None,
         bpf_sched_switch_output=None,  # Would require bpftrace script
@@ -414,10 +488,10 @@ def run_experiment(workload_file: Path, evidence_dir: Path) -> ExperimentRun:
     with exp_file.open("w") as f:
         json.dump(asdict(experiment), f, indent=2)
 
-    print(f"✓ Evidence written to {exp_file}")
+    print(f"✓ Evidence written to {exp_file}", flush=True)
 
     # Cleanup pod
-    print(f"Cleaning up pod {pod_name}...")
+    print(f"Cleaning up pod {pod_name}...", flush=True)
     _exec(
         [
             "kubectl",
