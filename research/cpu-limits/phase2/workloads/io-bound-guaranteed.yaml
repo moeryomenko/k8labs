@@ -1,0 +1,38 @@
+# I/O-bound workload with Guaranteed QoS
+#
+# This workload performs disk I/O operations (stress-ng --io).
+# Expected behavior:
+# - Low CPU usage, most time spent in iowait
+# - cpu.max limit should rarely be hit
+# - Demonstrates that CPU limits affect compute, not I/O waiting time
+# - Scheduler should show task in D state (uninterruptible sleep)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: io-bound-guaranteed
+  namespace: cpu-limits-research
+  labels:
+    workload-type: io-bound
+    qos-class: guaranteed
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --io=4
+    - --io-ops=100000
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+    resources:
+      requests:
+        cpu: "1"
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 256Mi
+  restartPolicy: Never

@@ -1,0 +1,98 @@
+# Contention scenario: multiple workloads competing for CPU
+#
+# This scenario runs three concurrent CPU-bound workloads with different
+# QoS classes to demonstrate CPU share distribution and throttling behavior.
+#
+# Expected behavior:
+# - Guaranteed gets its full quota (enforced by cpu.max)
+# - Burstable gets proportional share based on cpu.weight
+# - BestEffort gets remaining CPU (lowest cpu.weight)
+# - Shows how cgroup v2 CPU controller arbitrates under contention
+apiVersion: v1
+kind: Pod
+metadata:
+  name: contention-guaranteed
+  namespace: cpu-limits-research
+  labels:
+    workload-type: cpu-bound
+    qos-class: guaranteed
+    scenario: contention
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --cpu=2
+    - --cpu-method=ackermann
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+    resources:
+      requests:
+        cpu: "1"
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 128Mi
+  restartPolicy: Never
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: contention-burstable
+  namespace: cpu-limits-research
+  labels:
+    workload-type: cpu-bound
+    qos-class: burstable
+    scenario: contention
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --cpu=2
+    - --cpu-method=ackermann
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+    resources:
+      requests:
+        cpu: 500m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 128Mi
+  restartPolicy: Never
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: contention-besteffort
+  namespace: cpu-limits-research
+  labels:
+    workload-type: cpu-bound
+    qos-class: besteffort
+    scenario: contention
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --cpu=2
+    - --cpu-method=ackermann
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+  restartPolicy: Never

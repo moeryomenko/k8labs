@@ -1,0 +1,38 @@
+# CPU-bound workload with Burstable QoS (request < limit)
+#
+# This workload performs pure CPU computation with room to burst.
+# Expected behavior:
+# - cpu.weight enforces 500m baseline share
+# - cpu.max allows burst to 2 CPUs
+# - Should observe throttling only when consuming >2 CPUs
+# - Can use <500m without throttling when node is idle
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cpu-bound-burstable
+  namespace: cpu-limits-research
+  labels:
+    workload-type: cpu-bound
+    qos-class: burstable
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --cpu=4
+    - --cpu-method=ackermann
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+    resources:
+      requests:
+        cpu: 500m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 256Mi
+  restartPolicy: Never

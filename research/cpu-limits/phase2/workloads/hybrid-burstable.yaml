@@ -1,0 +1,41 @@
+# Hybrid workload with Burstable QoS
+#
+# This workload mixes CPU, I/O, and memory operations.
+# Expected behavior:
+# - Variable CPU usage pattern
+# - Periods of high CPU use (should hit cpu.max)
+# - Periods of I/O wait (low CPU, but not throttled)
+# - Demonstrates realistic application behavior
+# - Shows how CPU limits interact with mixed workload phases
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hybrid-burstable
+  namespace: cpu-limits-research
+  labels:
+    workload-type: hybrid
+    qos-class: burstable
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --cpu=2
+    - --io=1
+    - --vm=1
+    - --vm-bytes=512M
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+  restartPolicy: Never

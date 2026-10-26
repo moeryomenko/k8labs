@@ -1,0 +1,43 @@
+# CPU-bound workload with Guaranteed QoS (request == limit)
+#
+# This workload performs pure CPU computation (stress-ng --cpu).
+# Expected behavior:
+# - Should consume exactly 2 CPUs worth of quota
+# - cpu.max should enforce 200000/100000 (2 CPUs)
+# - Should observe throttling when attempting to use >2 CPUs
+# - Scheduler should distribute work across available cores
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cpu-limits-research
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cpu-bound-guaranteed
+  namespace: cpu-limits-research
+  labels:
+    workload-type: cpu-bound
+    qos-class: guaranteed
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --cpu=4
+    - --cpu-method=ackermann
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+    resources:
+      requests:
+        cpu: "2"
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 256Mi
+  restartPolicy: Never

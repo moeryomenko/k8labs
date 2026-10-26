@@ -1,0 +1,32 @@
+# CPU-bound workload with BestEffort QoS (no request or limit)
+#
+# This workload performs pure CPU computation with no guarantees.
+# Expected behavior:
+# - cpu.weight = 1 (lowest priority)
+# - cpu.max = max (no hard limit)
+# - Can consume all available CPU when node is idle
+# - Gets lowest share under contention
+# - No throttling
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cpu-bound-besteffort
+  namespace: cpu-limits-research
+  labels:
+    workload-type: cpu-bound
+    qos-class: besteffort
+    app: research-workload
+spec:
+  nodeSelector:
+    cpu-limits/research: collector
+  containers:
+  - name: stress-ng
+    image: docker.io/library/fedora:44
+    command:
+    - stress-ng
+    - --cpu=4
+    - --cpu-method=ackermann
+    - --metrics-brief
+    - --timeout=120s
+    - --verbose
+  restartPolicy: Never
