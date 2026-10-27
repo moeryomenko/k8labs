@@ -13,8 +13,9 @@ This document is your map to 7100+ lines of research code and documentation.
 ### New to This Research?
 
 1. **Read:** `QUICK_REFERENCE.md` (2 min) - Decision tree and patterns
-2. **Read:** `FINAL_SUMMARY.md` (15 min) - Phase-by-phase results
-3. **Pick your path:**
+2. **Read:** `ALL_EXPERIMENTS_SUMMARY.md` (10 min) - Results with diagrams
+3. **Read:** `FINAL_SUMMARY.md` (15 min) - Phase-by-phase results
+4. **Pick your path:**
    - Developer → `DEVELOPER_GUIDE.md`
    - Administrator → `ADMINISTRATOR_GUIDE.md`
    - Researcher → `PHASE7_COMPLETE.md` and `phase4/THROTTLING_ANALYSIS.md`
@@ -46,6 +47,7 @@ cd phase5
 | `QUICK_REFERENCE.md` | 2 min | Decision tree, formulas, anti-patterns |
 | `README.md` | 5 min | Project overview and quick start |
 | `FINAL_SUMMARY.md` | 15 min | Complete research summary (all phases) |
+| `ALL_EXPERIMENTS_SUMMARY.md` | 10 min | All measured and modelled results with diagrams |
 
 ### Developer Guides
 

@@ -521,7 +521,9 @@ Prometheus instance was deployed for this research.
 - Probably not (CFS works well for the failure mode measured here)
 - Consider for specialised latency or HPC pools after measuring a
   scheduler-side problem
-- sched_ext was not measured in this research
+- Phase 7.6 measured `scx_lavd`, `scx_bpfland`, and `scx_mitosis`. The measured
+  sched_ext schedulers did not enforce `cpu.max` in the quota test. `scx_lavd`
+  enforced it when the scheduler used `--enable-cpu-bw`.
 
 ---
 
@@ -562,11 +564,11 @@ Prometheus instance was deployed for this research.
 
 ## Future Work (Optional)
 
-1. **Kernel scheduler comparison across kernels** (Phase 7.6 compared CFS with
-   `scx_lavd` and the two dynamic preemption models on one kernel): repeat on a
-   distribution kernel, PREEMPT_RT (which cannot be combined with sched_ext),
-   and other sched_ext schedulers
-2. **Custom scheduler evaluation beyond `scx_lavd --performance`**
+1. **Kernel scheduler comparison across kernels** (Phase 7.6 ran on one
+   `7.3.0-k8labs` kernel): repeat on a distribution kernel and boot-test the
+   PREEMPT_RT plus sched_ext combination. `scx_mavd` and `scx_nitosis` need a
+   newer kernel than the measured node.
+2. **Custom scheduler evaluation beyond the schedulers already measured**
 3. **Multi-node scheduler fairness** testing
 5. **Noisy-neighbour tail stability**: Phase 7.3's p99 result varied between
    runs (-2.9% and -37.1%); repeat it at higher rates and more samples
