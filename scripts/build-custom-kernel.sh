@@ -179,9 +179,14 @@ if [[ "${inside_container}" -eq 0 ]]; then
     if [[ "${PACKAGE_ONLY}" -eq 1 ]]; then
         inner_args="${inner_args} --package-only"
     fi
+    # The container repeats this script, so every path and name it derives
+    # must cross the boundary. Without these the inner run falls back to the
+    # defaults and stages a kernel under a release name that does not match
+    # the modules it just installed.
     exec podman run --rm --name "k8labs-kbuild-$$" \
         -v "${ROOT}:${ROOT}" \
         -v "${LINUX_SRC}:${LINUX_SRC}:ro" \
+        -e KERNELRELEASE -e OUT -e STAGE -e RPMBUILD -e RPMDIR -e JOBS \
         -w "${ROOT}" \
         "${BUILD_IMAGE}" \
         /bin/bash -c "dnf install -y --setopt=install_weak_deps=False \
