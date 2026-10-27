@@ -40,6 +40,13 @@ mount --bind /host/sys/kernel/tracing /sys/kernel/tracing
 mount --bind /host/sys/kernel/btf /sys/kernel/btf
 mount --bind /host/sys/kernel/sched_ext /sys/kernel/sched_ext
 
+# The cell schedulers (scx_mitosis, scx_nitosis) take a cgroup path and
+# resolve it under /sys/fs/cgroup themselves, so the host tree must be
+# visible there too and not only under /host. This replaces the private
+# cgroup namespace view inside this private mount namespace; the matrix
+# still addresses the tree through /host explicitly.
+mount --bind /host/sys/fs/cgroup /sys/fs/cgroup
+
 # libbpf resolves the kernel Kconfig it needs as /boot/config-$(uname -r),
 # and the pod has no /boot. The node boot directory is read-only there.
 mkdir -p /boot

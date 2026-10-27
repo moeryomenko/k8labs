@@ -324,10 +324,11 @@ Phase 7.1 the mean tracking p50 hid a 7x p99 increase.
 ## Scheduler Selection (UP vs SMP)
 
 > **Measured, on one kernel.** Phase 7.6 ran the same workload matrix on
-> `7.3.0-k8labs` under CFS, under `scx_lavd --performance` and under both
-> dynamic preemption models. What it did **not** do is compare different
-> kernels: no distribution kernel, no PREEMPT_RT (which cannot be combined with
-> sched_ext) and no other sched_ext scheduler was measured.
+> `7.3.0-k8labs` under CFS, `scx_lavd`, `scx_bpfland` and `scx_mitosis`, and
+> and separately under both dynamic preemption models with CFS. `scx_mavd`
+> and `scx_nitosis` build but
+> need kernel symbols that `7.3.0-k8labs` does not have. PREEMPT_RT and
+> sched_ext configure and compile together; that combination was not booted.
 
 ### Kernel Scheduler Variants
 
@@ -491,6 +492,31 @@ guarantee.
 CPU load, CFS measured p99 753-1475 us and `scx_lavd` measured p99 2032-3890 us;
 p50 was unchanged at 60-66 us. A latency-critical service at its p99 budget
 should not expect an improvement.
+
+**The same was true of every scheduler that loaded.** `scx_bpfland` and
+`scx_mitosis` were measured the same way on the same kernel:
+
+| scheduler | quota group, CPU-s (quota 4.0) | weight-400 single thread | probe p99 |
+|-----------|-------------------------------|--------------------------|-----------|
+| cfs | 4.00 | 0.285 | 702 us |
+| `scx_lavd --performance` | 4.00 with `--enable-cpu-bw`, 12.22 without | 0.118-0.159 | 2032-3890 us |
+| `scx_bpfland` | 12.48 | 0.143 | 1427 us |
+| `scx_mitosis` | 12.91 | 0.143 | 5139 us |
+
+None of them enforce `cpu.max`, and all of them give the four-thread group more
+CPU than the single thread whose weight is four times higher.
+
+**5. Cells are not weights.** `scx_mitosis` exists to give each child cgroup its
+own CPUs. Two cells with weights 400 and 100 and four CPU threads each:
+
+| arm | cell with weight 400 | cell with weight 100 |
+|-----|----------------------|----------------------|
+| cfs | 0.750 | 0.250 |
+| `scx_mitosis` | 0.499 | 0.501 |
+
+CFS honours the weights; mitosis ignores them and isolates the cells. Both are
+defensible, but a cluster that files cgroup weights under "fairness" is relying
+on CFS semantics that a scheduler swap removes.
 
 If a workload depends on either quota enforcement or cgroup fairness, keep CFS
 or budget for the work of re-implementing both.

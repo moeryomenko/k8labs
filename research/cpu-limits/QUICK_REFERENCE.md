@@ -154,12 +154,14 @@ echo 24000000 > /proc/sys/kernel/sched_latency_ns
 - Multi-tenant clusters (less proven fairness)
 - Compliance-sensitive workloads (new tech)
 
-> Measured in Phase 7.6 on `7.3.0-k8labs`: `scx_lavd --performance` did not
-> enforce `cpu.max` at all (12.22 CPU-seconds consumed against a 4.0
-> CPU-second quota) until `--enable-cpu-bw`, which the scheduler calls highly
-> experimental, was added. It also gave the four-thread group 3.4-4.5 times the
-> CPU of a single thread whose cgroup weight was four times higher. Do not
-> attach it to a cluster that depends on those two mechanisms.
+> Measured in Phase 7.6 on `7.3.0-k8labs`: `scx_lavd`, `scx_bpfland` and
+> `scx_mitosis` each consumed 12.2-12.9 CPU-seconds against a 4.0 CPU-second
+> `cpu.max` quota; only `scx_lavd --enable-cpu-bw` (which it calls highly
+> experimental) enforced it. All three also gave the four-thread group more CPU
+> than a single thread whose cgroup weight was four times higher.
+> `scx_mitosis` additionally equalises cells (50/50) where CFS splits them
+> 75/25 by weight. Do not attach any of them to a cluster that depends on
+> `cpu.max` or on cgroup weights.
 
 ### Requirements
 - Linux kernel **6.12+** with `CONFIG_SCHED_CLASS_EXT=y`

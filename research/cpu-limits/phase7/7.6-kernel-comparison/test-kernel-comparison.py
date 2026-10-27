@@ -99,21 +99,56 @@ SCX_BUILD = Path(
     )
 )
 
-SCX_ARM = {
-    "name": "scx_lavd-performance",
-    "binary": "/var/tmp/scx_lavd",
-    "args": ["--performance"],
-}
-# scx_lavd replaces the fair-class scheduler, and with it the CFS bandwidth
-# control that turns cpu.max into throttling: without this flag a cgroup's
-# quota is simply not enforced. The flag is documented upstream as highly
-# experimental, so the difference is measured instead of assumed.
-SCX_BW_ARM = {
-    "name": "scx_lavd-performance-bw",
-    "binary": "/var/tmp/scx_lavd",
-    "args": ["--performance", "--enable-cpu-bw"],
-}
+# Each scheduler is built from the scx tree and installed under /var/tmp in
+# the pod. The cell schedulers resolve their parent themselves: mitosis
+# prepends /sys/fs/cgroup to whatever is given, so the argument is the
+# directory name relative to that mount. node_view.sh binds the host tree
+# there for exactly this reason.
+CELL_PARENT = "/sched-modes"
+CELL_PARENT_PATH = f"{HOST_CGROUP}{CELL_PARENT}"
 
+SCHEDULERS = {
+    "lavd": {
+        "name": "scx_lavd-performance",
+        "build": "scx_lavd",
+        "args": ["--performance"],
+        "cpu_max": False,
+    },
+    # scx_lavd replaces the fair-class scheduler, and with it the CFS
+    # bandwidth control that turns cpu.max into throttling: without this flag
+    # a cgroup's quota is simply not enforced. Upstream calls the flag highly
+    # experimental, so the difference is measured, not assumed.
+    "lavd-bw": {
+        "name": "scx_lavd-performance-bw",
+        "build": "scx_lavd",
+        "args": ["--performance", "--enable-cpu-bw"],
+        "cpu_max": True,
+    },
+    "bpfland": {
+        "name": "scx_bpfland",
+        "build": "scx_bpfland",
+        "args": [],
+        "cpu_max": False,
+    },
+    "mitosis": {
+        "name": "scx_mitosis",
+        "build": "scx_mitosis",
+        "args": ["--cell-parent-cgroup", CELL_PARENT],
+        "cpu_max": False,
+    },
+    "mavd": {
+        "name": "scx_mavd",
+        "build": "scx_mavd",
+        "args": ["--performance"],
+        "cpu_max": False,
+    },
+    "nitosis": {
+        "name": "scx_nitosis",
+        "build": "scx_nitosis",
+        "args": ["--cell-parent-cgroup", CELL_PARENT],
+        "cpu_max": False,
+    },
+}
 
 def kubectl(*args, stdin=None, timeout=300):
     return subprocess.run(
@@ -311,9 +346,16 @@ def build_workloads(destination):
     return None
 
 
-def stage_scx(binary):
+def arm_build(arms, binary):
+    for arm in arms:
+        if arm.get("binary") == binary:
+            return arm["build"]
+    return Path(binary).name
+
+
+def stage_scx(binary, build):
     """Copy the scheduler into the pod when the pod holds a different build."""
-    local = SCX_BUILD / Path(binary).name
+    local = SCX_BUILD / build
     remote = exec_probe(f"stat -c '%Y %s' {binary} 2>/dev/null").stdout.strip()
     if local.is_file():
         stat = local.stat()
@@ -368,7 +410,7 @@ def stage(pod, arms):
             return error
 
     for binary in sorted({arm["binary"] for arm in arms if arm["binary"]}):
-        error = stage_scx(binary)
+        error = stage_scx(binary, arm_build(arms, binary))
         if error:
             return error
 
@@ -433,6 +475,95 @@ def scheduler_pid(binary):
     return out.stdout.strip()
 
 
+CELL_ROOT = f"{HOST_CGROUP}/sched-modes-cells"
+
+
+def cell_setup():
+    """Two sibling cells with deliberately unequal weights.
+
+    The matrix creates its groups after the scheduler starts, so a cell
+    scheduler never sees them: it scans its parent once, at init. These two
+    cells exist first. Under CFS the 400/100 weights would split the CPUs
+    80/20; a cell scheduler is supposed to give each cell its own CPUs
+    instead, so the same workloads should come out near 50/50.
+    """
+    exec_probe(f"rmdir {CELL_ROOT}/cell-a {CELL_ROOT}/cell-b 2>/dev/null; "
+               f"mkdir -p {CELL_ROOT}/cell-a {CELL_ROOT}/cell-b")
+    exec_probe(f"echo '+cpu' > {CELL_ROOT}/cgroup.subtree_control 2>/dev/null; true")
+    for cell, weight in (("cell-a", 400), ("cell-b", 100)):
+        exec_probe(f"echo {weight} > {CELL_ROOT}/{cell}/cpu.weight")
+
+
+def cell_burners(duration):
+    """One shell that starts both burners and waits for them.
+
+    Each burner writes its own pid into its cell before exec, which keeps the
+    pid through the exec, so the threads land in the right cgroup. Starting
+    them from one foreground command avoids the container runtime waiting on
+    a background child.
+    """
+    cmds = []
+    for cell in ("cell-a", "cell-b"):
+        cmds.append(
+            f"sh -c 'echo $$ > {CELL_ROOT}/{cell}/cgroup.procs; "
+            f"exec {WORK_DIR}/cpu_burn --threads 4 --duration {duration} "
+            f"--wait-file {WORK_DIR}/scenarios.py --output /tmp/{cell}.json' &"
+        )
+    return " ".join(cmds) + " wait"
+
+
+def cell_usage():
+    out = {}
+    for cell in ("cell-a", "cell-b"):
+        text = exec_probe(f"cat {CELL_ROOT}/{cell}/cpu.stat 2>/dev/null").stdout
+        stats = {}
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].lstrip("-").isdigit():
+                stats[parts[0]] = int(parts[1])
+        out[cell] = stats
+    return out
+
+
+def cell_test(schedulers, duration=8):
+    """CPU seconds per cell under CFS and under each requested cell scheduler."""
+    results = []
+    for arm in ["cfs"] + [key for key in schedulers if key in ("mitosis", "nitosis")]:
+        spec = None if arm == "cfs" else SCHEDULERS[arm]
+        info = None
+        if spec:
+            info, error = start_scx({"binary": f"/var/tmp/{spec['build']}",
+                                     "args": spec["args"]})
+            if not info:
+                results.append({"arm": spec["name"], "status": "failed", "error": error})
+                continue
+        cell_setup()
+        before = cell_usage()
+        burn = exec_probe(cell_burners(duration), timeout=duration + 120)
+        after = cell_usage()
+        if info:
+            stop_scx({"pid": info["pid"], "supervisor": info["supervisor"]})
+        usage = {}
+        for cell in ("cell-a", "cell-b"):
+            b, a = before.get(cell, {}), after.get(cell, {})
+            usage[cell] = round(
+                ((a.get("usage_usec", 0) - b.get("usage_usec", 0))) / 1e6, 3
+            )
+        total = sum(usage.values()) or 1
+        results.append(
+            {
+                "arm": spec["name"] if spec else "cfs",
+                "status": "ok" if burn.returncode == 0 else "failed",
+                "weights": {"cell-a": 400, "cell-b": 100},
+                "cpu_seconds": usage,
+                "share": {cell: round(value / total, 3) for cell, value in usage.items()},
+                "error": None if burn.returncode == 0 else burn.stderr.strip()[:300],
+            }
+        )
+    exec_probe(f"rmdir {CELL_ROOT}/cell-a {CELL_ROOT}/cell-b {CELL_ROOT} 2>/dev/null; true")
+    return results
+
+
 def preempt_read():
     return exec_probe(f"cat {PREEMPT_FILE} 2>/dev/null").stdout.strip()
 
@@ -466,6 +597,10 @@ def start_scx(arm):
     normally. Nothing is leaked if the arm is stopped.
     """
     exec_probe("rm -f /var/tmp/scx.log /var/tmp/scx.pid")
+    # A cell scheduler scans the children of its parent once, at start, so the
+    # parent must exist before the scheduler does. Creating it does not create
+    # a cell: the matrix's groups do that when they run.
+    exec_probe(f"mkdir -p {CELL_PARENT_PATH}")
     # scx_stats hard-codes /var/run/scx/<sched>/stats with no override, and a
     # previous sched_ext experiment (running as another pod user) may own the
     # stats socket there, so removing the directory fails. /var/run is
@@ -748,10 +883,17 @@ def main():
     parser.add_argument("--skip-scx", action="store_true")
     parser.add_argument("--skip-preempt", action="store_true")
     parser.add_argument(
-        "--scx-bw", action="store_true", help="add an scx_lavd arm with --enable-cpu-bw"
+        "--schedulers",
+        default="lavd",
+        help="comma-separated sched_ext schedulers to run: " + ", ".join(SCHEDULERS),
     )
     parser.add_argument(
         "--only-preempt", action="store_true", help="run only the preemption comparison"
+    )
+    parser.add_argument(
+        "--cells",
+        action="store_true",
+        help="also run the two-cell isolation test for the cell schedulers",
     )
     parser.add_argument("--label", default="kernel-comparison")
     args = parser.parse_args()
@@ -764,6 +906,13 @@ def main():
     for mode in modes:
         if mode not in MODES:
             raise SystemExit(f"unknown mode: {mode}")
+
+    schedulers = [name for name in args.schedulers.split(",") if name]
+    for name in schedulers:
+        if name not in SCHEDULERS:
+            raise SystemExit(
+                f"unknown scheduler: {name} (known: {', '.join(SCHEDULERS)})"
+            )
 
     print("=" * 78)
     print("Phase 7 Topic 7.6: kernel scheduler comparison")
@@ -780,9 +929,17 @@ def main():
 
     arms = [] if args.only_preempt else [{"name": "cfs", "binary": None, "args": []}]
     if not args.skip_scx and not args.only_preempt:
-        arms.append(SCX_ARM)
-        if args.scx_bw:
-            arms.append(SCX_BW_ARM)
+        for key in schedulers:
+            spec = SCHEDULERS[key]
+            arms.append(
+                {
+                    "name": spec["name"],
+                    "binary": f"/var/tmp/{spec['build']}",
+                    "build": spec["build"],
+                    "args": list(spec["args"]),
+                    "cpu_max": spec["cpu_max"],
+                }
+            )
 
     environment = stage(pod, arms)
     if isinstance(environment, str):
@@ -884,6 +1041,16 @@ def main():
         )
         arm_records.append(record)
 
+    cells = cell_test(schedulers, args.duration) if args.cells else None
+    if cells:
+        print()
+        print("cells (weights 400 vs 100, four threads each):")
+        for entry in cells:
+            print(
+                f"  {entry['arm']:20} {entry.get('share')} "
+                f"cpu_s {entry.get('cpu_seconds')}"
+            )
+
     preempt = None
     if not args.skip_preempt:
         preempt = preempt_comparison(args, scenarios)
@@ -908,6 +1075,7 @@ def main():
         "modes": modes,
         "arms": arm_records,
         "preempt": preempt,
+        "cells": cells,
         "summary": summary,
         "latency": [
             {

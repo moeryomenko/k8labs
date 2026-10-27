@@ -282,8 +282,95 @@ full). Three repetitions per arm:
 p50 is identical and the p99 and max differences are of the same size as the
 spread between repetitions of one arm elsewhere in this matrix. This workload
 does not distinguish the two models, so this data does not justify changing
-the boot parameter. `PREEMPT_RT` cannot be combined with sched_ext at all and
-is out of scope rather than untested.
+the boot parameter.
+
+### PREEMPT_RT and sched_ext do configure together
+
+The earlier version of this document said the two cannot be combined. That was
+wrong, at least at the configuration and build level. `kernel/Kconfig.preempt`
+puts no dependency between them: `SCHED_CLASS_EXT` depends on
+`BPF_SYSCALL && BPF_JIT && DEBUG_INFO_BTF`, and `PREEMPT_RT` is an independent
+option. Starting from the `next-20261016` configuration, setting
+`CONFIG_PREEMPT_RT=y` and running `olddefconfig` leaves `CONFIG_SCHED_CLASS_EXT=y`
+and `CONFIG_DEBUG_INFO_BTF=y` in place, and:
+
+- the kernel builds: `bzImage` 16790528 bytes, 2445 modules with BTF, sched_ext
+  objects linked in;
+- the only reason the first attempt appeared to drop sched_ext was `pahole`
+  missing on the host that ran `olddefconfig`, which made
+  `DEBUG_INFO_BTF` unmet and cascaded into `SCHED_CLASS_EXT`. Run inside the
+  build container, both survive.
+
+What is **not** established is whether an RT kernel with sched_ext *runs*
+correctly. Installing a kernel on these nodes is not an `rpm -i` away: they
+boot a signed UKI built by the image bake, and this environment has no PKCS#11
+signing token, no host image staging and no CAPI machine objects. The
+combination is therefore build-verified and boot-unverified, and sched_ext on
+RT should be treated as unsupported until someone boots it.
+
+### Scheduler survey: bpfland, mitosis, mavd, nitosis
+
+Evidence: `evidence/phase7/kernel-comparison/survey-clean-20261027T030516Z.json`,
+`cells-mitosis-20261027T031216Z.json`, `mavd-try-20261027T022959Z.json` and
+`nitosis-try-20261027T023315Z.json` (the two load attempts), plus the built
+linux-next tree under `build/kernel-custom-next`.
+
+Four more schedulers were built from the same scx tree. Two were measured with
+the same matrix (`concur` mode, two repetitions) on `7.3.0-k8labs`; the other
+two were attempted and could not load.
+
+| scheduler | state on 7.3.0-k8labs | w400-t1 share | quota group, CPU-s | probe p99 |
+|-----------|----------------------|---------------|--------------------|-----------|
+| cfs | baseline | 0.285 | 4.00 | 702 us |
+| `scx_bpfland` | attached, `nr_rejected` 0 | 0.143 | 12.48 | 1427 us |
+| `scx_mitosis` | attached, `nr_rejected` 0 | 0.143 | 12.91 | 5139 us |
+| `scx_mavd` | **cannot load** | — | — | — |
+| `scx_nitosis` | **cannot load** | — | — | — |
+
+Both schedulers that load behave like `scx_lavd`: they ignore `cpu.max`
+(12.5 and 12.9 CPU-seconds against a 4.0 CPU-second quota) and they allocate
+per task rather than per cgroup weight (the weight-400 single thread gets
+half the CPU of the weight-100 four-thread group).
+
+`scx_mitosis` also gets its own test, because the matrix cannot exercise the
+feature that defines it: a cell scheduler scans the children of its parent
+once, at start, and the matrix creates its groups later. The test therefore
+creates two cells first, gives them weights 400 and 100, runs four CPU threads
+in each, and measures eight seconds:
+
+| arm | cell-a (weight 400) | cell-b (weight 100) |
+|-----|---------------------|---------------------|
+| cfs | 0.750 (20.75 CPU-s) | 0.250 (6.91 CPU-s) |
+| `scx_mitosis` | 0.499 (12.58 CPU-s) | 0.501 (12.61 CPU-s) |
+
+That is the scheduler doing exactly what it is designed to do: CFS honours the
+weights, mitosis gives each cell its own CPUs and equalises them. It is also
+the clearest illustration in this research that "fairness" means different
+things to different schedulers, and that swapping them changes who gets the
+CPU without any manifest changing.
+
+`scx_mavd` and `scx_nitosis` both fail at the loader, not at the policy:
+
+```
+libbpf: prog 'scx_lib_init_probe': BPF program load failed: -EINVAL
+Error: Failed to load BPF program / initializing scheduler
+```
+
+They are experiments of the `scx_lavd` and `scx_mitosis` code bases converted
+to the "cid" and arena forms, which need kernel features that `7.3.0-k8labs`
+does not have. The strings are absent from its BTF and present in a
+`next-20261016` build:
+
+| symbol | 7.3.0-k8labs BTF | next-20261016 build |
+|--------|------------------|---------------------|
+| `bpf_call_rcu` | 0 | 3 |
+| `bpf_rcu_head` | 0 | 4 |
+| `sub_cid_sched_updated` | 1 | 3 |
+
+So both build, both are staged, and both need a 7.4-class kernel. The
+`next-20261016` kernel that would run them was built here and packaged, but
+could not be installed for the reason above: node images are signed UKIs
+produced by the bake pipeline.
 
 ---
 
@@ -430,10 +517,11 @@ supply their own numbers and re-run the script.
 ## What This Does Not Show
 
 - **7.6 kernel comparison** ran on one kernel, `7.3.0-k8labs`. It compares CFS
-  with `scx_lavd` and the two dynamic preemption models, not with a
-  distribution kernel, PREEMPT_RT, or other sched_ext schedulers. One of the
-  five `cgroup_mode` values is a compile-time default, not a per-workload
-  recommendation.
+  with `scx_lavd`, `scx_bpfland` and `scx_mitosis` and the two dynamic
+  preemption models. `scx_mavd` and `scx_nitosis` could not be measured: they
+  need kernel symbols that `7.3.0-k8labs` lacks, and the `next-20261016` kernel
+  that has them was built but cannot be installed without the signed-image
+  pipeline. PREEMPT_RT plus sched_ext was configured and built, not booted.
 - **7.7 incident simulation** uses a purpose-built 100-microsecond HTTP target,
   because the nginx image was no longer available on the node. Rates and
   latencies are therefore not comparable with the nginx numbers in 7.1; the
