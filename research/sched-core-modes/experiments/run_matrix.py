@@ -26,8 +26,16 @@ from pathlib import Path
 
 from scenarios import MODES, SCENARIOS, parse_mode_file
 
-CGROUP_ROOT = Path("/sys/fs/cgroup/sched-modes")
-MODE_FILE = Path("/sys/kernel/debug/sched/cgroup_mode")
+# Both paths are node paths. The matrix runs inside a container, so the
+# caller enters the node's scheduler view first (phase7/lib/node_view.sh binds
+# the node's own debugfs and cgroup2 mounts into the container) and points
+# CGROUP_MOUNT at that view. /sys/fs/cgroup inside the container is a private,
+# read-only cgroup namespace holding only the container's own group.
+CGROUP_MOUNT = Path(os.environ.get("CGROUP_MOUNT", "/sys/fs/cgroup"))
+CGROUP_ROOT = CGROUP_MOUNT / "sched-modes"
+MODE_FILE = (
+    Path(os.environ.get("SCHED_DEBUGFS", "/sys/kernel/debug")) / "sched/cgroup_mode"
+)
 PROC_STAT = Path("/proc/stat")
 BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 WORK_DIR = Path("/var/tmp/sched-modes")
@@ -118,11 +126,11 @@ def clean_cgroup(path: Path) -> None:
 
 
 def ensure_root() -> None:
-    controllers = read_text(Path("/sys/fs/cgroup/cgroup.controllers")).split()
+    controllers = read_text(CGROUP_MOUNT / "cgroup.controllers").split()
     for controller in ("cpu", "cpuset"):
         if controller not in controllers:
             raise RuntimeError(f"cgroup v2 controller {controller!r} is not available")
-    subtree = read_text(Path("/sys/fs/cgroup/cgroup.subtree_control")).split()
+    subtree = read_text(CGROUP_MOUNT / "cgroup.subtree_control").split()
     missing = [
         controller for controller in ("cpu", "cpuset") if controller not in subtree
     ]
@@ -207,6 +215,18 @@ def stop(proc: subprocess.Popen[str], strict: bool = True) -> None:
         return
     stderr = proc.stderr.read() if proc.stderr is not None else ""
     raise RuntimeError(f"workload exited {proc.returncode}: {stderr.strip()}")
+
+
+def workloads_need_compiler(base: Path) -> bool:
+    """True when a workload binary is missing or older than its source."""
+
+    for source, output in (
+        (base / "cpu_burn.c", base / "cpu_burn"),
+        (base / "wakeup_latency.c", base / "wakeup_latency"),
+    ):
+        if not output.exists() or output.stat().st_mtime < source.stat().st_mtime:
+            return True
+    return False
 
 
 def compile_workloads(base: Path) -> tuple[Path, Path]:
@@ -447,7 +467,14 @@ def check_environment() -> dict[str, object]:
         raise RuntimeError(f"cgroup_mode is not available: {MODE_FILE}")
     cpu_burn = WORK_DIR / "cpu_burn"
     wakeup = WORK_DIR / "wakeup_latency"
-    for tool in ("gcc", "python3"):
+    # gcc is only needed to build a missing or stale workload binary. A node
+    # pod may carry prebuilt static binaries instead of a compiler; requiring
+    # gcc unconditionally would reject an environment that can run the matrix
+    # perfectly well.
+    tools = ["python3"]
+    if workloads_need_compiler(WORK_DIR):
+        tools.append("gcc")
+    for tool in tools:
         if shutil.which(tool) is None:
             raise RuntimeError(f"required tool not found: {tool}")
     return {
@@ -456,8 +483,11 @@ def check_environment() -> dict[str, object]:
         "kernel": os.uname().release,
         "node": os.uname().nodename,
         "boot_id": read_boot_id(),
-        "cpu_weight": read_text(CGROUP_ROOT.parent / "cpu.weight").strip()
-        if (CGROUP_ROOT.parent / "cpu.weight").is_file()
+        "cgroup_mount": str(CGROUP_MOUNT),
+        # The matrix's own parent group, not the root: on a mounted host tree
+        # the root has no cpu.weight because the root group is special.
+        "cpu_weight": read_text(CGROUP_ROOT / "cpu.weight").strip()
+        if (CGROUP_ROOT / "cpu.weight").is_file()
         else "",
         "work_dir": str(WORK_DIR),
         "cpu_burn": str(cpu_burn),
