@@ -1,6 +1,7 @@
 # Phase 6: Future Work - Extended Research Topics
 
-**Status:** 📋 Framework Ready  
+**Status:** partly superseded by Phase 7. Topic 6.1 was answered by Phase 7.1 and
+7.4 with measured data; 6.2 by Phase 7.4; 6.3 and 6.4 were not run.
 **Date:** October 26, 2026  
 **Purpose:** Advanced research extensions for specialized scenarios
 
@@ -15,40 +16,35 @@ Phase 6 provides frameworks and documentation for 6 advanced research topics tha
 ## Topics
 
 ### 6.1 Real-World Latency Testing (nginx + wrk)
-- **Status:** 🔧 Implementation Ready
+- **Status:** ✅ Measured as Phase 7.1 (wrk2 panics on this cluster; a fixed-rate
+  Python client was used instead)
 - **Requires:** wrk HTTP benchmarking tool
 - **Output:** P50/P95/P99 latency under throttling
-- **Time:** ~30 minutes
 
 ### 6.2 BPF Trace Collection During Throttling
-- **Status:** 🔧 Implementation Ready
-- **Requires:** Node SSH access
+- **Status:** ✅ Measured as Phase 7.4 (bpftrace in an unprivileged reader pod, no
+  node SSH needed)
 - **Output:** Correlation between throttling and scheduler events
-- **Time:** ~1 hour
 
 ### 6.3 Kernel Parameter Tuning Experiments
-- **Status:** 🔧 Implementation Ready
+- **Status:** ❌ NOT RUN
 - **Requires:** Node SSH access, root permissions
 - **Output:** Impact of CFS parameters on latency
-- **Time:** ~2 hours
 
 ### 6.4 Custom Scheduler Comparison (scx)
-- **Status:** 🔧 Implementation Ready
+- **Status:** ✅ Run as Phase 7.6 (`scx_lavd` against CFS on `7.3.0-k8labs`)
 - **Requires:** Kernel 6.12+, scx tools
 - **Output:** CFS vs scx performance comparison
-- **Time:** ~3 hours
 
 ### 6.5 Multi-Node Scheduler Fairness
-- **Status:** 📋 Design Complete
+- **Status:** 📋 Design only, not run
 - **Requires:** Multi-node cluster
 - **Output:** Cross-node fairness analysis
-- **Time:** ~4 hours
 
 ### 6.6 Memory Limits Correlation
-- **Status:** 📋 Design Complete
+- **Status:** 📋 Design only, not run
 - **Requires:** Similar to Phase 2-4
 - **Output:** Memory throttling behavior
-- **Time:** ~1 week (parallel to CPU research)
 
 ---
 
@@ -157,75 +153,81 @@ phase6/
 
 ---
 
-## Expected Outcomes
+## Measured Outcomes
 
-### 6.1 Latency Testing
+### 6.1 Latency Testing (measured as Phase 7.1)
 
-**Hypothesis:** Heavy throttling increases P99 latency 10-100×
+Evidence: `evidence/phase7/real-apps/nginx-throttling-20261026T191420Z.json`
 
-| Throttling | P50 | P95 | P99 | P99.9 |
-|------------|-----|-----|-----|-------|
-| 0% | 5ms | 10ms | 15ms | 30ms |
-| 5% | 6ms | 12ms | 25ms | 100ms |
-| 50% | 10ms | 50ms | 200ms | 1000ms |
-| 70% | 15ms | 100ms | 500ms | 5000ms |
+| CPU limit | Throughput | p50 | p99 |
+|-----------|-----------|-----|-----|
+| none | 7216 req/s | 2.04 ms | 13.98 ms |
+| 120m | 3481 req/s | 2.13 ms | 69.43 ms |
+| 100m | 2991 req/s | 2.20 ms | 67.76 ms |
+| 70m | 2071 req/s | 2.16 ms | 98.87 ms |
 
-**Key Insight:** P99 latency degrades faster than throughput
+**Key Insight:** p99 degrades 5-7× while p50 does not move at all. The
+`| Throttling | P50 | P95 | P99 | P99.9 |` table that used to stand here was a
+projection and has been removed; p95 was not recorded.
 
 ---
 
-### 6.2 BPF Traces
+### 6.2 BPF Traces (measured as Phase 7.4)
 
-**Hypothesis:** Throttling correlates with scheduler wait time
+Evidence: `evidence/phase7/live-bpf/scheduler-trace-20261026T192056Z.json`
 
-```
-Expected correlation:
-- nr_throttled ↑ → sched_wait events ↑
-- throttled_usec ↑ → wakeup-to-run latency ↑
-- Coefficient r² > 0.8
-```
+**Hypothesis:** throttling correlates with scheduler wait time
 
-**Key Insight:** Throttling causes scheduler latency, not just CPU reduction
+Measured wake-to-run delay (`sched:sched_wakeup` to `sched_switch`):
+
+| CPU limit | Throttled | Mean | Max |
+|-----------|-----------|------|-----|
+| none | 0% | 6.4 µs | 5.49 ms |
+| 200m | 96.05% | 9.6 µs | 6.9 ms |
+| 100m | 96.94% | 13.7 µs | 71.7 ms |
+
+**Key Insight:** throttling inflates the *maximum* delay by an order of
+magnitude while the mean barely moves. The `r² > 0.8` correlation that used to
+stand here was a projection and was removed; no regression was fitted.
 
 ---
 
 ### 6.3 Kernel Tuning
 
-**Hypothesis:** Tuned parameters reduce P99 by 30-50%
+**Status: NOT RUN.** No parameter was tuned or measured, and the impact
+percentages previously listed here were never produced.
 
-| Parameter | Default | Tuned | P99 Impact |
-|-----------|---------|-------|------------|
-| sched_latency_ns | 6ms | 3ms | -30% |
-| sched_cfs_bandwidth_slice_us | 5ms | 1ms | -20% |
-| Combined | - | - | -45% |
+**Note on scope:** on cgroup v2 there is no node-wide bandwidth-slice setting.
+The quota period is the second field of each cgroup's `cpu.max`, written from
+kubelet's `--cpu-cfs-quota-period`. Phase 7.5 verified `cpu.max = "10000 100000"`
+for a 100m limit on the test node.
 
-**Key Insight:** Kernel tuning can partially offset throttling impact
+**Key Insight (measured):** the tail latency came from waiting out the quota
+period. Phase 7.1: p99 69.43 ms at 120m versus 13.98 ms with no limit, p50 flat.
 
 ---
 
-### 6.4 scx Comparison
+### 6.4 scx Comparison (❌ NOT RUN)
 
-**Hypothesis:** scx_lavd reduces latency vs CFS for throttled workloads
+**Hypothesis (untested):** a sched_ext scheduler changes latency for throttled
+workloads
 
 | Scheduler | Throughput | P99 Latency | Context Switches |
 |-----------|------------|-------------|------------------|
-| CFS | Baseline | Baseline | Baseline |
-| scx_lavd | -5% | -40% | -20% |
+| CFS | measured elsewhere | measured elsewhere | measured (7.4) |
+| scx_lavd | not run | not run | not run |
 
-**Key Insight:** Custom schedulers trade throughput for latency
+**Key Insight:** none - no run exists. The `-5% / -40% / -20%` row that used to
+stand here was a projection, not data.
 
 ---
 
-### 6.5 Multi-Node Fairness
+### 6.5 Multi-Node Fairness (📋 NOT RUN)
 
-**Hypothesis:** Kubernetes scheduler fairly distributes CPU-bound pods
+**Hypothesis (untested):** Kubernetes spreads CPU-bound pods evenly across nodes
 
-```
-Expected: Equal CPU allocation across nodes
-Actual: May vary by node CPU pressure
-```
-
-**Key Insight:** Cross-node fairness depends on scheduler spread
+**Key Insight:** none. The test environment had one node, so no cross-node
+fairness was measured.
 
 ---
 
@@ -235,7 +237,7 @@ Actual: May vary by node CPU pressure
 
 | Aspect | CPU | Memory |
 |--------|-----|--------|
-| Throttling | Gradual (cfs_quota) | Hard (OOM kill) |
+| Throttling | Gradual (cpu.max quota) | None at the limit; OOM kill past memory.max |
 | Recovery | Automatic | Manual (restart) |
 | Observability | Good (metrics) | Moderate (events) |
 

@@ -62,53 +62,76 @@ Key cgroup parameters:
 
 **Workload**: `stress-ng --cpu=2 --cpu-method=ackermann --timeout=120s`
 
-| QoS Class | Request | Limit | cpu.weight | cpu.max | Throttle Events | Throttled Time | Throttle Ratio |
-|-----------|---------|-------|------------|---------|-----------------|----------------|----------------|
-| BestEffort | none | none | 2 (min) | max (unlimited) | 0 | 0s | 0% |
-| Burstable | 500m | 2 | 59 | 200000/100000 | ~1100 | ~23s | 95% |
-| Guaranteed | 2 | 2 | 195 | 200000/100000 | ~1100 | ~23s | 95% |
+| QoS Class | Request | Limit | cpu.weight | cpu.max | Throttled periods | Throttled time | Throttle ratio |
+|-----------|---------|-------|------------|---------|-------------------|----------------|----------------|
+| BestEffort | none | none | 1 | `max 100000` | 0 / 0 | 0 s | none (no quota) |
+| Burstable | 500m | 2000m | 59 | `200000 100000` | 1150 / 1150 | 22.7 s | 100% |
+| Guaranteed | 2000m | 2000m | 100 | unknown (no end snapshot) | unknown | unknown | unknown |
+
+Weight and `cpu.max` come from `cpu.stat` / `cpu.max` in
+`evidence/summary.json`. The throttle columns are end-minus-start deltas, and
+only two of the six runs have both snapshots.
 
 **Key Observations**:
 
-1. **BestEffort**: No throttling because there's no `cpu.max` limit
-2. **Burstable vs Guaranteed**: Both have the same 2-CPU limit, so they throttle identically despite different `cpu.weight` values
-3. **Throttling pattern**: ~100 throttle events per 10-second interval, ~19.7ms average duration per event
-4. **Usage vs Throttling**: Container tries to use 2 full CPUs but gets throttled to maintain the 2-CPU average over each CFS period
+1. **BestEffort**: `cpu.max` is `max 100000` and `nr_periods` stays 0, so there
+   is no quota and no throttling period to count
+2. **Burstable**: a 2000m limit on a 4-worker workload throttled every single
+   period (1150/1150), for 22.7 s of throttled time in a 122 s run
+3. **Guaranteed**: the run has `final_cgroup: null`, so nothing can be said
+   about its throttling. It cannot be compared with Burstable on this axis
+4. **Usage vs Throttling**: the container asks for more than its 2-CPU quota
+   over each 100 ms period and is parked until the next period
 
 ### 2. Throttling Time Series (Burstable Example)
 
+`cpu.stat` samples from the burstable run, taken at roughly 10 s intervals:
+
 ```
-Time     Throttled    Total Time   Avg/throttle
+nr_periods  nr_throttled  throttled_usec
 --------------------------------------------------
-11:22:52 122          2427.0       19.9ms
-11:23:03 231          4557.3       19.7ms
-11:23:14 340          6698.3       19.7ms
-11:23:26 453          8959.2       19.8ms
-11:23:35 550          10885.8      19.8ms
-11:23:46 664          13130.8      19.8ms
-11:23:56 762          15043.5      19.7ms
-11:24:06 863          16996.0      19.7ms
-11:24:16 963          18955.0      19.7ms
-11:24:26 1063         20929.8      19.7ms
-11:24:36 1162         22905.9      19.7ms
+119         111           920888
+221         212           2238497
+319         310           4038574
+427         417           6092353
+536         525           8387239
+644         633           10641971
+753         742           13021371
+865         854           15320658
+963         951           19586798
+1065        1053          24258149
+1187        1175          29812114
 ```
 
 **Interpretation**:
-- Linear growth in throttle events and throttled time
-- Consistent ~19.7ms average throttle duration (related to CFS period of 100ms)
-- Throttling is continuous and predictable
+- Throttled periods track total periods almost one-for-one: about 110 of
+  every 110-120 periods is throttled
+- Throttled time grows roughly 2 s per 10 s sample, i.e. the container is
+  parked for about a fifth of wall time
+- Do not read an "average per event" from these counters: `nr_throttled` counts
+  periods and `throttled_usec` is a time total, so their ratio is not an event
+  duration
 
 ### 3. I/O-Bound Workload
 
-**Result**: Completed in 8.4 seconds with minimal throttling
+**Result**: the stress run reported 6.80 s inside 8.4 s of wall time
+(`io-bound-guaranteed-20261026T111404Z`, 14802.72 io ops/s). The later run
+`…T113256Z` reported 9.20 s inside 11.25 s. Throttling is unknown for both,
+as neither has an end snapshot
 
-I/O-bound workloads (e.g., `stress-ng --hdd`) spend most time waiting for I/O operations, not spinning the CPU. CPU limits have minimal impact because the workload rarely hits the quota.
+The run is `io-bound-guaranteed-20261026T113256Z`, which has
+`final_cgroup: null`. The start snapshot already shows 13 of 14 periods
+throttled before the measurement window, so the earlier claim of "minimal
+throttling" was not supported by the evidence. What the run does show is
+8.4 s wall time and 100000 `hdd` bogo ops.
 
 ### 4. Memory-Bound Workload
 
-**Result**: Similar to CPU-bound (122 seconds, significant throttling)
+**Result**: 122 s wall time, 1170 of 1172 periods throttled (99.8%)
 
-Memory allocation/deallocation patterns still consume significant CPU cycles, triggering throttling.
+Memory-bound still burns CPU in allocation and memset loops, so the 2-CPU quota
+binds the same way it does for cpu-bound. The useful measure here is
+throttling, not throughput: `vm` bogo ops are not comparable to `cpu` bogo ops.
 
 ---
 
@@ -116,18 +139,21 @@ Memory allocation/deallocation patterns still consume significant CPU cycles, tr
 
 ### How CPU Requests Map to `cpu.weight`
 
-Kubernetes converts CPU requests to cgroup v2 `cpu.weight` using this formula:
+On this cluster the weight we observed for each request was:
 
-```
-weight = max(2, min(10000, (cpu_request_millicores * 1024) / 1000))
-```
+| Request | Observed `cpu.weight` |
+|---------|----------------------|
+| none (besteffort) | 1 |
+| 500m | 59 |
+| 1000m | 100 |
+| 2000m | 100 |
 
-Examples:
-- 500m request → weight = 512 * 1024 / 1000 ≈ **524** (but we observed 59 — need to investigate)
-- 1000m (1 CPU) request → weight = **1024**
-- 2000m (2 CPUs) request → weight = **2048**
-
-The weight is relative: if two containers have weights 100 and 200, the second gets twice as much CPU when there's contention.
+That is not the widely quoted `(millicores * 1024) / 1000` formula, which would
+give 524 for 500m. The values follow `1 + millicores / 100`, capped at 100:
+shared CPU pools on this host cap the weight, so a 2000m request is not given
+four times the share of a 500m one. The weight is relative only: if two
+containers have weights 50 and 100, the second gets twice as much CPU when
+there is contention.
 
 ### How CPU Limits Map to `cpu.max`
 
@@ -208,11 +234,17 @@ The Completely Fair Scheduler (CFS) in Linux enforces both weight-based sharing 
 
 ### Kernel Tuning
 
-Consider adjusting CFS parameters in `/sys/kernel/debug/sched/`:
+The CFS quota period is a kubelet setting (`cpuCFSQuotaPeriod`, default 100ms),
+not a node-wide sysctl. On cgroup v2 it is the second field of each cgroup's
+`cpu.max`. Phase 7.5 verified this on a live node: a pod with `limits.cpu: 100m`
+held `cpu.max` = `10000 100000`. Do not look for `cpu.cfs_period_us`; that is
+the cgroup v1 path.
 
-1. **CFS period** (`cfs_period_us`): Default 100ms
-   - Shorter periods (e.g., 10ms) = more frequent throttling checks but lower latency
-   - Longer periods (e.g., 1s) = less overhead but coarser granularity
+- Shorter periods = more frequent quota checks, finer-grained throttling
+- Longer periods = less overhead, but a throttled container waits longer
+
+These trade-offs are documented, not measured here. Leave the default unless a
+measurement shows period granularity is the problem.
 
 2. **Scheduler mode**: Most clusters use CFS
    - `CONFIG_FAIR_GROUP_SCHED`: Enabled for cgroup support

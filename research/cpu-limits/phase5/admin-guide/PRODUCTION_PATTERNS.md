@@ -39,8 +39,8 @@ Is latency-sensitive (API, DB, real-time)?
 | HTTP API | Request-Only | ✅ | ❌ | Avoid throttling, allow bursting |
 | Database | Guaranteed | ✅ | ✅ (same) | Predictable performance |
 | Trading/Real-time | CPU Pinning | ✅ | ✅ (same) | Minimal scheduler overhead |
-| Multi-tenant apps | Multi-Tenant | ✅ | ✅ (2-4× req) | Isolation, noisy neighbor protection |
-| Batch/ML jobs | BestEffort/Burstable | ❌ or ✅ | ❌ | Use idle CPU, low priority |
+| Multi-tenant apps | Multi-Tenant | ✅ | ✅ above own p99 | Isolation for the pods that can misbehave |
+| Batch/ML jobs | Guaranteed | ✅ | ✅ (= request) | No forced wait; use idle CPU via the request |
 
 ---
 
@@ -51,9 +51,12 @@ Is latency-sensitive (API, DB, real-time)?
 Set CPU requests but **no limits**. Pods get guaranteed minimum CPU but can burst to use idle capacity.
 
 **From our research:**
-- Phase 2: Appropriate limits → 0% throttling
-- Phase 4: Aggressive limits → 69.8% throttling, 62.7% perf loss
-- **Conclusion:** If you don't need hard isolation, skip limits
+- Phase 2: throttling occurred in every period wherever a finite quota existed
+  (1150/1150 cpu-bound burstable); only the run with `cpu.max` = `max 100000`
+  was unthrottled, and that is the configuration with no limit
+- Phase 4: a limit below need → 139.05 → 19.22 ops/sec (-86.2%)
+- Phase 7.1: p99 13.98 → 69.43 ms at a 120m limit on nginx, p50 unchanged
+- **Conclusion:** If you don't need a hard bound, skip limits
 
 ### Configuration
 
@@ -137,8 +140,9 @@ spec:
 ### Monitoring
 
 ```promql
-# Ensure no throttling (should be 0)
-rate(container_cpu_cfs_throttled_seconds_total{pod="api-server-*"}[5m])
+# Throttled periods ratio (with no limit this stays 0)
+rate(container_cpu_cfs_throttled_periods_total{pod="api-server-*"}[5m])
+/ rate(container_cpu_cfs_periods_total{pod="api-server-*"}[5m])
 
 # CPU usage vs request
 container_cpu_usage_seconds_total / 
@@ -382,11 +386,16 @@ kubectl exec trading-engine-* -- cat /proc/1/status | grep voluntary_ctxt_switch
 
 ### Overview
 
-Set moderate limits (2-4× requests) to allow bursting while protecting against noisy neighbors.
+Give the pods that can misbehave a limit, and put that limit well above their
+own observed p99 so it only bites when they run away. This section previously
+claimed that a 4x limit "had only 4.7% throttling"; no 500m/2000m run exists in
+the evidence, and the Phase 4 runs did not record throttle percentages.
 
 **From our research:**
-- Phase 4: 4× limit (request=500m, limit=2000m) had only 4.7% throttling
-- Good balance between isolation and flexibility
+- Phase 7.3: capping four burners at 200m cut their CPU use by 75% (149.11 s →
+  37.84 s) and improved the co-located victim's p50 by 79%
+- A cap that sits below the pod's own p99 is the pattern that produces tail
+  latency (Phase 7.1)
 
 ### Configuration
 
@@ -417,20 +426,23 @@ resources:
 ```
 Burst Factor = Limit / Request
 
-1× (no burst) → Pattern 2 (Guaranteed)
-2× (tight)    → Occasional bursts, some throttling possible
-4× (balanced) → Good for most multi-tenant (Phase 4: 4.7% throttling)
-8× (loose)    → Approaching request-only, minimal isolation
+1× (no burst)  → Pattern 2 (Guaranteed): quota equals reservation
+2× (tight)     → Occasional throttling on burst
+4× and above   → Approaching request-only: the cap rarely binds,
+                 so it mainly bounds a runaway process
 ```
+
+These ratios are policy, not measured optima. What the measurements do show is
+that the cap costs latency once it sits below the pod's own p99 usage.
 
 ### Sizing Guide
 
 ```bash
-# Request = P50 usage
-# Limit = P95 usage (or 2-4× request, whichever is smaller)
+# Request = measured P95 usage
+# Limit = well above the pod's own P99 usage
 
-request = P50_cpu
-limit = min(P95_cpu, request * 4)
+request = P95_cpu
+limit = P99_cpu * 2      # the cap is a runaway guard, not a steady-state cap
 ```
 
 ### Example: Multi-Tenant SaaS
@@ -635,7 +647,7 @@ resources:
 **Problem:**
 - Poor scheduling decisions (scheduler only sees 10m)
 - All pods fit on one node, then throttle heavily
-- Phase 4 showed: heavy throttling = 62.7% perf loss
+- Phase 4 showed: 139.05 → 19.22 ops/sec (-86.2%) for a CPU-bound task
 
 **Fix:**
 ```yaml
@@ -709,7 +721,7 @@ helm install prometheus prometheus-community/kube-prometheus-stack
 | Request-Only | ✅ | ❌ | Burstable | HTTP APIs, DBs | Low |
 | Guaranteed | ✅ | ✅ (same) | Guaranteed | Critical services | Low (if sized right) |
 | CPU Pinning | ✅ (int) | ✅ (same) | Guaranteed | Real-time, trading | Very Low |
-| Multi-Tenant | ✅ | ✅ (2-4×) | Burstable | SaaS platforms | Moderate |
+| Multi-Tenant | ✅ | ✅ (above own p99) | Burstable | SaaS platforms | Moderate |
 | Batch/Background | ❌ or small | ❌ | BestEffort | ML training, jobs | High (acceptable) |
 
 ---

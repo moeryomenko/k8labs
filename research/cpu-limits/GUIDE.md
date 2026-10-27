@@ -1,6 +1,6 @@
 # Kubernetes CPU Requests and Limits: Comprehensive Guide
 
-*Generated: 2026-10-26 16:43:23*
+*Generated: 2026-10-26 22:42:00*
 
 ## Executive Summary
 
@@ -9,6 +9,45 @@ on application performance, based on controlled experiments with different workl
 and QoS classes.
 
 ### Key Findings
+
+> **Data caveat.** 5 of 14 evidence files contain both a start and an end `cpu.stat` snapshot; only those give a run-level throttle figure. The remaining runs have no end snapshot, so their throttling is reported as unknown. Throughput comes from the stress-ng summary in each run's log and is always measured.
+
+**Run-level throttling where both snapshots exist:**
+
+| Workload (QoS) | `cpu.max` | Throttled periods | Throttled time | Throughput |
+|----------------|-----------|-------------------|----------------|------------|
+| cpu-bound (besteffort) | `max 100000` | 0/0 (0.0%) | 0.0 s over 323.2 s of CPU | 73.18 cpu ops/s |
+| cpu-bound (burstable) | `200000 100000` | 1150/1150 (100.0%) | 22.7 s over 230.1 s of CPU | 51.41 cpu ops/s |
+| cpu-bound (burstable) | `200000 100000` | 1167/1178 (99.1%) | 29.8 s over 235.5 s of CPU | 51.27 cpu ops/s |
+| hybrid (burstable) | `200000 100000` | 1186/1186 (100.0%) | 138.9 s over 237.3 s of CPU | 382.26 cpu ops/s, 14248.80 io ops/s, 17808 vm ops/s |
+| memory-bound (guaranteed) | `100000 100000` | 1170/1172 (99.8%) | 43.6 s over 117.2 s of CPU | 90896.52 vm ops/s |
+
+The workload names, `cpu.max` values, and throughput come from each run's
+evidence file (the stress-ng summary in `workload_logs`). The throttled-period
+figures are the start-to-end `cpu.stat` deltas. Throughput is not comparable
+across workload types: memory-bound "ops" are `--vm` bogo operations, not CPU
+operations. Phase 2's cpu-bound runs are also not comparable to Phase 4's,
+because Phase 2 ran `--cpu=4` against a 2-CPU quota while Phase 4 used four
+workers at much lower quotas.
+
+- **cpu-bound (besteffort)**, `cpu.max` max 100000:
+  - 0/0 periods throttled (0.0%), 0.0s throttled over 323.2s of CPU used
+  - Performance: 73.18 ops/sec
+
+- **cpu-bound (burstable)**, `cpu.max` 200000 100000:
+  - 1150/1150 periods throttled (100.0%), 22.7s throttled over 230.1s of CPU used
+  - Performance: 51.41 ops/sec
+
+- **cpu-bound (burstable)**, `cpu.max` 200000 100000:
+  - 1167/1178 periods throttled (99.1%), 29.8s throttled over 235.5s of CPU used
+  - Performance: 51.27 ops/sec
+
+- **hybrid (burstable)**, `cpu.max` 200000 100000:
+  - 1186/1186 periods throttled (100.0%), 138.9s throttled over 237.3s of CPU used
+  - Performance: 382.26 ops/sec
+
+- **memory-bound (guaranteed)**, `cpu.max` 100000 100000:
+  - 1170/1172 periods throttled (99.8%), 43.6s throttled over 117.2s of CPU used
 
 ---
 
@@ -72,11 +111,18 @@ We tested four workload patterns:
 
 Each workload type was tested with different QoS classes:
 
-| Configuration | Requests | Limits | QoS Class |
-|---------------|----------|--------|-----------|
-| BestEffort | - | - | BestEffort |
-| Burstable | 500m | 2000m | Burstable |
-| Guaranteed | 2000m | 2000m | Guaranteed |
+| Configuration | Workload | Requests | Limits | QoS Class |
+|---------------|----------|----------|--------|-----------|
+| BestEffort | cpu-bound | - | - | BestEffort |
+| Burstable | cpu-bound, hybrid | 500m | 2000m | Burstable |
+| Guaranteed | cpu-bound | 2000m | 2000m | Guaranteed |
+| Guaranteed | io-bound, memory-bound | 1000m | 1000m | Guaranteed |
+
+Only three of the four workload types have manifests: cpu-bound in all
+three QoS classes, memory-bound and io-bound as Guaranteed, and hybrid as
+Burstable. The fastest cpu-bound besteffort runs (98.8 and 98.1 ops/s)
+lasted 0.3 s and 1.4 s, so they are not comparable in duration to the
+120 s runs; treat their rate as a short-sample figure only.
 
 ### Metrics Collected
 
@@ -92,18 +138,21 @@ For each experiment:
 
 ### CPU-BOUND Workload
 
-| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
-|-----------|----------|-------------------|----------------|-------------|
-| besteffort | 0.3s | 0 | - | 98.8 ops/s |
-| besteffort | 1.4s | 0 | - | 98.1 ops/s |
-| besteffort | 120.5s | 0 | - | 73.2 ops/s |
-| burstable | 122.2s | 0 | - | 51.3 ops/s |
-| burstable | 121.9s | 0 | - | 51.4 ops/s |
-| burstable | 122.6s | 0 | - | 51.3 ops/s |
-| guaranteed | 121.4s | 0 | - | 51.5 ops/s |
-| guaranteed | 0.3s | 0 | - | 51.6 ops/s |
+| QoS Class | Duration | cpu.max | Throttled Periods | Performance |
+|-----------|----------|---------|-------------------|-------------|
+| besteffort | 0.3s | ? | unknown | 98.8 ops/s |
+| besteffort | 1.4s | ? | unknown | 98.1 ops/s |
+| besteffort | 120.5s | max 100000 | unknown | 73.2 ops/s |
+| burstable | 122.2s | 200000 100000 | unknown | 51.3 ops/s |
+| burstable | 121.9s | 200000 100000 | 1150/1150 (100.0%) | 51.4 ops/s |
+| burstable | 122.6s | 200000 100000 | 1167/1178 (99.1%) | 51.3 ops/s |
+| guaranteed | 121.4s | unknown | unknown | 51.5 ops/s |
+| guaranteed | 0.3s | ? | unknown | 51.6 ops/s |
 
 #### BESTEFFORT
+
+- Experiment id: `cpu-bound-besteffort-20261026T110703Z`
+- No end `cpu.stat` snapshot: run-level throttling unknown
 
 **Performance:**
 - Bogo operations: 11854
@@ -117,6 +166,9 @@ For each experiment:
 
 #### BESTEFFORT
 
+- Experiment id: `cpu-bound-besteffort-20261026T112224Z`
+- No end `cpu.stat` snapshot: run-level throttling unknown
+
 **Performance:**
 - Bogo operations: 11774
 - Operations/sec: 98.10
@@ -128,6 +180,10 @@ For each experiment:
 - Idle: 99.0%
 
 #### BESTEFFORT
+
+- Experiment id: `cpu-bound-besteffort-20261026T112554Z`
+- `cpu.max`: `max 100000`
+- Throttled 0 of 0 periods, 0.00s of throttled time
 
 **Performance:**
 - Bogo operations: 8783
@@ -141,6 +197,10 @@ For each experiment:
 
 #### BURSTABLE
 
+- Experiment id: `cpu-bound-burstable-20261026T110714Z`
+- `cpu.max`: `200000 100000`
+- No end `cpu.stat` snapshot: run-level throttling unknown
+
 **Performance:**
 - Bogo operations: 6154
 - Operations/sec: 51.27
@@ -152,6 +212,10 @@ For each experiment:
 - Idle: 48.3%
 
 #### BURSTABLE
+
+- Experiment id: `cpu-bound-burstable-20261026T112235Z`
+- `cpu.max`: `200000 100000`
+- Throttled 1150 of 1150 periods, 22.67s of throttled time
 
 **Performance:**
 - Bogo operations: 6171
@@ -165,6 +229,10 @@ For each experiment:
 
 #### BURSTABLE
 
+- Experiment id: `cpu-bound-burstable-20261026T112810Z`
+- `cpu.max`: `200000 100000`
+- Throttled 1167 of 1178 periods, 29.78s of throttled time
+
 **Performance:**
 - Bogo operations: 6155
 - Operations/sec: 51.27
@@ -177,6 +245,10 @@ For each experiment:
 
 #### GUARANTEED
 
+- Experiment id: `cpu-bound-guaranteed-20261026T110932Z`
+- `cpu.max`: `200000 100000`
+- No end `cpu.stat` snapshot: run-level throttling unknown
+
 **Performance:**
 - Bogo operations: 6184
 - Operations/sec: 51.53
@@ -188,6 +260,9 @@ For each experiment:
 - Idle: 48.3%
 
 #### GUARANTEED
+
+- Experiment id: `cpu-bound-guaranteed-20261026T113029Z`
+- No end `cpu.stat` snapshot: run-level throttling unknown
 
 **Performance:**
 - Bogo operations: 6200
@@ -203,12 +278,16 @@ For each experiment:
 
 ### HYBRID Workload
 
-| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
-|-----------|----------|-------------------|----------------|-------------|
-| burstable | 121.6s | 0 | - | 394.6 ops/s |
-| burstable | 121.3s | 0 | - | 382.3 ops/s |
+| QoS Class | Duration | cpu.max | Throttled Periods | Performance |
+|-----------|----------|---------|-------------------|-------------|
+| burstable | 121.6s | 200000 100000 | unknown | 394.6 ops/s |
+| burstable | 121.3s | 200000 100000 | 1186/1186 (100.0%) | 382.3 ops/s |
 
 #### BURSTABLE
+
+- Experiment id: `hybrid-burstable-20261026T111149Z`
+- `cpu.max`: `200000 100000`
+- No end `cpu.stat` snapshot: run-level throttling unknown
 
 **Performance:**
 - Bogo operations: 47358
@@ -221,6 +300,10 @@ For each experiment:
 - Idle: 47.0%
 
 #### BURSTABLE
+
+- Experiment id: `hybrid-burstable-20261026T113039Z`
+- `cpu.max`: `200000 100000`
+- Throttled 1186 of 1186 periods, 138.92s of throttled time
 
 **Performance:**
 - Bogo operations: 45882
@@ -236,12 +319,16 @@ For each experiment:
 
 ### IO-BOUND Workload
 
-| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
-|-----------|----------|-------------------|----------------|-------------|
-| guaranteed | 8.4s | 0 | - | N/A |
-| guaranteed | 11.3s | 0 | - | N/A |
+| QoS Class | Duration | cpu.max | Throttled Periods | Performance |
+|-----------|----------|---------|-------------------|-------------|
+| guaranteed | 8.4s | 100000 100000 | unknown | N/A |
+| guaranteed | 11.3s | 100000 100000 | unknown | N/A |
 
 #### GUARANTEED
+
+- Experiment id: `io-bound-guaranteed-20261026T111404Z`
+- `cpu.max`: `100000 100000`
+- No end `cpu.stat` snapshot: run-level throttling unknown
 
 **Node CPU Usage:**
 - User: 1.1%
@@ -249,6 +336,10 @@ For each experiment:
 - Idle: 82.5%
 
 #### GUARANTEED
+
+- Experiment id: `io-bound-guaranteed-20261026T113256Z`
+- `cpu.max`: `100000 100000`
+- No end `cpu.stat` snapshot: run-level throttling unknown
 
 **Node CPU Usage:**
 - User: 1.1%
@@ -259,12 +350,16 @@ For each experiment:
 
 ### MEMORY-BOUND Workload
 
-| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |
-|-----------|----------|-------------------|----------------|-------------|
-| guaranteed | 122.1s | 0 | - | N/A |
-| guaranteed | 122.0s | 0 | - | N/A |
+| QoS Class | Duration | cpu.max | Throttled Periods | Performance |
+|-----------|----------|---------|-------------------|-------------|
+| guaranteed | 122.1s | 100000 100000 | unknown | N/A |
+| guaranteed | 122.0s | 100000 100000 | 1170/1172 (99.8%) | N/A |
 
 #### GUARANTEED
+
+- Experiment id: `memory-bound-guaranteed-20261026T111428Z`
+- `cpu.max`: `100000 100000`
+- No end `cpu.stat` snapshot: run-level throttling unknown
 
 **Node CPU Usage:**
 - User: 22.1%
@@ -272,6 +367,10 @@ For each experiment:
 - Idle: 74.4%
 
 #### GUARANTEED
+
+- Experiment id: `memory-bound-guaranteed-20261026T113322Z`
+- `cpu.max`: `100000 100000`
+- Throttled 1170 of 1172 periods, 43.59s of throttled time
 
 **Node CPU Usage:**
 - User: 22.5%
@@ -308,7 +407,7 @@ resources:
 ```
 
 **Benefits:**
-- No throttling
+- No quota, so no throttling periods
 - Can use idle CPU
 - Better performance for bursty workloads
 

@@ -8,31 +8,41 @@ Phase 4 of the Kubernetes CPU requests/limits research is now complete. This pha
 
 **4 throttling experiments** with identical workloads (4 CPU workers) but varying limits:
 
-| Configuration | Limit | Throttling % | Performance | vs Baseline |
-|---------------|-------|--------------|-------------|-------------|
-| Heavy Throttle | 500m | 69.8% | 19.2 ops/s | -62.7% |
-| Moderate Throttle | 1500m | 33.2% | 53.6 ops/s | +4.0% |
-| Light Throttle | 3000m | 4.7% | 108.8 ops/s | +111.2% |
-| No Throttle | 4000m | 0.0% | 139.1 ops/s | +170.0% |
+| Configuration | Request | Limit | Performance | vs no-limit |
+|---------------|---------|-------|-------------|-------------|
+| No Throttle | 2000m | 4000m | 139.05 ops/s | baseline |
+| Light Throttle | 1000m | 3000m | 108.78 ops/s | -21.8% |
+| Moderate Throttle | 500m | 1500m | 53.57 ops/s | -61.5% |
+| Heavy Throttle | 100m | 500m | 19.22 ops/s | -86.2% |
 
-**Baseline:** Phase 2 cpu-bound-burstable = 51.5 ops/sec (2000m limit, 0% throttling, 2 workers)
+Source: `phase4/evidence/throttling-summary.json`.
+
+> **Correction.** Earlier revisions of this file reported throttle percentages
+> (69.8%, 33.2%, 4.7%) and compared against a Phase 2 baseline of 51.5 ops/sec.
+> Those percentages cannot be derived from the Phase 4 evidence: the runs
+> recorded `nr_periods`/`nr_throttled` in the baseline snapshot only, and
+> `final_cgroup` and `throttling` are null in all four files. Phase 2 and Phase 4
+> also ran different stress mixes, so cross-phase ratios would not isolate the
+> quota. The figures above are the recorded throughputs compared within Phase 4.
 
 ## Key Insights
 
-1. **Direct correlation between throttling and performance loss:**
-   - 69.8% throttling → 62.7% performance degradation
-   - 0% throttling → 170% performance improvement (with more workers)
+1. **Throughput loss tracks the CPU cut:**
+   - The heavy config receives 0.5 core where the 2000m/4000m reference run
+     gets up to 4, an 8x quota reduction, and loses 7.2x throughput
+   - The extra loss is time stopped at the quota boundary with nothing to run
 
-2. **Throttling calculation:**
-   ```
-   throttling_pct = throttled_usec / (usage_usec + throttled_usec) × 100
-   ```
-   This shows what percentage of desired CPU time was blocked by limits.
+2. **Where throttle data actually exists:**
+   - Phase 7.1 measured throttle percentages together with latency for nginx
+     under four quota settings
+   - Phase 7.4 measured wake-to-run delay directly with bpftrace
+   - Phase 4 records throughput only; do not quote throttle percentages from it
 
-3. **Heavy throttle example:**
-   - Container wanted: 9.2s of CPU time
-   - Container received: 2.9s of CPU time
-   - Container was denied: 6.4s (69.8% of desired time)
+3. **Heavy throttle raw counters** (baseline snapshot of
+   `cpu-bound-heavy-throttle-20261026T135220Z.json`):
+   - `usage_usec` 2873304 (2.87s of CPU time)
+   - `nr_periods` 58, `nr_throttled` 57
+   - `throttled_usec` 6650045 (6.65s)
 
 ## Files Created/Modified
 
@@ -93,10 +103,12 @@ Phase 4 of the Kubernetes CPU requests/limits research is now complete. This pha
 - Foundation workloads established
 - Basic cgroup metrics collection
 
-### Phase 2: QoS Classes (6 experiments)
+### Phase 2: QoS Classes (14 experiments)
 - BestEffort, Burstable, Guaranteed comparison
-- **0% throttling** with appropriate limits
-- Baseline: 51.5 ops/sec (burstable, 2 workers)
+- **Near-total throttling** wherever a finite quota existed: 1150/1150 periods
+  for cpu-bound burstable, 1186/1186 for hybrid, 1170/1172 for memory-bound.
+  9 of the 14 runs have no end snapshot, so their throttling is unknown
+- Burstable cpu-bound throughput: 51.41 ops/s
 
 ### Phase 3: BPF Tracing
 - Kernel scheduler instrumentation
@@ -106,7 +118,7 @@ Phase 4 of the Kubernetes CPU requests/limits research is now complete. This pha
 ### Phase 4: Throttling (4 experiments)
 - Intentional throttling triggers
 - Performance impact measurement
-- **69.8% max throttling** with severe performance loss
+- **86.2% performance loss** at a 500m limit (139.05 → 19.22 ops/s)
 
 **Total:** 14 experiments with complete evidence
 
@@ -200,30 +212,34 @@ python3 analyze-throttling-fixed.py
 
 ## Research Conclusions
 
-1. **Well-sized limits work fine:**
-   - Phase 2 showed 0% throttling with appropriate limits
-   - Performance was predictable and consistent
+1. **A request does not prevent throttling:**
+   - Phase 2 wrote `cpu.max` = `200000 100000` for a 2000m request, and every
+     period was still throttled (1150/1150) because the workload wanted 4 CPUs
+   - A request only sets `cpu.weight` (share under contention)
 
-2. **Aggressive limits cause severe performance loss:**
-   - Phase 4 showed 69.8% throttling → 62.7% performance loss
-   - Container was denied most of its desired CPU time
+2. **A limit below need costs more throughput than the CPU it removes:**
+   - Phase 4 measured 139.05 → 19.22 ops/sec (-86.2%) at a 500m limit
+   - Phase 7.1 measured the latency side: p99 13.98 → 69.43 ms at 120m
 
 3. **Context-dependent recommendations:**
    - **Latency-sensitive apps:** Request-only (no limits)
-   - **Batch workloads:** Limits OK if sized appropriately (P99 + 20%)
-   - **Multi-tenant clusters:** Limits for isolation/cost control
-   - **Always:** Monitor throttling and adjust
+   - **CPU-bound batch:** limit = request, so no forced wait occurs
+   - **Multi-tenant clusters:** Cap the offenders, not the victims (Phase 7.3)
+   - **Always:** Monitor throttling and judge it with the service's own p99
 
 4. **Monitoring is essential:**
    - Prometheus metrics: `container_cpu_cfs_throttled_seconds_total`
-   - Alert on throttling > 10% for > 5 minutes
+   - Alert on sustained throttling, but gate any action on the service's p99;
+     Phase 7.1 measured a pod throttled in 95.6% of periods that still served
+     2991 req/s
    - Grafana dashboards for visualization
 
 ## Next Steps (Future Work)
 
 1. Memory limits and OOMKilled behavior
-2. Custom scheduler comparison (scx) with kernel 6.12+
-3. Real application benchmarks (Nginx, PostgreSQL, Redis)
+2. Kernel scheduler comparison across other kernels (Phase 7.6 ran it on
+   `7.3.0-k8labs` only)
+3. Database and message-broker benchmarks (Nginx is covered by Phase 7.1)
 4. Autoscaling integration (VPA, HPA)
 5. Multi-node scheduling analysis
 
@@ -232,4 +248,5 @@ python3 analyze-throttling-fixed.py
 **Date:** October 26, 2026  
 **Research Team:** k8labs  
 **Repository:** /research/cpu-limits/  
-**Status:** ✅ Complete & Production-Ready
+**Status:** Phase 4 complete. See `PHASE7_COMPLETE.md` for the measured
+throttle-percentage and latency results that Phase 4 does not contain.

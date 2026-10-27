@@ -161,9 +161,15 @@ sudo scx_rusty --domains "0-3,4-7"
 sudo scx_lavd
 ```
 
-**Expected improvement from our research:**
-- Heavy throttle (69.8%, Phase 4) might see lower P99 latency
-- Benefit unclear for already-low throttling scenarios
+**Measured in Phase 7.6 on `7.3.0-k8labs`, and the result is a warning rather
+than a benefit.** With `--performance` the scheduler attached cleanly, but it
+did not enforce `cpu.max` at all: a half-core quota consumed 12.22 CPU-seconds
+in an eight-second window where CFS consumed 4.00, and `nr_throttled` stayed at
+zero in both the enforcing and the non-enforcing arm. `--enable-cpu-bw`, which
+the scheduler calls highly experimental, brought the figure back to 4.01
+CPU-seconds. Cgroup weights were not honoured either: a four-thread group with
+weight 100 received 3.4-4.5 times the CPU of a single thread with weight 400.
+Wakeup p99 rose from 0.75-1.48 ms under CFS to 2.03-3.89 ms.
 
 ---
 
@@ -292,17 +298,18 @@ sudo systemctl start scx-lavd
 
 **Hypothesis:** scx_lavd reduces latency under heavy throttling
 
-**Method:**
-1. Run Phase 4 heavy-throttle workload (69.8% throttling)
-2. Test under CFS and scx_lavd
-3. Compare bogo ops/sec and P99 latency (if latency test available)
+**Status: measured in Phase 7.6, not with this workload.** The 7.6 matrix used
+synchronous CPU-burn groups and a wakeup probe rather than the nginx workload,
+and its result is in the section above: `cpu.max` was not enforced without
+`--enable-cpu-bw`, and p99 wakeup latency was higher than CFS. The estimate that
+this section previously carried was removed because it was never measured; the
+CFS baseline for comparison is Phase 4's heavy-throttle configuration, 19.22
+ops/sec at a 500m limit.
 
-**Expected Results:**
-
-| Scheduler | Throttling % | Performance | P99 Latency |
-|-----------|--------------|-------------|-------------|
-| CFS | 69.8% | 19.2 ops/s | ~500ms (est) |
-| scx_lavd | 69.8% | 20-22 ops/s | ~300ms (est) |
+**Method, if you want to run it:**
+1. Run the Phase 7.1 nginx workload (a fixed offered rate, p50/p99 recorded)
+2. Repeat under CFS and under each sched_ext scheduler
+3. Compare p99 and throughput, and record `cpu.stat` for both runs
 
 **Why it might help:**
 - scx_lavd tracks latency metrics

@@ -1,6 +1,9 @@
 # Phase 4: Extended CPU Limits Research
 
-**Status:** 🚧 In Progress  
+**Status:** Complete - 4 throttling runs recorded in `phase4/evidence/`. BPF
+tracing was delivered later as Phase 7.4 and the scheduler comparison as Phase
+7.6, both run.
+
 **Focus:** Throttling analysis, Prometheus monitoring, BPF tracing, scheduler comparison
 
 ---
@@ -22,19 +25,20 @@ Extend Phase 1-2 research to include:
 
 **Goal:** Trigger CPU throttling to demonstrate performance impact
 
-**Configurations:**
-| Name | Request | Limit | Expected Throttling |
+**Configurations (all four measured):**
+| Name | Request | Limit | Measured Throughput |
 |------|---------|-------|---------------------|
-| cpu-bound-heavy-throttle | 100m | 500m | Heavy (>50%) |
-| cpu-bound-moderate-throttle | 500m | 1500m | Moderate (20-40%) |
-| cpu-bound-light-throttle | 1000m | 3000m | Light (5-20%) |
-| cpu-bound-no-throttle | 2000m | 4000m | None (<5%) |
+| cpu-bound-heavy-throttle | 100m | 500m | 19.22 ops/s |
+| cpu-bound-moderate-throttle | 500m | 1500m | 53.57 ops/s |
+| cpu-bound-light-throttle | 1000m | 3000m | 108.78 ops/s |
+| cpu-bound-no-throttle | 2000m | 4000m | 139.05 ops/s |
 
 **What's collected:**
 - `nr_throttled` - count of throttling events
 - `throttled_usec` - total time throttled
-- `throttling_percentage` - (throttled_usec / usage_usec) × 100
-- Performance degradation vs Phase 2 baseline
+- Throughput from the stress-ng summary
+- The evidence files have no end-of-run `cpu.stat` snapshot
+  (`final_cgroup: null`), so no throttle percentage is reported for these runs
 
 **Run experiments:**
 ```bash
@@ -202,31 +206,39 @@ python3 analyze-scheduler-comparison.py
 ### ✅ Completed
 - Phase 4 directory structure
 - Throttling experiment scripts
-- Prometheus deployment scripts
-- Grafana dashboards
-- Alert rules
+- 4 throttling runs, results in `phase4/evidence/`
+- Prometheus deployment scripts, Grafana dashboards, alert rules (configs only;
+  no Prometheus was deployed, so there are no captured metric snapshots)
 - Analysis tools
 
-### 🚧 In Progress
-- Throttling experiments running (~10 minutes)
-- Evidence collection
+### Superseded
+- BPF tracing: delivered as Phase 7.4 with bpftrace inside an unprivileged
+  reader pod, so node SSH was not needed
+  (`evidence/phase7/live-bpf/scheduler-trace-20261026T192056Z.json`)
 
-### ⏸️ Ready to Deploy
-- Prometheus stack (requires Helm)
-- Grafana dashboards
+### Run Later
+- Scheduler comparison: Phase 7.6, on `7.3.0-k8labs`
+  (`evidence/phase7/kernel-comparison/`)
 
-### 🔲 Blocked
-- BPF tracing (requires SSH to nodes)
-- Scheduler comparison (requires kernel 6.12+ with CONFIG_SCHED_CLASS_EXT)
+### Corrections in this phase
+The runs captured `nr_periods`/`nr_throttled` in a baseline snapshot only, with
+`final_cgroup` and `throttling` null, so Phase 4 reports throughput, not throttle
+percentages. See `THROTTLING_ANALYSIS.md` for the details and for the measured
+throttle percentages from Phase 7.1 and 7.4.
+
+### Deliverable status
+`THROTTLING_ANALYSIS.md` reports throughput, 139.05 to 19.22 ops/sec. That is
+what the evidence supports.
 
 ---
 
 ## Expected Deliverables
 
 ### 1. THROTTLING_ANALYSIS.md
-Comprehensive report showing:
-- Throttling percentage vs CPU limit
-- Performance degradation curve
+Measured report showing:
+- Throughput per request/limit configuration (no throttle percentage - the
+  evidence does not contain a post-run cgroup snapshot)
+- Why throughput loss can exceed the CPU cut
 - Recommendations for sizing limits
 
 ### 2. Prometheus Dashboards
@@ -256,16 +268,17 @@ New sections:
 
 ## How Phase 4 Extends Phase 2
 
-### Phase 2: Baseline (No Throttling)
+### Phase 2: Baseline (measured)
 - CPU-bound with 2000m request, 2000m limit
-- Performance: 51.5 ops/sec
-- Throttling: 0% (limits matched workload)
+- Performance: 51.5 ops/sec (`dispatching hogs: 4 cpu`)
+- Throttling: 100.0% of periods in the one cpu-bound burstable run that has
+  both snapshots (1150/1150, 29.8 s of throttled time)
 
-### Phase 4a: Intentional Throttling
-- CPU-bound with 100m-4000m limits
-- Performance: varies by limit
-- Throttling: 0-80% depending on configuration
-- **Demonstrates:** Impact of undersized limits
+### Phase 4a: Deliberate Shrinking Quota (measured)
+- CPU-bound with 100m-4000m limits, 4 workers
+- Performance: 139.05 / 108.78 / 53.57 / 19.22 ops/s as the quota shrinks
+- Throttling: not captured; the evidence has no end `cpu.stat` snapshot
+- **Demonstrates:** throughput loss from undersized limits (-86.2% at 100m/500m)
 
 ### Phase 4b: Real-time Monitoring
 - Prometheus scrapes every pod
@@ -274,16 +287,15 @@ New sections:
 - **Demonstrates:** Production monitoring patterns
 
 ### Phase 4c: Low-level Scheduler View
-- BPF traces show kernel scheduler behavior
-- Correlate throttling with scheduler latency
-- Identify contention patterns
-- **Demonstrates:** Root cause of performance degradation
+- Delivered as Phase 7.4: bpftrace in an unprivileged reader pod
+- Wake-to-run delay against a shrinking CPU limit
+- **Demonstrates:** the tail grows from 5.5 ms to 71.7 ms
 
 ### Phase 4d: Scheduler Alternatives
-- Compare CFS with scx schedulers
-- Measure impact on throttling
-- Identify best scheduler for each workload type
-- **Demonstrates:** When custom schedulers help
+- ✅ RUN AS PHASE 7.6 on `7.3.0-k8labs`
+- CFS against `scx_lavd --performance`: the quota was not enforced under the
+  custom scheduler (12.22 CPU-s against a 4.0 CPU-s quota) until
+  `--enable-cpu-bw`; see `PHASE7_COMPLETE.md` section 7.6
 
 ---
 
@@ -357,8 +369,9 @@ python3 phase3/analyze-bpf.py
 - Check pod events: `kubectl describe pod <pod-name>`
 
 ### No throttling observed
-- Limits may be too generous for workload
-- Try more aggressive limits (e.g., 100m for 4-worker stress-ng)
+- The manifest probably has no CPU limit: check `cpu.max` in the container's
+  cgroup; `max 100000` means unbounded, so `nr_throttled` stays 0
+- Try a tighter limit (e.g., 100m for 4-worker stress-ng)
 - Verify cgroup v2: `stat -f -c %T /sys/fs/cgroup`
 
 ### Prometheus not scraping pods
@@ -413,7 +426,7 @@ phase4/
 
 ### Phase Dependencies
 - **Phase 1:** Workload manifests and QoS patterns
-- **Phase 2:** Baseline experiments (no throttling)
+- **Phase 2:** QoS comparison runs (near-total throttling wherever a quota existed)
 - **Phase 3:** BPF tracer infrastructure
 - **Phase 4:** Extensions (this phase)
 

@@ -70,6 +70,16 @@ def calculate_cpu_delta(baseline, final):
     }
 
 
+def parse_cpu_stat(text):
+    """Parse a cgroup v2 cpu.stat blob into a dict of ints."""
+    stat = {}
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            stat[parts[0]] = int(parts[1])
+    return stat
+
+
 def analyze_experiment(exp):
     """Analyze a single experiment."""
     stress_ng = parse_stress_ng_output(exp.get("workload_logs"))
@@ -80,12 +90,28 @@ def analyze_experiment(exp):
     baseline_cgroup = exp.get("baseline_cgroup") or {}
     final_cgroup = exp.get("final_cgroup") or {}
 
-    throttled_periods = final_cgroup.get("nr_throttled", 0) - baseline_cgroup.get(
-        "nr_throttled", 0
-    )
-    throttled_time_us = final_cgroup.get("throttled_usec", 0) - baseline_cgroup.get(
-        "throttled_usec", 0
-    )
+    # Only a baseline->final delta describes the run. Several Phase 2 runs have
+    # no final_cgroup (the collector never captured a post-run snapshot); for
+    # those the run's throttling is unknown and must not be reported as zero.
+    baseline_stat = parse_cpu_stat(baseline_cgroup.get("cpu_stat"))
+    final_stat = parse_cpu_stat(final_cgroup.get("cpu_stat"))
+
+    if final_stat:
+        throttled_periods = final_stat.get("nr_throttled", 0) - baseline_stat.get(
+            "nr_throttled", 0
+        )
+        throttled_time_us = final_stat.get("throttled_usec", 0) - baseline_stat.get(
+            "throttled_usec", 0
+        )
+        periods = final_stat.get("nr_periods", 0) - baseline_stat.get("nr_periods", 0)
+        usage_usec = final_stat.get("usage_usec", 0) - baseline_stat.get(
+            "usage_usec", 0
+        )
+    else:
+        throttled_periods = None
+        throttled_time_us = None
+        periods = None
+        usage_usec = None
 
     return {
         "experiment_id": exp["experiment_id"],
@@ -96,7 +122,14 @@ def analyze_experiment(exp):
         "cpu_delta": cpu_delta,
         "throttled_periods": throttled_periods,
         "throttled_time_us": throttled_time_us,
-        "throttled_time_sec": throttled_time_us / 1_000_000 if throttled_time_us else 0,
+        "throttled_time_sec": (
+            throttled_time_us / 1_000_000 if throttled_time_us is not None else None
+        ),
+        "periods": periods,
+        "usage_sec": usage_usec / 1_000_000 if usage_usec is not None else None,
+        "has_final_snapshot": bool(final_stat),
+        "cpu_max": baseline_cgroup.get("cpu_max"),
+        "cpu_weight": baseline_cgroup.get("cpu_weight"),
         "exit_code": exp.get("workload_exit_code"),
     }
 
@@ -124,21 +157,29 @@ def generate_markdown(evidence):
     md.append("### Key Findings")
     md.append("")
 
-    # Find throttled workloads
-    throttled = [a for a in analyzed if a["throttled_periods"] > 0]
-    if throttled:
-        md.append("**CPU Throttling Observed:**")
+    # Report only runs with both a baseline and a final cpu.stat as run-level
+    # throttle measurements. The rest are marked unknown, not zero.
+    measured = [a for a in analyzed if a["has_final_snapshot"]]
+    md.append(
+        f"> **Data caveat.** {len(measured)} of {len(analyzed)} evidence files "
+        "contain both a start and an end `cpu.stat` snapshot; only those give a "
+        "run-level throttle figure. The remaining runs have no end snapshot, so "
+        "their throttling is reported as unknown. Throughput comes from the "
+        "stress-ng summary in each run's log and is always measured."
+    )
+    md.append("")
+
+    if measured:
+        md.append("**Run-level throttling where both snapshots exist:**")
         md.append("")
-        for a in throttled:
-            pct = (
-                (a["throttled_time_sec"] / a["duration"]) * 100
-                if a["duration"] > 0
-                else 0
-            )
-            md.append(f"- **{a['workload_type']} ({a['qos_class']})**:")
-            md.append(f"  - Throttled {a['throttled_periods']} times")
+        for a in measured:
+            pct = (a["throttled_periods"] / a["periods"]) * 100 if a["periods"] else 0
             md.append(
-                f"  - Total throttled time: {a['throttled_time_sec']:.1f}s ({pct:.1f}% of runtime)"
+                f"- **{a['workload_type']} ({a['qos_class']})**, `cpu.max` {a['cpu_max']}:"
+            )
+            md.append(
+                f"  - {a['throttled_periods']}/{a['periods']} periods throttled ({pct:.1f}%), "
+                f"{a['throttled_time_sec']:.1f}s throttled over {a['usage_sec']:.1f}s of CPU used"
             )
             if a["stress_ng"]:
                 md.append(
@@ -220,13 +261,24 @@ def generate_markdown(evidence):
     md.append("")
     md.append("### QoS Configurations")
     md.append("")
-    md.append("Each workload type was tested with different QoS classes:")
+    md.append("Each workload type was tested with different QoS classes. Requests")
+    md.append("and limits differ per workload; these are the values from the manifests")
+    md.append("in `phase2/workloads/`:")
     md.append("")
-    md.append("| Configuration | Requests | Limits | QoS Class |")
-    md.append("|---------------|----------|--------|-----------|")
-    md.append("| BestEffort | - | - | BestEffort |")
-    md.append("| Burstable | 500m | 2000m | Burstable |")
-    md.append("| Guaranteed | 2000m | 2000m | Guaranteed |")
+    md.append("| Configuration | Workload | Requests | Limits | QoS Class |")
+    md.append("|---------------|----------|----------|--------|-----------|")
+    md.append("| BestEffort | cpu-bound | - | - | BestEffort |")
+    md.append("| Burstable | cpu-bound, hybrid | 500m | 2000m | Burstable |")
+    md.append("| Guaranteed | cpu-bound | 2000m | 2000m | Guaranteed |")
+    md.append("| Guaranteed | io-bound, memory-bound | 1000m | 1000m | Guaranteed |")
+    md.append("")
+    md.append("Only three of the four workload types have manifests: cpu-bound in all")
+    md.append(
+        "three QoS classes, memory-bound and io-bound as Guaranteed, and hybrid as"
+    )
+    md.append("Burstable. The fastest cpu-bound besteffort runs (98.8 and 98.1 ops/s)")
+    md.append("lasted 0.3 s and 1.4 s, so they are not comparable in duration to the")
+    md.append("120 s runs; treat their rate as a short-sample figure only.")
     md.append("")
     md.append("### Metrics Collected")
     md.append("")
@@ -257,28 +309,30 @@ def generate_markdown(evidence):
 
         # Summary table
         md.append(
-            "| QoS Class | Duration | Throttled Periods | Throttled Time | Performance |"
+            "| QoS Class | Duration | cpu.max | Throttled Periods | Performance |"
         )
         md.append(
-            "|-----------|----------|-------------------|----------------|-------------|"
+            "|-----------|----------|---------|-------------------|-------------|"
         )
 
         for exp in experiments:
             qos = exp["qos_class"]
             dur = f"{exp['duration']:.1f}s"
-            throttled_periods = exp["throttled_periods"]
-            throttled_time = (
-                f"{exp['throttled_time_sec']:.1f}s" if throttled_periods > 0 else "-"
-            )
+            cpu_max = exp["cpu_max"] or "?"
+            if exp["has_final_snapshot"] and exp["periods"]:
+                throttled_periods = (
+                    f"{exp['throttled_periods']}/{exp['periods']} "
+                    f"({100 * exp['throttled_periods'] / exp['periods']:.1f}%)"
+                )
+            else:
+                throttled_periods = "unknown"
 
             if exp["stress_ng"]:
                 perf = f"{exp['stress_ng']['bogo_ops_per_sec_real']:.1f} ops/s"
             else:
                 perf = "N/A"
 
-            md.append(
-                f"| {qos} | {dur} | {throttled_periods} | {throttled_time} | {perf} |"
-            )
+            md.append(f"| {qos} | {dur} | {cpu_max} | {throttled_periods} | {perf} |")
 
         md.append("")
 
@@ -287,18 +341,17 @@ def generate_markdown(evidence):
             md.append(f"#### {exp['qos_class'].upper()}")
             md.append("")
 
-            if exp["throttled_periods"] > 0:
-                pct = (
-                    (exp["throttled_time_sec"] / exp["duration"]) * 100
-                    if exp["duration"] > 0
-                    else 0
-                )
-                md.append(f"**⚠️ Throttling Detected:**")
-                md.append(f"- Throttled {exp['throttled_periods']} times")
+            md.append(f"- Experiment id: `{exp['experiment_id']}`")
+            if exp["cpu_max"]:
+                md.append(f"- `cpu.max`: `{exp['cpu_max']}`")
+            if exp["has_final_snapshot"]:
                 md.append(
-                    f"- Total throttled time: {exp['throttled_time_sec']:.1f}s ({pct:.1f}% of runtime)"
+                    f"- Throttled {exp['throttled_periods']} of {exp['periods']} periods, "
+                    f"{exp['throttled_time_sec']:.2f}s of throttled time"
                 )
-                md.append("")
+            else:
+                md.append("- No end `cpu.stat` snapshot: run-level throttling unknown")
+            md.append("")
 
             if exp["stress_ng"]:
                 sn = exp["stress_ng"]

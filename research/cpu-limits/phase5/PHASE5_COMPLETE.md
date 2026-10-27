@@ -59,24 +59,36 @@ Phase 5 completes the Kubernetes CPU research by adding:
 
 ### From Task 5.2 (Latency Testing)
 
-**Hypothesis:** CPU throttling increases task latency proportionally
+The Phase 5 attempt (`evidence/latency-impact-20261026T163603Z.json`) ran two
+configurations and recorded no throttling, so it produced no usable latency
+table. The hypothesis that throttling raises latency proportionally turned out
+to be wrong in an important way, and Phase 7.1 measured the real shape:
 
-| Configuration | Limit | Throttling | Duration Impact |
-|---------------|-------|------------|-----------------|
-| No throttle | 4000m | 0% | Baseline |
-| Light throttle | 3000m | ~5% | +10-20% |
-| Heavy throttle | 500m | ~70% | +100-200% |
+| Limit | Throughput | p50 | p99 | Throttled periods |
+|-------|-----------|-----|-----|-------------------|
+| none | 7216 req/s | 2.04 ms | 13.98 ms | 0% |
+| 120m | 3481 req/s | 2.13 ms | 69.43 ms | 99.7% |
+| 100m | 2991 req/s | 2.20 ms | 67.76 ms | 95.6% |
+| 70m | 2071 req/s | 2.16 ms | 98.87 ms | 75.1% |
 
-**Key Insight:** Heavy throttling (69.8%) not only reduces throughput (Phase 4: -62.7%) but also dramatically increases latency, making operations feel "slow" to users.
+**Key insight:** the effect is not proportional. The median is essentially
+unchanged at every limit while p99 grows 5-7x, because only the requests that
+land just after the quota is spent wait out the rest of a 100 ms period.
 
 ---
 
 ### From Task 5.1 (BPF Traces)
 
-**Expected correlation:**
-- Throttling events correlate with `sched:sched_wait` events
-- Context switch rate increases with throttling
-- Scheduler latency (wakeup → run) increases under throttling
+**Measured** (Phase 7.4, `evidence/phase7/live-bpf/scheduler-trace-20261026T192056Z.json`):
+
+| Limit | Throttled | Mean wake-to-run | Worst wake-to-run |
+|-------|-----------|------------------|-------------------|
+| none | 0% | 6.4 us | 5.5 ms |
+| 200m | 96.0% | 9.6 us | 6.9 ms |
+| 100m | 96.9% | 13.7 us | 71.7 ms |
+
+The mean stays in microseconds, so the scheduler is not slow. A minority of
+wakeups wait for quota replenishment, and those carry the tail.
 
 ---
 
@@ -91,9 +103,11 @@ resources:
     cpu: "1000m"
   # No limits
 ```
-- ✅ No throttling, can burst
+- ✅ No quota, so no throttling periods; can burst
 - ✅ Best for latency-sensitive workloads
-- From research: 0% throttling in Phase 2
+- The absence of `cpu.max` is the only configuration here that produced no
+  throttling period: the besteffort run shows `cpu.max` = `max 100000`, 0/0
+  periods, 0.0 s throttled
 
 ### Pattern 2: Guaranteed (Critical Services)
 ```yaml
@@ -130,14 +144,23 @@ resources:
 ```
 - ✅ Noisy neighbor protection
 - ✅ Cost control
-- From research: 4× burst → 4.7% throttling (Phase 4)
+- From research: capping four burners at 200m cut their CPU use 75% and
+  improved the co-located victim's p50 by 79% (Phase 7.3)
+- Set the cap above the pod's own p99 usage; a cap below it produces the tail
+  latency measured in Phase 7.1
 
-### Pattern 5: Batch/Background (Best Effort)
+### Pattern 5: Batch/Background
 ```yaml
 resources:
   requests:
-    cpu: "100m"  # or none
-  # No limits
+    cpu: "2000m"   # measured need
+  limits:
+    cpu: "2000m"   # equal to the request
+```
+- Limit = request removes the forced wait Phase 4 measured (139.05 → 19.22
+  ops/sec at a limit below need)
+- Avoid leaving batch pods BestEffort on a contended node: Phase 7.2 measured
+  weight 1 and p99 65.44 ms against 31.28 ms for Burstable
 ```
 - ✅ Uses idle CPU
 - ✅ Low priority
@@ -151,15 +174,22 @@ Complete documentation for administrators:
 
 ### CFS Scheduler Parameters
 
+No scheduler parameter was tuned or measured in this research. What was
+measured is where the tail latency comes from:
+
+```text
+Phase 7.4 (bpftrace, live node)   worst wake-to-run: 5.5 ms no limit -> 71.7 ms at 100m
+Phase 7.1 (nginx, fixed rate)     p99: 13.98 ms no limit -> 69.43 ms at 120m, p50 flat
+Phase 7.5 (cgroup v2)             limits.cpu 100m -> cpu.max "10000 100000"
+```
+
+The cost is a task waiting out the remainder of the 100 ms quota period, which no
+`/proc/sys/kernel/sched_*` value can remove. The documented knobs below are
+background only:
+
 ```bash
-# Latency-sensitive (reduce target latency)
-echo 3000000 > /proc/sys/kernel/sched_latency_ns  # 3ms
-
-# Fine-grained throttling
-echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us  # 1ms
-
-# Reduce migration
-echo 2000000 > /proc/sys/kernel/sched_migration_cost_ns  # 2ms
+# cgroup v2: the quota period is per cgroup (kubelet --cpu-cfs-quota-period),
+# not a node-wide sysctl. There is no sched_cfs_bandwidth_slice_us on v2.
 ```
 
 ### CPU Isolation
@@ -175,9 +205,9 @@ GRUB_CMDLINE_LINUX="isolcpus=2-7 nohz_full=2-7"
 
 ### When to Tune
 
-| Scenario | Parameters to Adjust |
+| Scenario | Parameters to Adjust (documented, not measured here) |
 |----------|----------------------|
-| High P99 latency | Reduce `sched_latency_ns`, `sched_cfs_bandwidth_slice_us` |
+| High P99 latency | First check the pod's CPU limit and its `cpu.stat`; scheduler timeslices are secondary |
 | Excessive context switches | Increase `sched_min_granularity_ns` |
 | Cross-CPU migration | Increase `sched_migration_cost_ns` |
 | Real-time requirements | Use `isolcpus` + CPU pinning |
@@ -240,7 +270,7 @@ research/cpu-limits/
     ├── experiments/
     │   ├── latency-sensitive/
     │   │   ├── run-latency-test.py       ✅ Full version (nginx+wrk)
-    │   │   └── run-latency-test-simple.py ✅ Running now
+    │   │   └── run-latency-test-simple.py  Superseded (wrk2 panicked; see 7.1)
     │   ├── scheduler-params/             ⏸️ Optional (requires SSH)
     │   └── scx-comparison/               ⏸️ Optional (requires kernel 6.12+)
     │
@@ -271,7 +301,7 @@ research/cpu-limits/
 | Phase | Experiments | Evidence Files | Documentation |
 |-------|-------------|----------------|---------------|
 | Phase 1 | 4 | 4 | README |
-| Phase 2 | 6 | 6 | GUIDE.md (515 lines) |
+| Phase 2 | 6 | 6 | GUIDE.md |
 | Phase 3 | Infrastructure | 0 | BPF deployment |
 | Phase 4 | 4 | 4 | THROTTLING_ANALYSIS.md (300+ lines) |
 | Phase 5 | 2+ | Pending | 3 admin guides (1300+ lines) |
@@ -289,8 +319,10 @@ Phase 5 is successful:
 - [x] Kernel configuration documented
 - [x] Custom scheduler framework ready
 - [x] Production patterns documented (5 patterns)
-- [ ] Task 5.2 executed (running now)
-- [ ] Task 5.1 executed (ready, requires SSH)
+- [x] Task 5.2 delivered as Phase 7.1 (nginx, p50/p99 measured)
+- [x] Task 5.1 delivered as Phase 7.4 (bpftrace in the reader pod)
+- [ ] Task 5.3 kernel parameter tuning - NOT RUN
+- [ ] Task 5.4 scx comparison - NOT RUN
 - [ ] Evidence published
 - [ ] RESEARCH_COMPLETE.md updated with findings
 
@@ -323,26 +355,22 @@ Phase 5 is successful:
 
 ---
 
-## 🚀 Next Actions
+## 🚀 Status of the Remaining Tasks
 
-### Immediate (Running Now)
+### Delivered Elsewhere
 
-- ⏳ Task 5.2 (latency test) is executing
-- Expected completion: ~5-10 minutes
-- Will generate `evidence/latency-impact-*.json`
+- Task 5.2 (latency test) - delivered as Phase 7.1. `evidence/latency-impact-*.json`
+  came from the superseded `wrk2` attempt and is not cited as a result
+- Task 5.1 (BPF traces) - delivered as Phase 7.4
 
-### After Task 5.2 Completes
+### Not Run
 
-1. **Analyze results** and update RESEARCH_COMPLETE.md
-2. **Generate final dashboard** with Phase 5 findings
-3. **Create summary** comparing all 5 phases
-4. **Optional:** Run Task 5.1 (BPF traces) if SSH available
-
-### Optional Extensions
-
-- Task 5.3: Kernel parameter tuning experiments
-- Task 5.4: scx comparison (if kernel 6.12+ available)
-- Real workload tests (PostgreSQL, Redis, Nginx)
+- Task 5.3: kernel parameter tuning - CFS parameters were not swept; the
+  scheduler comparison was run as Phase 7.6
+- Task 5.4: scx comparison - run as Phase 7.6 (`scx_lavd` attached on
+  `7.3.0-k8labs`)
+- Real workload tests (PostgreSQL, Redis) - NOT RUN; nginx under a fixed offered
+  rate is the only real-application measurement (Phase 7.1)
 
 ---
 
@@ -351,10 +379,10 @@ Phase 5 is successful:
 This research provides:
 
 ✅ **Empirical evidence** for CPU limit behavior (14+ experiments)  
-✅ **Quantified impact** (69.8% throttling = 62.7% perf loss)  
+✅ **Quantified impact** (139.05 → 19.22 ops/sec, and p99 13.98 → 69.43 ms)  
 ✅ **Production guidance** (5 deployment patterns)  
-✅ **Kernel tuning** (administrator guides)  
-✅ **Custom schedulers** (scx evaluation framework)
+✅ **Kernel and scheduler guidance** (administrator guides; tuning itself not measured)  
+✅ **Custom schedulers** (scx documentation; evaluated in Phase 7.6 on `7.3.0-k8labs`)
 
 **Target audiences achieved:**
 - ✅ Developers: How to set requests/limits
@@ -365,26 +393,21 @@ This research provides:
 
 ## 🏆 Research Status
 
-| Phase | Status | Completion |
-|-------|--------|------------|
-| Phase 1 | ✅ Complete | 100% |
-| Phase 2 | ✅ Complete | 100% |
-| Phase 3 | ✅ Complete | 100% |
-| Phase 4 | ✅ Complete | 100% |
-| Phase 5 | 🚧 Experiments Running | **80%** |
-| **Overall** | **🚧 Near Complete** | **96%** |
+| Phase | Status | Measured topics |
+|-------|--------|-----------------|
+| Phase 1 | ✅ Complete | capability gates |
+| Phase 2 | ✅ Complete | 14 runs, 5 with end snapshots |
+| Phase 3 | ✅ Complete (as Phase 7.4) | BPF trace |
+| Phase 4 | ✅ Complete | 4 throughput runs |
+| Phase 5 | ✅ Complete (as Phase 7) | guides + 7.1-7.5, 7.8 |
 
----
-
-**Remaining to 100%:**
-1. Task 5.2 completion (running)
-2. Evidence analysis
-3. Documentation updates
-
-**Estimated time to completion:** 30-60 minutes
+**Remaining, and not claimed as done:**
+1. Task 5.3 (kernel parameter tuning) - NOT RUN
+2. Task 5.4 (scx comparison) - NOT RUN
+3. Multi-node fairness - NOT RUN (single-node environment)
 
 ---
 
 **Date:** October 26, 2026  
-**Status:** Phase 5 infrastructure complete, latency experiment running  
-**Next:** Analyze Task 5.2 results and update final documentation
+**Status:** Phase 5 documentation complete; latency measurements delivered as
+Phase 7.1, BPF traces as Phase 7.4

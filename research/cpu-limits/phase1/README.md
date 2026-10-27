@@ -7,10 +7,13 @@ Establish machine-readable environment metadata and validate that all required c
 ## Tasks
 
 1. ✅ Extend node observer check to record complete environment
-2. ⏳ Resolve container IDs and validate cgroup-v2 access
-3. ⏳ Add capability gates for BTF, tracefs, SCX, bandwidth hooks
-4. ⏳ Add `bpftool` to observer and validate all BPF tools
-5. ⏳ Record shared-worker baseline and daemon noise
+2. ✅ Resolve container IDs and validate cgroup-v2 access
+3. ✅ Add capability gates for BTF, tracefs, SCX, bandwidth hooks
+4. ✅ Add `bpftool` to observer and validate all BPF tools
+5. ✅ Record shared-worker baseline and daemon noise
+
+All five gates passed on the test node; see `GATES.md` for the pass records and
+`phase1/evidence/` for the raw output.
 
 ## Evidence
 

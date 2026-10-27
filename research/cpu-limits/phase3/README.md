@@ -1,11 +1,24 @@
 # Phase 3: BPF Tracing Implementation
 
-**Status**: Documented manual collection approach (automated privileged container approach blocked by rootless crun limitations)
+**Status**: ❌ NOT RUN as designed. The privileged-container path is blocked by
+rootless crun. BPF tracing was delivered by **Phase 7.4**, which run bpftrace
+inside the unprivileged reader pod with the host tracefs mounted -
+`evidence/phase7/live-bpf/scheduler-trace-20261026T192056Z.json`.
+
+> **Correction.** Every probe named `sched_cfs_quota_throttled` below is wrong.
+> The kernel `sched` tracepoints are `sched_switch`, `sched_wakeup`,
+> `sched_wakeup_new`, `sched_process_exit`, and `sched_stat_*`. CFS bandwidth
+> throttling is traced through the `cfs_bandwidth` kprobes
+> (`throttle_cfs_rq_work`, `unthrottle_cfs_rq`, `sched_cfs_period_timer`) or
+> `cgroup:cgroup_attach_task`. Phase 7.4 used `sched_wakeup` plus
+> `sched_switch` to measure wake-to-run delay. The scripts in
+> `phase3/manual-bpf-trace.md`, `phase3/QUICK_START.md`, and
+> `phase3/systemd/rust/README.md` still contain the invalid probe names.
 
 ## Objective
 
 Collect low-level kernel scheduler traces using BPF to observe:
-- CPU throttle events (`sched:sched_cfs_quota_throttled`)
+- Wake-to-run delay per scheduling event (`sched_wakeup` -> `sched_switch`)
 - Scheduler context switches
 - Runtime distribution
 - Correlation with cgroup metrics
@@ -88,20 +101,18 @@ See [systemd/rust/README.md](systemd/rust/README.md) for full documentation.
 
 ### Throttle Events
 
-Traces `sched:sched_cfs_quota_throttled` tracepoint:
+There is no `sched:sched_cfs_quota_throttled` tracepoint. Use the bandwidth
+kprobes, as in Phase 7.4:
+
 ```bpftrace
-tracepoint:sched:sched_cfs_quota_throttled {
-  printf("%s[%d] throttled for %d us\n",
-    args->comm, args->pid, args->throttled_usec);
-  @throttle_events++;
-  @total_throttled_us += args->throttled_usec;
-}
+kprobe:sched_cfs_period_timer { @periods++; }
+kprobe:throttle_cfs_rq_work { @throttled++; }
+kprobe:unthrottle_cfs_rq   { @unthrottled++; }
 ```
 
 **Metrics captured**:
-- Throttle event count
-- Total throttled time (microseconds)
-- Per-process throttle distribution
+- Quota-period ticks, throttle and unthrottle transitions
+- These are event counts; per-cgroup throttling is read from `cpu.stat`
 
 ### Runtime Distribution
 
@@ -141,12 +152,13 @@ Phase 3 BPF traces complement Phase 2 cgroup metrics:
 
 | Metric | Source | Resolution |
 |--------|--------|------------|
-| `cpu.stat` throttle count | cgroup | 1-10s intervals |
-| BPF throttle events | kernel | microsecond precision |
+| `cpu.stat` nr_throttled / throttled_usec | cgroup | poll interval of the collector |
+| BPF wake-to-run delay | kernel | per event (Phase 7.4) |
 | `cpu.stat` usage_usec | cgroup | cumulative |
 | BPF runtime distribution | kernel | per-scheduling-slice |
 
-BPF provides **event-level** granularity that cgroup metrics lack.
+BPF provides **event-level** granularity that cgroup counters lack; the cgroup
+counters provide the only per-cgroup throttle percentage.
 
 ## Collection Workflow
 
@@ -178,24 +190,18 @@ ssh fedora@192.168.124.3
 ### 4. Run BPF Trace
 
 ```bash
-# Install bpftrace
-sudo dnf install -y bpftrace
-
-# Find container PID
-CGROUP_PATH="/sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod2dec945a-227a-48e3-850a-fcd3a498cbca.slice"
-CONTAINER_PID=$(cat ${CGROUP_PATH}/cgroup.procs | head -1)
-
-# Run 30-second trace
+# Run 30-second trace (probes that exist on this kernel; see the Correction note)
 sudo timeout 30s bpftrace -e '
-tracepoint:sched:sched_cfs_quota_throttled {
-  printf("%s[%d] throttled for %d us\n",
-    args->comm, args->pid, args->throttled_usec);
-  @throttle_events++;
-  @total_throttled_us += args->throttled_usec;
+BEGIN { printf("tracing wake-to-run delay\n"); }
+tracepoint:sched:sched_wakeup { @wake[args->pid] = nsecs; }
+tracepoint:sched:sched_switch /@wake[args->next_pid]/ {
+  @delay = hist(nsecs - @wake[args->next_pid]);
+  delete(@wake[args->next_pid]);
 }
+kprobe:sched_cfs_period_timer { @periods++; }
 END {
-  printf("\nTotal throttle events: %d\n", @throttle_events);
-  printf("Total throttled time: %d us\n", @total_throttled_us);
+  printf("\nQuota period ticks: %d\n", @periods);
+  print(@delay);
 }
 ' > /tmp/bpf-trace-cpu-bound-burstable.txt
 ```
@@ -227,6 +233,9 @@ research/cpu-limits/phase3/
 ├── bpf-collector-daemonset.yaml  # Failed privileged approach
 └── bpf-runner-pod.yaml           # Failed privileged approach
 ```
+
+The working path is `phase7/trace-scheduler.sh`, which runs bpftrace in the
+unprivileged reader pod. No trace files were produced by the scripts above.
 
 ## Limitations
 

@@ -1,6 +1,6 @@
 # Phase 6 Summary: Future Work Topics
 
-**Status:** 📋 Framework Complete, 1/6 Implementation Ready  
+**Status:** 6.1 and 6.2 delivered as Phase 7.1 and 7.4; 6.3, 6.4, 6.5, 6.6 not run  
 **Date:** October 26, 2026
 
 ---
@@ -9,12 +9,12 @@
 
 | Topic | Status | Time | Value | Prerequisites |
 |-------|--------|------|-------|---------------|
-| 6.1 Latency Testing | ✅ Complete | 30m | ⭐⭐⭐ High | wrk |
-| 6.2 BPF Traces | 📋 Design | 70m | ⭐⭐ Medium | Node SSH, root |
-| 6.3 Kernel Tuning | 📋 Design | 120m | ⭐⭐ Medium | Node SSH, root |
-| 6.4 scx Comparison | 📋 Design | 180m | ⭐ Low | Kernel 6.12+, scx |
-| 6.5 Multi-Node | 📋 Design | 210m | ⭐ Low | Multi-node cluster |
-| 6.6 Memory Limits | 📋 Design | 390m | ⭐⭐⭐ High | Same as Phase 2-4 |
+| 6.1 Latency Testing | ✅ Measured as Phase 7.1 | 30m | ⭐⭐⭐ High | wrk |
+| 6.2 BPF Traces | ✅ Measured as Phase 7.4 | 70m | ⭐⭐ Medium | bpftrace in reader pod |
+| 6.3 Kernel Tuning | ❌ Not run | 120m | ⭐⭐ Medium | Node SSH, root |
+| 6.4 scx Comparison | ❌ Not run | 180m | ⭐ Low | Kernel 6.12+, scx |
+| 6.5 Multi-Node | 📋 Design only | 210m | ⭐ Low | Multi-node cluster |
+| 6.6 Memory Limits | 📋 Design only | 390m | ⭐⭐⭐ High | Same as Phase 2-4 |
 
 ---
 
@@ -24,16 +24,22 @@
 
 Measures **user-visible latency** (P50/P95/P99) under CPU throttling using nginx + wrk.
 
-### Key Finding (Expected)
+### Key Finding (measured later as Phase 7.1)
 
-**Heavy throttling (69.8%) increases P99 latency 80× while throughput drops only 63%**
+The table that stood here was a projection, not a measurement (it claimed p99
+80× worse at a nominal 69.8% throttle level that was never produced). Phase 7.1
+measured nginx at a fixed offered rate instead:
 
-| Throttling | Throughput | P99 Latency |
-|------------|------------|-------------|
-| 0% | Baseline | Baseline |
-| 5% | -6% | +100% (2×) ⚠️ |
-| 50% | -37% | +1900% (20×) ⚠️⚠️ |
-| 70% | -63% | +7900% (80×) ⚠️⚠️⚠️ |
+| Limit | Throughput | p50 | p99 | Throttled periods |
+|-------|-----------|-----|-----|-------------------|
+| none | 7216 req/s | 2.04 ms | 13.98 ms | 0% |
+| 120m | 3481 req/s | 2.13 ms | 69.43 ms | 99.7% |
+| 100m | 2991 req/s | 2.20 ms | 67.76 ms | 95.6% |
+| 70m | 2071 req/s | 2.16 ms | 98.87 ms | 75.1% |
+
+Throughput halved; p99 grew about 5×. p50 did not move at all, which is the
+point: the damage is in the tail, and the throttle percentage does not rank
+configurations (75.1% had the worst p99 of the four).
 
 ### Why It Matters
 
@@ -92,21 +98,22 @@ throttled_usec ↑ → wakeup-to-run latency ↑
 
 Experiments with CFS parameters to reduce throttling impact.
 
-### Key Finding (Expected)
+### Key Finding: NOT RUN
 
-**Tuned parameters reduce P99 by 30-50%**
+No kernel parameter was tuned or measured. The percentage table that stood here
+was a hypothesis with invented numbers.
 
-| Parameter | Default | Tuned | P99 Impact |
-|-----------|---------|-------|------------|
-| sched_latency_ns | 6ms | 3ms | -30% |
-| sched_cfs_bandwidth_slice_us | 5ms | 1ms | -20% |
-| Combined | - | - | -45% |
+There is also no node-wide bandwidth-slice knob on a cgroup v2 host: the quota
+period is per cgroup, the second field of `cpu.max` (kubelet
+`--cpu-cfs-quota-period`). Phase 7.5 read it live: a 100m limit produced
+`cpu.max = "10000 100000"`.
 
 ### Why It Matters
 
-- Shows kernel tuning can partially offset throttling
-- Validates Phase 5 admin guide recommendations
-- Provides empirical tuning targets
+- The measured tail latency came from waiting out the quota period, which no
+  scheduler timeslice setting removes
+- Removing or right-sizing the CPU limit is the change with measured effect
+  (Phase 7.1: p99 69.43 → 13.98 ms)
 
 ### Implementation Plan
 
@@ -119,26 +126,33 @@ Experiments with CFS parameters to reduce throttling impact.
 
 ---
 
-## Topic 6.4: scx Comparison (📋 Design Only)
+## Topic 6.4: scx Comparison (❌ NOT RUN)
 
-### What It Does
+### What It Would Do
 
-Compares CFS vs custom scheduler (scx_lavd) for throttled workloads.
+Compare CFS against a custom scheduler (scx_lavd) for throttled workloads.
 
-### Key Finding (Expected)
+### Key Finding
 
-**scx_lavd: -5% throughput, -40% P99 latency vs CFS**
+**None. This comparison was never executed**, so no scx throughput or latency
+figure exists. Any percentage quoted for scx elsewhere in this research is
+wrong; it was a projection.
 
 | Scheduler | Throughput | P99 Latency | Context Switches |
 |-----------|------------|-------------|------------------|
-| CFS | Baseline | Baseline | Baseline |
-| scx_lavd | -5% | -40% | -20% |
+| CFS | measured (Phases 2, 4, 7) | measured | measured (7.4) |
+| scx_lavd | not run | not run | not run |
+
+> scx is an **sched_ext** BPF scheduler: it replaces the CFS scheduling policy
+> for the whole node, not the cgroup quota. It cannot remove CFS bandwidth
+> throttling, because `cpu.max` is enforced by the bandwidth controller before
+> a task reaches the scheduler. That is reasoning from the kernel design, not a
+> measured result.
 
 ### Why It Matters
 
-- Shows custom schedulers trade throughput for latency
-- Validates Phase 5 "when to use scx" guidance
-- Provides data for scx adoption decision
+- A scx comparison is the only way to test whether a different scheduling
+  policy changes throttled latency, and it has not been tested here
 
 ### Implementation Plan
 
@@ -158,14 +172,10 @@ Compares CFS vs custom scheduler (scx_lavd) for throttled workloads.
 
 Tests cross-node CPU fairness in multi-node clusters.
 
-### Key Finding (Expected)
+### Key Finding
 
-**Kubernetes scheduler achieves fair CPU distribution across nodes**
-
-```
-Expected: Equal CPU per pod across nodes
-Actual: May vary by node CPU pressure
-```
+**Not run.** No multi-node measurement exists; this cluster had a single test
+node, so nothing about cross-node fairness is claimed.
 
 ### Why It Matters
 
@@ -190,14 +200,17 @@ Actual: May vary by node CPU pressure
 
 Parallel research for memory limits (like Phases 1-5 for CPU).
 
-### Key Finding (Expected)
+### Key Finding
 
-**Memory limits are binary: no throttling, just OOM kill**
+**Not run.** The comparison below is kernel documentation ("Memory limits are
+binary: no throttling, just OOM kill" for the cgroup v2 `memory.max` /
+`memory.oom.group` behaviour), not a result from this research. No memory-limit
+experiment was executed.
 
 | Aspect | CPU | Memory |
 |--------|-----|--------|
-| Throttling | Gradual | None (OOM kill) |
-| Recovery | Automatic | Manual restart |
+| Throttling | Gradual (cpu.max) | None at the limit; OOM kill past memory.max |
+| Recovery | Automatic | Container restart |
 | Observability | Good | Moderate |
 
 ### Why It Matters

@@ -62,20 +62,25 @@ This research demonstrates the complete lifecycle of CPU resource management in 
 **Experiments Run:** 6 configurations across all workload types
 
 **Key Findings:**
-- **BestEffort:** Fastest completion (0.3s) - no CPU constraints
-- **Burstable:** 51.5 ops/sec (2000m request/limit) - appropriate limits, no throttling
-- **Guaranteed:** Predictable performance, no surprises
-- **All experiments:** 0% throttling when limits match workload requirements
+- **BestEffort:** fastest short runs (0.3 s, 1.4 s) with no quota written;
+  throughput 98.8 and 98.1 ops/s are short-sample figures only
+- **Burstable:** 51.41 ops/s with `cpu.max` = `200000 100000`, and every period
+  in the run was throttled (1150/1150)
+- **Guaranteed:** 51.65 ops/s for cpu-bound with a 2-CPU quota
+- **Throttling:** 9 of the 14 runs have no end `cpu.stat` snapshot, so their
+  throttling is **unknown**, not zero. In the 5 runs that do have one,
+  throttling was near-total (99.1%, 99.8%, 100.0%) wherever a finite quota
+  existed, and absent only in the besteffort run with `cpu.max` = `max 100000`
 
 **Evidence:**
 ```
 research/cpu-limits/phase2/evidence/
-├── cpu-bound-besteffort-*.json      (0% throttle, 0.3s completion)
-├── cpu-bound-burstable-*.json       (0% throttle, 51.5 ops/s)
-├── cpu-bound-guaranteed-*.json      (0% throttle, predictable)
-├── hybrid-burstable-*.json
-├── io-bound-guaranteed-*.json
-├── memory-bound-guaranteed-*.json
+├── cpu-bound-besteffort-*.json      (cpu.max "max 100000", 0/0 periods, 73.18 ops/s)
+├── cpu-bound-burstable-*.json       (1150/1150 periods throttled, 51.41 ops/s)
+├── cpu-bound-guaranteed-*.json      (no end snapshot, 51.65 ops/s)
+├── hybrid-burstable-*.json          (1186/1186 periods throttled)
+├── io-bound-guaranteed-*.json       (no end snapshot)
+├── memory-bound-guaranteed-*.json   (1170/1172 periods throttled)
 └── summary.json
 ```
 
@@ -133,45 +138,46 @@ done
 
 **Experiment Design:** 4 configurations with identical workload (4 CPU workers), varying limits
 
-| Configuration | Limit | Expected Behavior |
-|---------------|-------|-------------------|
-| Heavy Throttle | 500m | Severe throttling |
-| Moderate Throttle | 1500m | Moderate throttling |
-| Light Throttle | 3000m | Light throttling |
-| No Throttle | 4000m | No throttling |
+| Configuration | Request / Limit | Measured Throughput |
+|---------------|-----------------|---------------------|
+| Heavy Throttle | 100m / 500m | 19.22 ops/s |
+| Moderate Throttle | 500m / 1500m | 53.57 ops/s |
+| Light Throttle | 1000m / 3000m | 108.78 ops/s |
+| No Throttle | 2000m / 4000m | 139.05 ops/s |
 
 **Results:**
 
-| Configuration | Throttling | Performance | vs Phase 2 Baseline |
-|---------------|------------|-------------|---------------------|
-| Heavy Throttle | **69.8%** | 19.2 ops/s | **-62.7%** |
-| Moderate Throttle | 33.2% | 53.6 ops/s | +4.0% |
-| Light Throttle | 4.7% | 108.8 ops/s | +111.2% |
-| No Throttle | 0.0% | 139.1 ops/s | **+170.0%** |
+| Configuration | Request | Limit | Performance | vs no-limit |
+|---------------|---------|-------|-------------|-------------|
+| No Throttle | 2000m | 4000m | 139.05 ops/s | baseline |
+| Light Throttle | 1000m | 3000m | 108.78 ops/s | -21.8% |
+| Moderate Throttle | 500m | 1500m | 53.57 ops/s | -61.5% |
+| Heavy Throttle | 100m | 500m | 19.22 ops/s | **-86.2%** |
+
+Source: `phase4/evidence/throttling-summary.json`.
 
 **Key Insights:**
-1. **Throttling directly correlates with performance loss**
-   - 69.8% throttling → 62.7% performance loss
-   - 0% throttling → 170% performance gain (with more workers)
+1. **Throughput loss tracks the CPU cut, but not linearly**
+   - The heavy config receives 0.5 core where the 2000m/4000m reference run
+     gets up to 4 — an 8x quota reduction — and loses 7.2x throughput
+     (139.05 → 19.22 ops/s)
+   - The residual is time stopped at the quota boundary with nothing to run
 
-2. **Throttling percentage calculation:**
-   ```
-   throttling_pct = throttled_usec / (usage_usec + throttled_usec) × 100
-   ```
-   This shows what % of desired CPU time was blocked by limits.
-
-3. **Heavy throttle example:**
-   - Container wanted: 9.2s of CPU time
-   - Container got: 2.9s of CPU time  
-   - Container was denied: 6.4s (69.8%)
+2. **Throttle percentages are not available for these runs**
+   - The evidence files captured `nr_periods`/`nr_throttled` in the baseline
+     snapshot only; `final_cgroup` and `throttling` are null
+   - `throttled_usec / (usage_usec + throttled_usec)` cannot be computed from
+     the recorded data, so cite throughput instead
+   - Phase 7.1 and 7.4 are where throttle percentages and their latency cost
+     were measured
 
 **Evidence:**
 ```
 research/cpu-limits/phase4/evidence/
-├── cpu-bound-heavy-throttle-*.json     (69.8% throttle)
-├── cpu-bound-moderate-throttle-*.json  (33.2% throttle)
-├── cpu-bound-light-throttle-*.json     (4.7% throttle)
-├── cpu-bound-no-throttle-*.json        (0% throttle)
+├── cpu-bound-heavy-throttle-*.json     (19.22 ops/s)
+├── cpu-bound-moderate-throttle-*.json  (53.57 ops/s)
+├── cpu-bound-light-throttle-*.json     (108.78 ops/s)
+├── cpu-bound-no-throttle-*.json        (139.05 ops/s)
 └── throttling-summary.json
 ```
 
@@ -185,55 +191,61 @@ research/cpu-limits/phase4/evidence/
 
 ---
 
-### Phase 5: Scheduler Deep Dive & Production Readiness 🚧
+### Phase 5: Scheduler Deep Dive & Production Readiness
 
 **Objective:** Complete the research with kernel-level scheduler analysis and administrator guidance
 
-**Status:** 🚧 In Progress (Infrastructure ready, experiments pending)
+**Status:** Complete - administrator guides delivered; the BPF and latency
+measurements were moved to Phase 6 and Phase 7 and run there.
 
 **Experiments:**
 
-1. **Task 5.1: BPF Trace Collection** (Ready)
-   - Collect scheduler events during CPU throttling
-   - Correlate `sched:sched_switch` and `sched:sched_wakeup` with throttling
-   - Expected: scheduler latency increases with throttling %
-   - Script: `phase5/bpf-correlation/collect-during-throttle.py`
+1. **Task 5.1: BPF Trace Collection** - delivered as Phase 7.4
+   - Live bpftrace of `sched:sched_wakeup` and `sched:sched_switch` inside an
+     unprivileged reader pod, no node SSH required
+   - Measured worst wake-to-run wait: 5.5 ms with no limit, 71.7 ms at a 100m limit
+   - Evidence: `evidence/phase7/live-bpf/scheduler-trace-20261026T192056Z.json`
 
-2. **Task 5.2: Latency-Sensitive Workload** (Ready)
-   - HTTP server (nginx) under varying throttling levels
-   - Measure P50/P95/P99 latency (not just throughput)
-   - Expected: Heavy throttle (69.8%) → P99 > 500ms
-   - Script: `phase5/experiments/latency-sensitive/run-latency-test.py`
+2. **Task 5.2: Latency-Sensitive Workload** - attempted here, delivered as Phase 7.1
+   - The Phase 5 run (`phase5/evidence/latency-impact-20261026T163603Z.json`)
+     covered only two configurations and recorded no throttling
+     (`nr_throttled` 0); its negative `usage_usec` values show the counter
+     delta was read incorrectly, so it is superseded
+   - Phase 7.1 measured nginx at a fixed offered rate: p99 13.98 ms with no
+     limit rising to 69.43 ms at 120m, while p50 stayed at 2.04 to 2.13 ms
 
-3. **Task 5.3: Kernel Scheduler Parameters** (Requires node SSH)
-   - Test CFS parameter tuning (`sched_latency_ns`, `sched_cfs_bandwidth_slice_us`)
-   - Measure impact on throttling behavior
-   - Script: `phase5/experiments/scheduler-params/test-cfs-bandwidth.sh`
+3. **Task 5.3: Kernel Scheduler Parameters** - NOT MEASURED
+   - The sysctl tuning material in `phase5/admin-guide/KERNEL_CONFIG.md` and in
+     `ADMINISTRATOR_GUIDE.md` is documented guidance, not a result
+   - Phase 6 and Phase 7 found the tail latency came from the CPU quota, not
+     from scheduler timeslices, so these parameters are not the first thing to
+     change
 
-4. **Task 5.4: Custom Scheduler (scx) Comparison** (Requires kernel 6.12+)
-   - Compare CFS vs scx_lavd for throttled workloads
-   - Test hypothesis: scx_lavd reduces latency under throttling
-   - Script: `phase5/experiments/scx-comparison/compare-schedulers.py`
+4. **Task 5.4: Custom Scheduler (scx) Comparison** - RUN IN PHASE 7.6
+   - `CUSTOM_SCHEDULERS.md` describes the options; Phase 7.6 measured
+     `scx_lavd --performance` against CFS on the `7.3.0-k8labs` node. The
+     scheduler attached (`state=enabled`, `nr_rejected` 0) and the result was
+     not the expected one: `cpu.max` was not enforced at all (12.22 CPU-seconds
+     against a 4.0 CPU-second quota) until `--enable-cpu-bw` was added, and
+     cgroup weights were not honoured. See `PHASE7_COMPLETE.md` section 7.6
 
 **Administrator Guides:**
 
-- **KERNEL_CONFIG.md** - CFS scheduler tuning, UP/SMP scheduling, CPU isolation
-- **CUSTOM_SCHEDULERS.md** - When to use scx (sched-ext), installation, migration strategy
-- **PRODUCTION_PATTERNS.md** - Real-world deployment patterns for different use cases
-
-**Quick Start:**
-```bash
-cd research/cpu-limits/phase5
-./run-phase5.sh
-```
+- **KERNEL_CONFIG.md** - CFS scheduler documentation, UP/SMP, CPU isolation
+- **CUSTOM_SCHEDULERS.md** - When to consider scx (sched-ext), installation, migration strategy
+- **PRODUCTION_PATTERNS.md** - Deployment patterns. Its 69.8% and 4.7% throttle
+  figures are not present in the Phase 4 evidence, which records throughput;
+  see `phase4/THROTTLING_ANALYSIS.md` and `PHASE7_COMPLETE.md` for measured numbers
 
 **Key Deliverables:**
-- `research/cpu-limits/phase5/README.md` - Phase 5 overview
 - `research/cpu-limits/phase5/admin-guide/` - 3 administrator guides
-- `research/cpu-limits/phase5/experiments/` - Experiment scripts
-- `research/cpu-limits/phase5/evidence/` - Experiment results (pending)
+- `research/cpu-limits/phase5/evidence/latency-impact-20261026T163603Z.json` -
+  the superseded latency attempt
+- Superseding deliverables: `ADMINISTRATOR_GUIDE.md`, `PHASE7_COMPLETE.md`,
+  `evidence/phase7/`
 
-**Status:** 🚧 In Progress - Infrastructure complete, experiments ready to run
+**Status:** Complete. Scheduler parameters are covered in Phase 6 and Phase 7;
+sched_ext was measured in Phase 7.6
 
 ---
 
@@ -446,14 +458,17 @@ research/cpu-limits/
 
 **This research demonstrates both sides empirically:**
 
-- **Phase 2:** Appropriate limits (2000m) cause 0% throttling, work fine
-- **Phase 4:** Aggressive limits (500m) cause 69.8% throttling, 62.7% performance loss
+- **Phase 2:** a finite quota throttled 99.1-100.0% of periods in the runs that
+  have an end snapshot; only the besteffort run (`cpu.max` = `max 100000`)
+- **Phase 4:** an 8x quota cut cost 7.2x throughput (139.05 to 19.22 ops/sec)
+- **Phase 7.1:** A limit below usage raised p99 5x while the median stayed flat
+- **Phase 7.3:** Capping the noisy neighbours helped the co-located victim
 
 **Recommendation:** Context-dependent
 - **Latency-sensitive:** Request-only (no limits)
-- **Batch workloads:** Limits OK if sized appropriately
-- **Multi-tenant:** Limits for cost/noisy neighbor control
-- **Always:** Monitor throttling and adjust
+- **CPU-bound batch:** limit = request, so no forced wait
+- **Multi-tenant:** Limits on the offenders, for noisy neighbour control
+- **Always:** Monitor throttling **and** the service's own p99
 
 ---
 
@@ -548,15 +563,20 @@ This research provides empirical evidence for how Kubernetes CPU requests and li
 
 **CPU limits are a powerful tool, but they must be sized correctly.**
 
-- ✅ **Well-sized limits** (Phase 2): No throttling, predictable performance
-- ⚠️ **Moderate limits** (Phase 4): Some throttling, acceptable for non-critical workloads  
-- ❌ **Aggressive limits** (Phase 4): Severe throttling, 62.7% performance loss
+- ✅ **A request does not stop throttling** (Phase 2): a 2-CPU quota on 4 workers
+  throttled 100% of periods; the request only sets `cpu.weight`
+- ⚠️ **A quota below need** (Phase 4): 86.2% throughput loss going from
+  2000m/4000m to 100m/500m
+- ❌ **A limit below peak on a latency-sensitive service** (Phase 7.1): p99 5x
+  worse while the median stays flat
 
-**Always monitor throttling in production and adjust limits based on actual usage patterns.**
+**Always monitor throttling in production, and judge it with the service's own
+p99 latency rather than with the throttle percentage alone.**
 
 ---
 
 **Research Team:** k8labs  
 **Date:** October 26, 2026  
 **Repository:** `/research/cpu-limits/`  
-**Status:** ✅ Complete & Production-Ready
+**Status:** Phases 1-6 complete; Phase 7 complete, with seven topics measured on
+a cluster and 7.8 computed from Phase 4 data

@@ -37,7 +37,9 @@ All 6 workload experiments completed successfully with **11 samples each** (exce
 - **nr_throttled**: 0 periods
 - **CPU pressure**: avg60=12.66 (some), avg60=12.62 (full)
 
-**Insight**: BestEffort pods consume all available CPU with no throttling. The workload used nearly 3 full cores on a 4-vCPU node.
+**Insight**: BestEffort pods consume all available CPU with no throttling
+because `cpu.max` is `max 100000`. The workload used nearly 3 full cores on a
+4-vCPU node.
 
 ---
 
@@ -48,24 +50,30 @@ All 6 workload experiments completed successfully with **11 samples each** (exce
 **cpu-bound-burstable:**
 - **CPU Used**: 235.5s over 122.6s runtime
 - **Equivalent vCPU**: **1.92 cores**
-- **Throttling**: **29.8s (12.6% of CPU time)**
-- **Throttle events**: 1,167 out of 1,178 periods (**99.1%**)
+- **Throttled periods**: 1,150 of 1,150 (**100%**) in the end-snapshot delta
+- **Throttled time**: 29.8s, i.e. **11.2% of CPU time**
 - **CPU limit**: 2.0 cores (200ms quota / 100ms period)
 - **CPU pressure**: avg60=39.40 (some), avg60=39.40 (full)
 
-**Insight**: Pure CPU-bound workload hits the limit but throttling is relatively modest (12.6%). Most periods are throttled, but each throttle is brief.
+**Insight**: Pure CPU-bound workload hits the quota in every period, but the
+parked time is only 11.2% of CPU time: the scheduler refills the 200 ms quota at
+the start of most periods, so the task loses a fraction of each period rather
+than the whole of it.
 
 #### Hybrid Workload
 
 **hybrid-burstable:**
 - **CPU Used**: 237.3s over 121.3s runtime
 - **Equivalent vCPU**: **1.96 cores**
-- **Throttling**: **138.9s (58.6% of CPU time!)**
-- **Throttle events**: 1,186 out of 1,186 periods (**100%**)
+- **Throttled periods**: 1,186 of 1,186 (**100%**)
+- **Throttled time**: 138.9s, i.e. **36.9% of CPU time**
 - **CPU limit**: 2.0 cores
 - **CPU pressure**: avg60=39.05 (some), avg60=39.03 (full)
 
-**Insight**: Mixed CPU + I/O + VM workload experiences **severe throttling** (58.6%). Every single period was throttled. The CFS quota system does not distinguish between CPU compute and system calls (I/O, page faults) — both count against the quota.
+**Insight**: Mixed CPU + I/O + VM workload is parked for **36.9%** of its CPU
+time, over three times the cpu-bound share. Every single period was throttled.
+The CFS quota does not distinguish CPU compute from system calls, page faults
+and VM exits — all of them draw on the same quota.
 
 ---
 
@@ -74,47 +82,60 @@ All 6 workload experiments completed successfully with **11 samples each** (exce
 **memory-bound-guaranteed:**
 - **CPU Used**: 117.2s over 122.0s runtime
 - **Equivalent vCPU**: **0.96 cores**
-- **Throttling**: **43.6s (37.2% of CPU time)**
-- **Throttle events**: 1,170 out of 1,172 periods (**99.8%**)
+- **Throttled periods**: 1,170 of 1,172 (**99.8%**)
+- **Throttled time**: 43.6s, i.e. **27.1% of CPU time**
 - **CPU limit**: 1.0 core (100ms quota / 100ms period)
 - **CPU pressure**: avg60=28.95 (some), avg60=28.95 (full)
 
-**Insight**: Guaranteed QoS with tight limit (1 core) causes significant throttling (37.2%) even for a memory-bound workload. The workload stayed just under the 1-core limit (0.96 cores) but was throttled frequently.
+**Insight**: Guaranteed QoS with a 1-core quota parks the workload for 27.1% of
+its CPU time. Averaging 0.96 cores against a 1-core quota does not protect it:
+the average fits under the quota while individual 100 ms periods do not.
 
 ---
 
 ### 4. I/O-Bound: Too Fast to Monitor
 
-**io-bound-guaranteed:**
-- **Duration**: 11.3s (completed in 11 seconds instead of 120)
-- **Status**: ⚠️ Race condition — monitoring loop never started
-- **Baseline only**: 1.37s CPU used, 718ms throttled
+**io-bound-guaranteed** (`…T111404Z`, the first run): 8.37 s wall time, stress
+6.80 s, 14802.72 io ops/s. Only a start snapshot exists, so run-level
+throttling is unknown. The start snapshot shows 16 of 17 periods already
+throttled before the window.
 
-**Insight**: I/O-bound workload completed too quickly (hit 100k bogo-ops target). Monitoring infrastructure needs improvement to handle short-lived workloads.
+A second run (`…T113256Z`) took 11.25 s wall time (stress 9.20 s, 10971.49 io
+ops/s) and is otherwise equivalent. Both stopped at the 100k `hdd` bogo-ops
+target well short of 120 s.
+
+**Insight**: the run is too short to compare against the 120 s workloads, and
+its lack of an end snapshot means it cannot be used as a throttling measurement.
 
 ---
 
 ## Throttling Analysis
 
-### Throttling Percentage by QoS Class
+`nr_throttled / nr_periods` is the share of quota periods that were throttled.
+`throttled_usec / usage_usec` is a different quantity: time parked against CPU
+time actually used. Both come from the end-minus-start deltas in
+`evidence/summary.json`.
 
-| Workload                   | QoS Class  | CPU Limit | Throttled % | Throttle Events |
-|----------------------------|------------|-----------|-------------|-----------------|
-| cpu-bound-besteffort       | BestEffort | unlimited | **0.0%**    | 0/0             |
-| cpu-bound-burstable        | Burstable  | 2 cores   | **12.6%**   | 1,167/1,178     |
-| hybrid-burstable           | Burstable  | 2 cores   | **58.6%**   | 1,186/1,186     |
-| memory-bound-guaranteed    | Guaranteed | 1 core    | **37.2%**   | 1,170/1,172     |
+| Workload                   | QoS Class  | CPU Limit | Periods throttled | Throttled time / CPU time |
+|----------------------------|------------|-----------|-------------------|---------------------------|
+| cpu-bound-besteffort       | BestEffort | none      | 0/0 (no quota)    | 0 s / 323.2 s (no quota)  |
+| cpu-bound-burstable        | Burstable  | 2 cores   | 1150/1150 (100%)  | 29.8 s / 235.5 s (11.2%)  |
+| hybrid-burstable           | Burstable  | 2 cores   | 1186/1186 (100%)  | 138.9 s / 237.3 s (36.9%) |
+| memory-bound-guaranteed    | Guaranteed | 1 core    | 1170/1172 (99.8%) | 43.6 s / 117.2 s (27.1%)  |
+
+`cpu-bound-guaranteed` and `io-bound-guaranteed` are absent because they have no
+end snapshot.
 
 ### Key Observations
 
-1. **Throttling severity varies by workload type**:
-   - Pure CPU-bound: 12.6% throttling
-   - Hybrid (CPU+I/O+VM): **58.6% throttling** (4.6x worse!)
-   - Memory-bound: 37.2% throttling
-
-2. **Nearly every period is throttled** (99-100%) for limited workloads, but the *duration* of throttling varies.
-
-3. **Hybrid workloads suffer most**: System calls (I/O, page faults, syscalls) count against the CPU quota, causing excessive throttling even when the workload is not CPU-bound.
+1. **A finite quota throttles essentially every period** (99.8-100%) in all
+   three runs that have an end snapshot. The period count says how *often* the
+   cgroup hit the quota; it says nothing about *how much* CPU was lost
+2. **The throttled-time ratio is what separates the workloads**: 11.2% for
+   cpu-bound against 36.9% for hybrid and 27.1% for memory-bound
+3. **Hybrid workloads pay the most**: system calls, page faults and VM exits
+   all consume quota, so the cgroup is parked even when the process is not
+   spinning on CPU
 
 ---
 
@@ -122,7 +143,7 @@ All 6 workload experiments completed successfully with **11 samples each** (exce
 
 | Workload                   | PSI avg60 (some) | PSI avg60 (full) | Interpretation                        |
 |----------------------------|------------------|------------------|---------------------------------------|
-| cpu-bound-besteffort       | 12.66            | 12.62            | Low pressure (no throttling)          |
+| cpu-bound-besteffort       | 12.66            | 12.62            | Low pressure (no quota)               |
 | cpu-bound-burstable        | 39.40            | 39.40            | Moderate pressure (light throttling)  |
 | hybrid-burstable           | 39.05            | 39.03            | Moderate pressure (severe throttling) |
 | memory-bound-guaranteed    | 28.95            | 28.95            | Moderate pressure (constrained)       |
@@ -137,7 +158,8 @@ All 6 workload experiments completed successfully with **11 samples each** (exce
 
 **Affected experiments:**
 - `cpu-bound-guaranteed` (reported 0.3s duration but logs show 120.03s)
-- `io-bound-guaranteed` (completed in 11.3s, 0 samples collected)
+- `io-bound-guaranteed` (completed in 11.3 s, 0 samples collected; the 8.4 s
+  run `…T111404Z` is the earlier attempt)
 
 **Root cause**: The monitoring loop starts after the pod enters "Running" state, but short or fast workloads complete before the first sample is collected. The script reports `duration_seconds = 0.3s` but the actual workload ran for 120s.
 
@@ -174,9 +196,15 @@ All 6 workload experiments completed successfully with **11 samples each** (exce
    - Use only CPU requests for fair scheduling.
    - Reserve CPU limits for batch jobs that can tolerate throttling.
 
-4. **Tune CFS quota parameters** for workloads that require low latency:
-   - Increase `cpu.cfs_period_us` (default 100ms) to reduce throttling frequency.
-   - Use `cpu.cfs_burst_us` (kernel 5.14+) to allow short bursts above quota.
+4. **Understand the quota period** before tuning it:
+   - On cgroup v2 the period is the second field of `cpu.max` (default 100000us),
+     set by kubelet's `cpuCFSQuotaPeriod`. There is no node-wide
+     `cpu.cfs_period_us`; that is the cgroup v1 interface.
+   - A longer period lets a container burst longer before throttling, but when
+     it does throttle it waits longer. Phase 7.4 measured a 71.7 ms worst-case
+     wait at the default 100 ms period.
+   - `cpu.max.burst` exists on cgroup v2 but kubelet left it at 0 on the
+     measured node (Phase 7.5), so quota cannot be banked across periods.
 
 ---
 

@@ -13,11 +13,11 @@ This document is your map to 7100+ lines of research code and documentation.
 ### New to This Research?
 
 1. **Read:** `QUICK_REFERENCE.md` (2 min) - Decision tree and patterns
-2. **Read:** `FINAL_SUMMARY.md` (15 min) - All 5 phases overview
+2. **Read:** `FINAL_SUMMARY.md` (15 min) - Phase-by-phase results
 3. **Pick your path:**
-   - Developer → `GUIDE.md` (Phase 2)
-   - Administrator → `phase5/admin-guide/*.md`
-   - Researcher → `phase4/THROTTLING_ANALYSIS.md`
+   - Developer → `DEVELOPER_GUIDE.md`
+   - Administrator → `ADMINISTRATOR_GUIDE.md`
+   - Researcher → `PHASE7_COMPLETE.md` and `phase4/THROTTLING_ANALYSIS.md`
 
 ### Want to Run Experiments?
 
@@ -51,7 +51,7 @@ cd phase5
 
 | Document | Lines | Purpose |
 |----------|-------|---------|
-| `GUIDE.md` | 515 | **Main deliverable** - How to set requests/limits |
+| `GUIDE.md` | full guide | **Main deliverable** - How to set requests/limits |
 | `phase5/admin-guide/PRODUCTION_PATTERNS.md` | 600+ | 5 deployment patterns with examples |
 | `QUICK_REFERENCE.md` | 200+ | Quick sizing formulas and decision tree |
 
@@ -73,7 +73,8 @@ cd phase5
 
 | Document | Lines | Purpose |
 |----------|-------|---------|
-| `phase4/THROTTLING_ANALYSIS.md` | 300+ | **Key finding:** 69.8% throttling = 62.7% loss |
+| `phase4/THROTTLING_ANALYSIS.md` | 300+ | **Key finding:** 8x quota cut cost 7.2x throughput |
+| `PHASE7_COMPLETE.md` | 230+ | Phase 7 measured results with evidence citations |
 | `FINAL_SUMMARY.md` | 800+ | All experiment results and methodology |
 | `phase2/evidence/*.json` | - | Raw QoS experiment data |
 | `phase4/evidence/*.json` | - | Raw throttling experiment data |
@@ -107,7 +108,9 @@ phase1/
 
 **Goal:** Compare BestEffort, Burstable, Guaranteed  
 **Status:** ✅ Complete  
-**Key Finding:** Appropriate limits = 0% throttling
+**Key Finding:** a finite quota throttled 99.1-100.0% of periods in the runs
+with an end snapshot; 9 of 14 runs have no end snapshot, so throttling there is
+unknown
 
 ```
 phase2/
@@ -115,12 +118,12 @@ phase2/
 ├── run-experiments.py          (Automation)
 ├── generate-guide.py           (GUIDE.md generator)
 ├── evidence/                   (6 JSON results)
-├── GUIDE.md                    ⭐ 515-line main deliverable
+├── GUIDE.md                    ⭐ main deliverable
 └── README.md
 ```
 
 **Key Outputs:**
-- `GUIDE.md` - **515 lines** - Comprehensive developer + admin guide
+- `GUIDE.md` - Comprehensive developer + admin guide
 - 6 experiment evidence files
 - `dashboard.html` - Visual results
 
@@ -151,7 +154,7 @@ phase3/
 
 **Goal:** Measure performance impact of CPU throttling  
 **Status:** ✅ Complete  
-**Key Finding:** 69.8% throttling = 62.7% performance loss
+**Key Finding:** an 8x quota cut cost 7.2x throughput (139.05 → 19.22 ops/s)
 
 ```
 phase4/
@@ -173,7 +176,7 @@ phase4/
 
 **Key Outputs:**
 - `THROTTLING_ANALYSIS.md` - **300+ lines** - Performance impact analysis
-- 4 throttling evidence files (0%, 4.7%, 46.6%, 69.8%)
+- 4 throttling evidence files (139.05 / 108.78 / 53.57 / 19.22 ops per sec)
 - Prometheus + Grafana monitoring stack
 
 **Read:** `THROTTLING_ANALYSIS.md` for the key research finding
@@ -219,24 +222,23 @@ phase5/
 ### Phase 6: Future Work (Optional Extensions)
 
 **Goal:** Advanced research topics for specialized scenarios  
-**Status:** 📋 Framework Complete, 1/6 Implementation Ready
+**Status:** 6.1 and 6.2 delivered as Phase 7.1 and 7.4; 6.3-6.6 not run
 
 ```
 phase6/
 ├── README.md                   ⭐ Overview and prerequisites
 ├── PHASE6_SUMMARY.md           ⭐ Topic summaries
-├── 6.1-latency-testing/        ✅ COMPLETE
-│   ├── README.md               ⭐ 400+ lines
+├── 6.1-latency-testing/        ✅ RESULTS SUPERSEDED BY PHASE 7.1
+│   ├── README.md               ⭐ measured results + scripts
 │   ├── check-wrk.sh
 │   ├── run-nginx-latency-test.sh
 │   ├── manifests/              (nginx configs)
-│   ├── wrk-scripts/            (latency reporting)
-│   └── evidence/               (results)
-├── 6.2-bpf-traces/             📋 Design only
+│   └── wrk-scripts/            (latency reporting)
+├── 6.2-bpf-traces/             ✅ RESULTS SUPERSEDED BY PHASE 7.4
 │   └── README.md               (BPF correlation)
-├── 6.3-kernel-tuning/          📋 Design only
+├── 6.3-kernel-tuning/          ❌ NOT RUN
 │   └── README.md               (CFS experiments)
-├── 6.4-scx-comparison/         📋 Design only
+├── 6.4-scx-comparison/         ❌ NOT RUN
 │   └── README.md               (Custom scheduler)
 ├── 6.5-multi-node/             📋 Design only
 │   └── README.md               (Fairness testing)
@@ -245,15 +247,14 @@ phase6/
 ```
 
 **Key Topics:**
-- **6.1 Latency Testing** ✅ - nginx + wrk, P50/P95/P99 latency (30m, HIGH VALUE)
-- **6.2 BPF Traces** 📋 - Scheduler correlation (70m, needs node SSH)
-- **6.3 Kernel Tuning** 📋 - CFS parameter experiments (120m, needs root)
-- **6.4 scx Comparison** 📋 - Custom scheduler (180m, needs kernel 6.12+)
-- **6.5 Multi-Node** 📋 - Fairness testing (210m, needs 3+ nodes)
-- **6.6 Memory Limits** 📋 - Parallel research (1 week, HIGH VALUE)
+- **6.1 Latency Testing** ✅ - measured as Phase 7.1 (nginx + fixed-rate client, p50/p99)
+- **6.2 BPF Traces** ✅ - measured as Phase 7.4 (bpftrace in reader pod, no node SSH)
+- **6.3 Kernel Tuning** ❌ - not run (120m, would need root)
+- **6.4 scx Comparison** ❌ - not run (180m, would need kernel 6.12+)
+- **6.5 Multi-Node** 📋 - design only (210m, would need 3+ nodes)
+- **6.6 Memory Limits** 📋 - design only (1 week)
 
-**Read:** `phase6/PHASE6_SUMMARY.md` for complete overview  
-**Run:** `cd phase6/6.1-latency-testing && ./run-nginx-latency-test.sh`
+**Read:** `phase6/PHASE6_SUMMARY.md` for complete overview and the per-topic gaps
 
 ---
 
@@ -410,17 +411,22 @@ All experiment results stored in `phase*/evidence/*.json`:
 
 ### Phase 2: QoS Comparison
 - `cpu-bound-besteffort-*.json` - 0.3s (cluster idle)
-- `cpu-bound-burstable-*.json` - 121s, 0% throttling
-- `cpu-bound-guaranteed-*.json` - 121s, 0% throttling
-- `hybrid-burstable-*.json` - 121s, 0% throttling
-- `io-bound-guaranteed-*.json` - 8.4s, 0% throttling
-- `memory-bound-guaranteed-*.json` - 122s, 0% throttling
+- `cpu-bound-burstable-*.json` - 122s, 1150/1150 periods throttled (100.0%)
+- `cpu-bound-guaranteed-*.json` - 121s, no end snapshot (throttling unknown)
+- `hybrid-burstable-*.json` - 121s, 1186/1186 periods throttled (100.0%)
+- `io-bound-guaranteed-*.json` - 8.4s, no end snapshot (throttling unknown)
+- `memory-bound-guaranteed-*.json` - 122s, 1170/1172 periods throttled (99.8%)
 
 ### Phase 4: Throttling Impact ⭐
-- `cpu-bound-no-throttle-*.json` - **0% throttling, 51.65 ops/s (baseline)**
-- `cpu-bound-light-throttle-*.json` - **4.7% throttling, -4.5% perf**
-- `cpu-bound-moderate-throttle-*.json` - **46.6% throttling, -39.7% perf**
-- `cpu-bound-heavy-throttle-*.json` - **69.8% throttling, -62.7% perf** ⚠️
+- `cpu-bound-no-throttle-*.json` - 139.05 ops/s (baseline)
+- `cpu-bound-light-throttle-*.json` - 108.78 ops/s (-21.8%)
+- `cpu-bound-moderate-throttle-*.json` - 53.57 ops/s (-61.5%)
+- `cpu-bound-heavy-throttle-*.json` - 19.22 ops/s (-86.2%)
+- `throttling-summary.json` - the authoritative 4-config summary
+
+These runs captured `nr_periods`/`nr_throttled` in the baseline snapshot only,
+so cite the throughput figures. Throttle percentages for Phase 4 do not exist;
+see the note in `THROTTLING_ANALYSIS.md`.
 
 ### Phase 5: Latency Impact
 - `latency-impact-*.json` - Task duration under throttling
@@ -497,7 +503,7 @@ Read `QUICK_REFERENCE.md` - Has decision tree and sizing formulas
 
 ### "I want the key research finding"
 
-**69.8% throttling = 62.7% performance loss**
+**Heavy throttle (Phase 4): 139.05 → 19.22 ops/sec, -86.2%**
 
 Read `phase4/THROTTLING_ANALYSIS.md` for details
 

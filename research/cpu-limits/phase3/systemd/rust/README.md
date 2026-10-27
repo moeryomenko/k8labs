@@ -231,8 +231,11 @@ sudo lsof -i :9101
 ### No BPF events appearing
 
 ```bash
-# Check if BPF tracing is working
-sudo bpftrace -e 'tracepoint:sched:sched_cfs_quota_throttled { printf("event\n"); }'
+# Check if BPF tracing is working (kprobes that exist on this kernel)
+sudo bpftrace -e 'kprobe:sched_cfs_period_timer { @periods++; }' -c 'sleep 2'
+
+# NOTE: there is no sched:sched_cfs_quota_throttled tracepoint
+sudo bpftrace -l 'tracepoint:sched:*'
 
 # Deploy a workload that will throttle
 kubectl apply -f research/cpu-limits/phase2/workloads/cpu-bound-burstable.yaml

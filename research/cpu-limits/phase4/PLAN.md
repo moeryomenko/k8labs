@@ -18,9 +18,10 @@
    - Grafana dashboards
    - Alert rules for throttling
 
-3. **Intentional Throttling**
-   - Current experiments showed NO throttling (limits were appropriate)
-   - Need to demonstrate throttling impact by setting aggressive limits
+3. **Shrinking Quota**
+   - Phase 2's baseline runs already throttled almost every period wherever a
+     finite quota existed, so there was no "unthrottled baseline" to extend
+   - Phase 4 therefore demonstrates the throughput curve by shrinking the quota
 
 4. **Kernel Scheduler Comparison**
    - CFS (default) baseline
@@ -114,6 +115,7 @@ resources:
   limits:
     cpu: "500m"  # Too low for 4-worker stress-ng
 # Expected: Heavy throttling
+# Measured: 19.22 ops/s (see THROTTLING_ANALYSIS.md)
 
 # cpu-bound-moderate-limit.yaml
 resources:
@@ -128,19 +130,23 @@ resources:
 # Expected: P99 latency spikes during throttling
 ```
 
-**Test matrix:**
-| Workload | Request | Limit | Expected Throttling |
+**Test matrix (as executed):**
+| Workload | Request | Limit | Measured Throughput |
 |----------|---------|-------|---------------------|
-| cpu-bound-4workers | 100m | 500m | Heavy (80%+ time) |
-| cpu-bound-4workers | 500m | 1500m | Moderate (20-40% time) |
-| cpu-bound-4workers | 1000m | 2000m | None (Phase 2 baseline) |
-| http-server-wrk | 250m | 500m | Latency spikes in P99 |
+| cpu-bound-4workers | 100m | 500m | 19.22 ops/s |
+| cpu-bound-4workers | 500m | 1500m | 53.57 ops/s |
+| cpu-bound-4workers | 1000m | 3000m | 108.78 ops/s |
+| cpu-bound-4workers | 2000m | 4000m | 139.05 ops/s |
+| http-server | 70m-120m | - | see Phase 7.1 (p99 67-99 ms) |
 
 **Metrics to collect:**
-- `nr_throttled` - count
+- `nr_throttled` and `nr_periods`: throttled periods as `nr_throttled / nr_periods`
 - `throttled_usec` - total time
-- Throttling % = (throttled_usec / duration_usec) * 100
 - Application performance degradation
+
+> `throttled_usec / usage_usec` is not a throttle percentage: one is wall time
+> under quota pressure and the other is CPU time used. Use the period ratio from
+> two snapshots, as Phase 7 does.
 
 ---
 
@@ -186,13 +192,13 @@ kubectl apply -f cpu-bound-burstable.yaml
 sudo pkill scx_rusty
 ```
 
-**Comparison table:**
+**Comparison table (NOT RUN - no scx comparison was executed):**
 | Scheduler | CPU-bound | IO-bound | Memory-bound | Hybrid | Latency-sensitive |
 |-----------|-----------|----------|--------------|--------|-------------------|
-| CFS | baseline | baseline | baseline | baseline | baseline |
-| scx_simple | ? | ? | ? | ? | ? |
-| scx_rusty | ? | ? | ? | ? | ? |
-| scx_lavd | ? | ? | ? | ? | ? |
+| CFS | measured | measured | measured | measured | measured |
+| scx_simple | not run | not run | not run | not run | not run |
+| scx_rusty | not run | not run | not run | not run | not run |
+| scx_lavd | not run | not run | not run | not run | not run |
 
 ---
 
@@ -311,9 +317,10 @@ Visual analysis of:
 ### ✅ Complete when:
 
 1. **Throttling demonstrated:**
-   - At least 3 experiments showing >10% throttled time
-   - Performance degradation quantified
-   - cgroup stats show `nr_throttled > 0`
+   - Four quotas from 4000m down to 500m, throughput measured in each
+   - Performance degradation quantified (-86.2% at 100m/500m)
+   - Per-run throttle percentage not captured (`final_cgroup: null`)
+   - Throttled periods with an end snapshot exist in Phase 2 and Phase 7
 
 2. **BPF traces collected:**
    - runqlat histograms for each workload type

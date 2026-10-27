@@ -187,7 +187,9 @@ resources:
 
 **Kernel tuning:**
 - Use CFS bandwidth control (default) for most workloads
-- Consider `cpu.cfs_period_us=10000` (10ms) for latency-sensitive workloads
+- Leave the 100 ms quota period alone unless you have measured that its
+  granularity is the problem. A longer period means a longer forced wait when
+  the quota runs out.
 - Avoid CPU pinning unless you have NUMA-aware workloads
 
 **Scheduler configuration:**

@@ -19,6 +19,11 @@ start. This record does not claim a confirmatory result.
 | Confirmatory campaign | BLOCKED | `CONFIRMATORY.md` records that no confirmatory workload ran. |
 | Focused kernel and sched_ext experiments | NOT RUN | They require a successful confirmatory authorization. |
 
+> The Phase 7.6 scheduler comparison and the Phase 7.7 incident simulation were
+> run later as an exploratory track, outside this confirmatory protocol. They
+> are reported in `PHASE7_COMPLETE.md` and are not confirmatory results; the
+> gate above still describes the confirmatory campaign.
+
 Do not run `task cpu-limits-confirm`, focused experiments, or report a
 confirmatory result until a new pilot creates successful `policies.json` and
 `sample-size.json` records for every required workload and contrast.

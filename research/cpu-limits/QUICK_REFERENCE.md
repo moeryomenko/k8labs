@@ -2,7 +2,7 @@
 
 **Research:** k8labs  
 **Date:** October 2026  
-**Status:** Production-Ready
+**Status:** Measured results; Phase 7.6 (kernel comparison) and 7.7 (incidents) included
 
 ---
 
@@ -13,53 +13,82 @@
 | HTTP API, microservice | Request-Only | `requests: cpu: "1000m"` (no limits) |
 | Database, cache | Guaranteed | `requests: cpu: "2000m"` + `limits: cpu: "2000m"` |
 | Trading, real-time | CPU Pinning | `requests: cpu: "4"` + `limits: cpu: "4"` (integer) |
-| Multi-tenant SaaS | Multi-Tenant | `requests: cpu: "500m"` + `limits: cpu: "2000m"` |
-| Batch job, ML training | BestEffort | No requests or limits |
+| Multi-tenant SaaS / noisy neighbour | Multi-Tenant | `requests: cpu: "500m"` + `limits: cpu: "2000m"` |
+| Batch job, ML training | Guaranteed | `requests: cpu: "2000m"` + `limits: cpu: "2000m"` |
 
 ---
 
 ## Sizing Formula
 
-### Step 1: Monitor for 7 days
+### Step 1: Measure usage
 ```promql
-# Get P50 and P95 usage
-quantile(0.50, rate(container_cpu_usage_seconds_total[5m]))
-quantile(0.95, rate(container_cpu_usage_seconds_total[5m]))
+# How much CPU the container actually uses
+rate(container_cpu_usage_seconds_total{pod="<pod>"}[5m])
+
+# And the quantiles, over a representative window
+quantile(0.95, rate(container_cpu_usage_seconds_total{pod="<pod>"}[5m]))
 ```
+
+You want p50 **and** p95: the p50 shows typical load, the p95 shows the burst
+the request has to cover.
 
 ### Step 2: Calculate
 ```
-Request-Only Pattern:
-  request = P50 × 1.2
+Request-Only Pattern (latency-sensitive):
+  request = measured P95
   limit = none
 
-Guaranteed Pattern:
-  request = P95 × 1.1
-  limit = request  (same!)
+Guaranteed Pattern (CPU-bound, or predictable critical services):
+  request = measured P95
+  limit = request        (equal: no forced wait)
 
-Multi-Tenant Pattern:
-  request = P50 × 1.2
-  limit = min(P95, request × 4)
+Multi-Tenant / noisy-neighbour Pattern:
+  request = measured need
+  limit = well above the pod's own P99 usage
 ```
 
-### Step 3: Monitor throttling
+Do not size a request below a sustained load; the request sets `cpu.weight`,
+and a low weight loses contention. Phase 7.5 measured 100m → weight 17 and
+250m → weight 35.
+
+### Step 3: Monitor throttling **and** latency
 ```promql
-# Should be < 5%
-rate(container_cpu_cfs_throttled_seconds_total[5m])
+# Throttled share of runnable time
+100 * rate(container_cpu_cfs_throttled_seconds_total{pod="<pod>"}[5m])
+/ (rate(container_cpu_usage_seconds_total{pod="<pod>"}[5m])
+   + rate(container_cpu_cfs_throttled_seconds_total{pod="<pod>"}[5m]))
 ```
+
+There is no universal safe percentage. Phase 7.1 measured a pod throttled in
+99.7% of periods while its median latency stayed flat. Judge with the service's
+own p99.
 
 ---
 
 ## Research Findings
 
-| Configuration | Throttling % | Performance Impact |
-|---------------|--------------|-------------------|
-| Appropriate limits | 0% | No impact |
-| Light throttle (4.7%) | 4.7% | -4.5% perf |
-| Moderate throttle (46.6%) | 46.6% | -39.7% perf |
-| **Heavy throttle (69.8%)** | **69.8%** | **-62.7% perf** ⚠️ |
+CPU-bound throughput, Phase 4 (`phase4/evidence/throttling-summary.json`):
 
-**Key Insight:** Heavy throttling doesn't just reduce CPU - it fragments execution and increases latency dramatically.
+| Configuration | Request | Limit | Ops/sec | vs baseline |
+|---------------|---------|-------|---------|-------------|
+| No limit | 2000m | 4000m | 139.05 | baseline |
+| Light | 1000m | 3000m | 108.78 | -21.8% |
+| Moderate | 500m | 1500m | 53.57 | -61.5% |
+| **Heavy** | 100m | 500m | **19.22** | **-86.2%** |
+
+nginx latency, Phase 7.1 (`evidence/phase7/real-apps/`):
+
+| Limit | Throughput | p50 | p99 | Throttled |
+|-------|-----------|-----|-----|-----------|
+| none | 7216 req/s | 2.04 ms | 13.98 ms | 0% |
+| 120m | 3481 req/s | 2.13 ms | 69.43 ms | 99.7% |
+| 100m | 2991 req/s | 2.20 ms | 67.76 ms | 95.6% |
+| 70m | 2071 req/s | 2.16 ms | 98.87 ms | 75.1% |
+
+**Key Insight:** a quota does not slow execution evenly. It stops tasks at the
+quota boundary until the next 100 ms period, so the median survives and the
+tail collapses. Phase 7.4 measured the wait directly: worst case 5.5 ms with no
+limit against 71.7 ms at 100m.
 
 ---
 
@@ -67,9 +96,11 @@ rate(container_cpu_cfs_throttled_seconds_total[5m])
 
 | ❌ Anti-Pattern | ✅ Better Approach |
 |----------------|-------------------|
-| Tiny request, huge limit (100m, 2000m) | Request ≥ 50% of limit |
-| Copy-paste from tutorials (100m, 128Mi) | Monitor and size correctly |
-| Set and forget (no monitoring) | Alert on throttling > 5% |
+| A limit below observed peak on a latency-sensitive service (7.1: p99 13.98 → 69.43 ms) | Remove the CPU limit; keep the request |
+| Capping the victim to "protect" it from a noisy neighbour | Cap the noisy neighbour (7.3) |
+| Reading throttle percentage as a severity score | Use it to find candidates, rank by p99 |
+| Copy-paste from tutorials (100m, 128Mi) | Measure p95 and size from it |
+| Set and forget (no monitoring) | Alert on throttling and track the service's own p99 |
 | Same values for all pods | Profile each workload |
 
 ---
@@ -78,10 +109,13 @@ rate(container_cpu_cfs_throttled_seconds_total[5m])
 
 ### When to Tune
 
+> No scheduler-parameter tuning was measured in this research. The table below
+> is documented guidance; the tail latency this research measured came from the
+> CPU quota, not from scheduler timeslices. Fix the quota first.
+
 | Symptom | Parameter | Direction |
 |---------|-----------|-----------|
-| High P99 latency | `sched_latency_ns` | Reduce: 6ms → 3ms |
-| High P99 latency | `sched_cfs_bandwidth_slice_us` | Reduce: 5ms → 1ms |
+| High P99 latency, quota not binding | `sched_latency_ns` | Reduce: 6ms → 3ms |
 | Excessive context switches | `sched_min_granularity_ns` | Increase: 0.75ms → 2ms |
 | Real-time requirements | Boot params | Add `isolcpus=2-7` |
 
@@ -89,14 +123,14 @@ rate(container_cpu_cfs_throttled_seconds_total[5m])
 
 **Latency-Sensitive (APIs, DBs):**
 ```bash
+# Documented starting point, not a measured optimum
 echo 3000000 > /proc/sys/kernel/sched_latency_ns
-echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ```
 
 **Throughput (Batch, ML):**
 ```bash
+# Documented starting point, not a measured optimum
 echo 24000000 > /proc/sys/kernel/sched_latency_ns
-echo 10000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ```
 
 **Balanced (Multi-Tenant):**
@@ -111,7 +145,7 @@ echo 10000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ### Should You Use scx?
 
 ✅ **Yes, consider for:**
-- Real-time/trading systems (< 10μs latency required)
+- Real-time/trading systems with a measured scheduler-side latency problem
 - HPC with gang scheduling
 - Research and experimentation
 
@@ -119,6 +153,13 @@ echo 10000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 - General-purpose Kubernetes (CFS works well)
 - Multi-tenant clusters (less proven fairness)
 - Compliance-sensitive workloads (new tech)
+
+> Measured in Phase 7.6 on `7.3.0-k8labs`: `scx_lavd --performance` did not
+> enforce `cpu.max` at all (12.22 CPU-seconds consumed against a 4.0
+> CPU-second quota) until `--enable-cpu-bw`, which the scheduler calls highly
+> experimental, was added. It also gave the four-thread group 3.4-4.5 times the
+> CPU of a single thread whose cgroup weight was four times higher. Do not
+> attach it to a cluster that depends on those two mechanisms.
 
 ### Requirements
 - Linux kernel **6.12+** with `CONFIG_SCHED_CLASS_EXT=y`
@@ -131,18 +172,20 @@ echo 10000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ### 4 Queries Every Cluster Needs
 
 ```promql
-# 1. CPU throttling rate (alert if > 5%)
-rate(container_cpu_cfs_throttled_seconds_total[5m])
+# 1. Throttled share of runnable time, in percent. Find candidates; rank by p99.
+100 * rate(container_cpu_cfs_throttled_seconds_total[5m])
+/ (rate(container_cpu_usage_seconds_total[5m])
+   + rate(container_cpu_cfs_throttled_seconds_total[5m]))
 
-# 2. CPU usage vs request (should be < 80%)
+# 2. CPU usage vs request
 rate(container_cpu_usage_seconds_total[5m]) /
   kube_pod_container_resource_requests{resource="cpu"}
 
-# 3. CPU usage vs limit (should be < 90%)
+# 3. CPU usage vs limit
 rate(container_cpu_usage_seconds_total[5m]) /
   kube_pod_container_resource_limits{resource="cpu"}
 
-# 4. Throttled periods (high = bad)
+# 4. Throttled periods per second
 rate(container_cpu_cfs_throttled_periods_total[5m])
 ```
 
@@ -157,39 +200,49 @@ rate(container_cpu_cfs_throttled_periods_total[5m])
     summary: "CPU throttling detected"
 ```
 
+The 0.1 (10%) threshold is an operational default, not a measured boundary.
+Phase 7.1 measured heavy throttling that cost 5x on p99 and heavy throttling
+that cost 2x, so the number alone does not tell you the impact.
+
 ---
 
 ## QoS Classes Explained
 
-| QoS Class | Requests | Limits | Scheduler Priority | OOM Priority |
-|-----------|----------|--------|-------------------|--------------|
-| **Guaranteed** | Set | Set (same) | High | Protected |
-| **Burstable** | Set | Higher or none | Medium | Medium |
-| **BestEffort** | None | None | Low | Killed first |
+| QoS Class | Requests | Limits | cgroup weight (measured) | OOM Priority |
+|-----------|----------|--------|--------------------------|--------------|
+| **Guaranteed** | Set | Set (same) | 100 (nice 0) in Phase 7.2 | Protected |
+| **Burstable** | Set | Higher or none | 59 (nice 2) for a 500m request | Medium |
+| **BestEffort** | None | None | 1 (nice 19) | Killed first |
+
+The weights are real values read from the pod cgroups in Phase 7.2. A single
+Guaranteed pod is not automatically weight 100 if the request is small; the
+weight follows `requests.cpu`, and Phase 7.5 measured 100m → 17.
 
 ### When to Use Each
 
-- **Guaranteed:** Databases, critical services (predictable performance)
-- **Burstable:** APIs, microservices (flexibility + safety)
-- **BestEffort:** Batch jobs only (use idle CPU)
+- **Guaranteed:** Databases, critical services (predictable, no forced wait)
+- **Burstable:** APIs, microservices (the normal case)
+- **BestEffort:** only where weight 1 is acceptable. Phase 7.2 measured p99
+  65.44 ms for BestEffort against 31.28 ms for Burstable under contention.
 
 ---
 
 ## Decision Tree
 
 ```
-Are you in a multi-tenant cluster?
-├─ Yes → Use limits (Multi-Tenant Pattern)
-│   └─ request = P50 × 1.2
-│   └─ limit = request × 4 (burst factor)
+Is the workload latency-sensitive (has an SLO)?
+├─ Yes → Request-Only Pattern (RECOMMENDED)
+│   └─ request = measured P95
+│   └─ no CPU limit
 │
-└─ No → Do you need guaranteed performance?
-    ├─ Yes → Guaranteed Pattern
-    │   └─ request = limit = P95 × 1.1
+└─ No
+    ├─ Is it CPU-bound batch/throughput work?
+    │   └─ Guaranteed Pattern: request = limit = measured need
     │
-    └─ No → Request-Only Pattern (RECOMMENDED)
-        └─ request = P50 × 1.2
-        └─ no limit
+    └─ Is it a known noisy neighbour or untrusted code?
+        └─ Multi-Tenant Pattern
+            └─ request = measured need
+            └─ limit = well above its own P99 usage
 ```
 
 ---
@@ -197,12 +250,13 @@ Are you in a multi-tenant cluster?
 ## Checklist for Production
 
 ### Developers
-- [ ] Profile workload for 7 days
-- [ ] Calculate P50 and P95 usage
-- [ ] Apply sizing formula
-- [ ] Set up throttling alerts
-- [ ] Document decision in README
-- [ ] Review quarterly
+- [ ] Measure the workload's CPU usage over a representative period
+- [ ] Record P50 and P95 usage
+- [ ] Set `requests.cpu` from P95
+- [ ] Leave `limits.cpu` off unless the pod needs a hard bound
+- [ ] Set up throttling alerts **and** track the service's p99
+- [ ] Document the decision next to the manifest
+- [ ] Review when traffic patterns change
 
 ### Administrators
 - [ ] Deploy monitoring (Prometheus + Grafana)
@@ -219,7 +273,7 @@ Are you in a multi-tenant cluster?
 | Document | Purpose | Lines |
 |----------|---------|-------|
 | `FINAL_SUMMARY.md` | Complete research (5 phases) | 800+ |
-| `GUIDE.md` | Developer/admin guide (Phase 2) | 515 |
+| `GUIDE.md` | Developer/admin guide (Phase 2) | full guide |
 | `phase4/THROTTLING_ANALYSIS.md` | Throttling impact | 300+ |
 | `phase5/admin-guide/KERNEL_CONFIG.md` | CFS tuning | 350+ |
 | `phase5/admin-guide/CUSTOM_SCHEDULERS.md` | scx guide | 350+ |

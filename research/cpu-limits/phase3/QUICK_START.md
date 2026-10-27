@@ -89,9 +89,13 @@ scrape_configs:
 ## What Gets Collected
 
 ### BPF Traces
-- `sched:sched_cfs_quota_throttled` events
-- Per-event timestamps, PIDs, throttled duration
-- Microsecond precision
+- `sched:sched_wakeup` to `sched:sched_switch` pairs (wake-to-run delay)
+- CFS bandwidth transitions from the `sched_cfs_period_timer`,
+  `throttle_cfs_rq_work`, and `unthrottle_cfs_rq` kprobes
+- Nanosecond timestamps; see Phase 7.4 for the delivered trace
+
+> There is no `sched:sched_cfs_quota_throttled` tracepoint. Any probe of that
+> name in this file was wrong; the replacement above is what actually attaches.
 
 ### Cgroup Metrics
 - `cpu.stat` fields (usage, throttling, bursts)
@@ -133,8 +137,9 @@ ls -la /sys/fs/cgroup/kubepods.slice/
 
 ### BPF tracer fails
 ```bash
-# Test bpftrace manually
-sudo bpftrace -e 'tracepoint:sched:sched_cfs_quota_throttled { printf("ok\n"); }'
+# Test bpftrace manually (probes that exist on this kernel)
+sudo bpftrace -e 'kprobe:sched_cfs_period_timer { @n++; }' -c 'sleep 2'
+sudo bpftrace -e 'tracepoint:sched:sched_switch { @n++; }' -c 'sleep 1'
 ```
 
 ### Service won't start (Approach 3)

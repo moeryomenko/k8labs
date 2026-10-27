@@ -1,14 +1,19 @@
 # CPU Requests/Limits Research - Implementation Complete
 
 **Date:** 2026-10-26  
-**Status:** ✅ Phase 1 & 2 Complete | Phase 3 Optional
+**Status:** Phase 1 and 2 complete; Phase 3 superseded by Phase 7.4
+
+> **Correction.** An earlier revision of this file claimed that no CPU
+> throttling occurred in Phase 2. That is false, and the evidence refutes it:
+> where both a start and an end `cpu.stat` snapshot exist, the containers were
+> throttled in nearly every quota period (see Key Findings below).
 
 ---
 
 ## What Was Delivered
 
 ### 1. Comprehensive Guide
-**Location:** `research/cpu-limits/GUIDE.md` (515 lines)
+**Location:** `research/cpu-limits/GUIDE.md`
 
 The guide includes:
 - Executive summary with key findings
@@ -45,14 +50,22 @@ Each experiment captured:
 ### 3. Key Findings
 
 **Performance Impact:**
-- BestEffort: 98.8 ops/sec (can use all available CPU)
-- Burstable: 51.3 ops/sec (limited to 2000m = 2 cores)
-- Guaranteed: 51.5 ops/sec (same as burstable when request == limit)
+- BestEffort: 98.8 ops/sec, but over 0.3 s (short sample); 73.18 ops/sec over
+  the full 120 s run
+- Burstable: 51.41 ops/sec (`cpu.max` = `200000 100000`), 1150/1150 periods
+  throttled
+- Guaranteed: 51.65 ops/sec with a 2-CPU quota; the end snapshot is missing
+  from this run, so its throttling is unknown
 
-**No Throttling Observed:**
-- All experiments completed without CPU throttling
-- This indicates limits were set appropriately for the workload
-- In production, mismatched limits cause throttling even with idle CPU
+**Throttling (where both snapshots exist):**
+- Only 5 of 14 evidence files contain a start *and* an end `cpu.stat`. The rest
+  have `final_cgroup: null`, so their run-level throttling is unknown, not zero.
+- cpu-bound burstable: 1150/1150 periods throttled (100.0%), 22.7s throttled
+- cpu-bound burstable: 1167/1178 periods (99.1%), 29.8s
+- hybrid burstable: 1186/1186 periods (100.0%), 138.9s
+- memory-bound guaranteed: 1170/1172 periods (99.8%), 43.6s
+- The early "no throttling" claim came from reading a start-of-run snapshot
+  (`nr_periods 0`) as a result. The complete per-run table is in `GUIDE.md`.
 
 **Node CPU Usage:**
 - BestEffort used 98.5% of available CPU
@@ -77,7 +90,7 @@ Each experiment captured:
 
 ---
 
-## What's Optional (Phase 3)
+## Phase 3 (superseded)
 
 ### BPF Tracing Integration
 
@@ -173,7 +186,7 @@ python3 generate-guide.py
 
 1. **Demonstrate CPU usage vs throttling**
    - Experiments show CPU usage capped by limits
-   - No throttling occurred (limits were appropriate)
+   - Throttling was measured in every run that has an end snapshot
    - Guide explains when throttling happens
 
 2. **Impact on application types**
@@ -192,13 +205,11 @@ python3 generate-guide.py
    - Cluster-level policies (quotas, limits, priority)
    - Monitoring and alerting setup
 
-### ⏸️ Deferred (Optional)
-
-5. **Low-level BPF traces**
-   - Implementation exists but not deployed
-   - Requires direct node access (not via containers)
-   - Would add scheduler latency analysis
-   - Not blocking for guide completion
+5. **Low-level BPF traces: delivered later as Phase 7.4**
+   - bpftrace ran inside an unprivileged reader pod mounting host tracefs, so
+     node SSH was not needed
+   - `evidence/phase7/live-bpf/scheduler-trace-20261026T192056Z.json`: worst
+     wake-to-run delay 5.5 ms with no limit, 71.7 ms at a 100m limit
 
 ### 📊 Evidence Format
 
@@ -227,10 +238,8 @@ All experiments stored as structured JSON:
    - Batch jobs (spark, flink)
    - Real applications (databases, web servers)
 
-2. **Deploy BPF tracing:**
-   - Get SSH access to Kubernetes nodes
-   - Install systemd service directly on nodes
-   - Correlate scheduler events with throttling
+2. **BPF tracing:** done as Phase 7.4 from the reader pod; the SSH-based
+   systemd service in `phase3/` was not used
 
 3. **Extend monitoring:**
    - Deploy Prometheus + Grafana
@@ -253,7 +262,7 @@ All experiments stored as structured JSON:
 
 ```
 research/cpu-limits/
-├── GUIDE.md                          # 515-line comprehensive guide
+├── GUIDE.md                          # Comprehensive guide
 ├── IMPLEMENTATION_COMPLETE.md         # This file
 ├── phase1/
 │   └── workloads/                    # 6 Pod manifests (besteffort, burstable, guaranteed)

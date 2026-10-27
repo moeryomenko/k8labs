@@ -39,7 +39,8 @@ Kubernetes Pod
 
 **Without limits:**
 - Pods get CPU time proportional to their `cpu.weight`
-- No throttling, can burst to 100% CPU
+- No quota, so no throttling periods; a pod can burst to 100% CPU when the host
+  is otherwise idle
 
 **With limits:**
 - CFS enforces `cpu.max` (quota/period)
@@ -179,35 +180,38 @@ echo 2000000 > /proc/sys/kernel/sched_wakeup_granularity_ns  # 2ms
 
 ---
 
-#### 4. sched_cfs_bandwidth_slice_us
+#### 4. Quota period (cgroup v2 `cpu.max`)
 
-**Default:** `5000` (5ms)  
-**Range:** `1000` - `100000`
+**Default:** 100 ms, matching kubelet's `cpuCFSQuotaPeriod`
 
-Time slice for CFS bandwidth control (throttling). When a cgroup exceeds its quota, it's suspended for the remainder of the period. This controls how long each slice is.
+CFS bandwidth control suspends a cgroup for the rest of the period once it
+exceeds its quota, so the period sets the granularity of throttling. It is not a
+node-wide setting on cgroup v2: each cgroup carries its own period in `cpu.max`,
+and Kubernetes writes kubelet's `cpuCFSQuotaPeriod` there.
 
-**Smaller slices (1ms):**
-- ✅ More responsive throttling
-- ✅ Better for latency-sensitive workloads
-- ❌ More overhead (frequent checks)
-
-**Larger slices (10ms):**
-- ✅ Less overhead
-- ✅ Better for batch workloads
-- ❌ Coarser throttling (longer delays)
-
-**From our Phase 4 research:**
-- Heavy throttle (69.8%) with 5ms slice = severe latency spikes
-- Reducing slice to 1ms may reduce P99 latency (but more CPU overhead)
-
-**Tuning:**
 ```bash
-# For latency-sensitive (fine-grained throttling)
-echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us  # 1ms
-
-# For throughput (coarse-grained throttling)
-echo 10000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us  # 10ms
+# What Kubernetes actually writes (Phase 7.5, live node, kernel 7.3.0-k8labs)
+limits.cpu: 100m   ->  cpu.max = "10000 100000"
+limits.cpu: 250m   ->  cpu.max = "25000 100000"
+no limit           ->  cpu.max = "max 100000"
+cpu.max.burst      ->  0
 ```
+
+**Shorter periods:** a throttled task waits less before it runs again, at the
+cost of more frequent accounting.
+
+**Longer periods:** less accounting overhead, but a throttled task can wait
+proportionally longer.
+
+**Not measured here.** No experiment in this research varied the period. The
+node-wide `sched_cfs_bandwidth_slice_us` knob that older documentation mentions
+is a cgroup v1 interface and does not exist on a cgroup v2 host.
+
+**What this means in practice:**
+- Phase 7.4 measured a 71.7 ms worst-case wake-to-run delay at the default
+  100 ms period, against 5.5 ms with no limit.
+- Removing or right-sizing the CPU limit fixed the measured problem, and does so
+  more reliably than shortening the period (Phase 7.1: p99 69.43 → 13.98 ms).
 
 ---
 
@@ -395,8 +399,10 @@ echo 3000000 > /proc/sys/kernel/sched_latency_ns
 echo 500000 > /proc/sys/kernel/sched_min_granularity_ns
 echo 500000 > /proc/sys/kernel/sched_wakeup_granularity_ns
 
-# Fine-grained throttling
-echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
+# Note: do not tune the bandwidth slice per node on cgroup v2; the quota
+# period is the second field of each cgroup's cpu.max, set by kubelet's
+# cpuCFSQuotaPeriod. The highest-value change for a throttled pod is to
+# remove or right-size its CPU limit (see DEVELOPER_GUIDE.md).
 
 # Prevent migration
 echo 2000000 > /proc/sys/kernel/sched_migration_cost_ns
@@ -427,9 +433,6 @@ echo 24000000 > /proc/sys/kernel/sched_latency_ns
 echo 2000000 > /proc/sys/kernel/sched_min_granularity_ns
 echo 2000000 > /proc/sys/kernel/sched_wakeup_granularity_ns
 
-# Coarse-grained throttling (if using limits)
-echo 10000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
-
 # Allow migration for load balancing
 echo 100000 > /proc/sys/kernel/sched_migration_cost_ns
 ```
@@ -456,7 +459,7 @@ echo 100000 > /proc/sys/kernel/sched_migration_cost_ns
 echo 6000000 > /proc/sys/kernel/sched_latency_ns
 echo 750000 > /proc/sys/kernel/sched_min_granularity_ns
 echo 1000000 > /proc/sys/kernel/sched_wakeup_granularity_ns
-echo 5000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
+# The bandwidth slice is per-cgroup on cgroup v2; there is no node-wide knob.
 ```
 
 **Kubernetes:**
@@ -474,7 +477,8 @@ echo 5000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 cat /proc/sys/kernel/sched_latency_ns
 cat /proc/sys/kernel/sched_min_granularity_ns
 cat /proc/sys/kernel/sched_wakeup_granularity_ns
-cat /proc/sys/kernel/sched_cfs_bandwidth_slice_us
+# cgroup v2: the quota period is per cgroup, not node-wide
+cat /sys/fs/cgroup/<cgroup>/cpu.max
 ```
 
 ### Monitor context switches:
@@ -507,8 +511,10 @@ rate(container_cpu_cfs_throttled_seconds_total[5m]) > 0
 kernel.sched_latency_ns = 3000000
 kernel.sched_min_granularity_ns = 500000
 kernel.sched_wakeup_granularity_ns = 500000
-kernel.sched_cfs_bandwidth_slice_us = 1000
 kernel.sched_migration_cost_ns = 2000000
+
+# cpuCFSQuotaPeriod is a kubelet flag, not a sysctl:
+# --cpu-cfs-quota-period=20ms  (cgroup v2 writes it into each cgroup's cpu.max)
 
 # Apply
 sysctl --system

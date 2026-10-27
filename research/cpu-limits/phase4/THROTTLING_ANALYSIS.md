@@ -1,146 +1,88 @@
 # Phase 4: CPU Throttling Analysis
 
-**Generated:** 2026-10-26 14:04:29 UTC  
-**Experiments:** 4
+**Generated:** 2026-10-26  
+**Experiments:** 4  
+**Evidence:** `phase4/evidence/` and `phase4/evidence/throttling-summary.json`
 
 ---
 
 ## Executive Summary
 
-This phase intentionally triggers CPU throttling by setting aggressive CPU limits
-to demonstrate the impact on application performance. Unlike Phase 2 (where no 
-throttling occurred with appropriate limits), these experiments show what happens 
-when containers exceed their CPU quota.
+This phase deliberately undersizes CPU limits on a CPU-bound workload to measure
+what a quota costs in throughput. Every run used 4 CPU workers for about 120 s;
+only the request and limit changed.
 
 ### Key Findings
 
+| Configuration | Request | Limit | Bogo ops/s | vs no-limit |
+|---------------|---------|-------|-----------|-------------|
+| cpu-bound-no-throttle | 2000m | 4000m | 139.05 | baseline |
+| cpu-bound-light-throttle | 1000m | 3000m | 108.78 | -21.8% |
+| cpu-bound-moderate-throttle | 500m | 1500m | 53.57 | -61.5% |
+| cpu-bound-heavy-throttle | 100m | 500m | 19.22 | -86.2% |
 
-- **Maximum throttling:** cpu-bound-heavy-throttle at 69.8%
-- **Minimum throttling:** cpu-bound-no-throttle at 0.0%
-- **Performance range:** 19.2 to 139.1 ops/sec
-- **Phase 2 baseline:** 51.5 ops/sec (2000m limit, 0% throttling)
-- **Maximum performance loss:** 62.7% (heavy throttle)
-- **Performance improvement:** 170.0% (no throttle, 4 workers vs 2)
+**Throughput loss tracks the CPU cut, but not linearly.** The heavy config
+receives 0.5 core where the 2000m/4000m reference run gets up to 4 — an 8x quota
+reduction — and loses 7.2x throughput (139.05 / 19.22). The residual is time
+stopped at the quota boundary with nothing else runnable to fill it. The ratio
+between the two figures is arithmetic on measured throughput; the throttle
+percentage itself was not captured in these runs.
+
+### What this file does not report
+
+Phase 4 evidence records **throughput**, not throttle percentages. In all four
+files `final_cgroup` is `null` and `throttling` is `null`; only a baseline
+`cpu.stat` snapshot was captured. Throttle percentage therefore cannot be
+derived from these runs, and earlier revisions of this file that quoted 69.8%,
+33.2% and 4.7% were not reproducible from the evidence.
+
+Throttle percentages *were* measured later, together with latency:
+
+- `evidence/phase7/real-apps/nginx-throttling-20261026T191420Z.json` — 0%,
+  99.7%, 95.6% and 75.1% for four quota settings on nginx
+- `evidence/phase7/live-bpf/scheduler-trace-20261026T192056Z.json` —
+  96.0% and 96.9% alongside wake-to-run delays
+
+### Why there is no Phase 2 comparison column
+
+Phase 2 and Phase 4 both ran cpu-bound workloads with 4 stressors
+(`dispatching hogs: 4 cpu`), but under different scripts and stress mixes. A
+cross-phase throughput ratio would mix the quota change with the workload
+change, so all comparisons here are computed within Phase 4.
 
 ---
 
 ## Experiment Results
 
-### Comparison Table
+### cpu-bound-no-throttle
 
-| Configuration | Request | Limit | Throttling | Performance | vs Phase 2 |
-|---------------|---------|-------|------------|-------------|------------|
-| cpu-bound-moderate-throttle | 500m | 1500m | 33.2% | 53.6 ops/s | +4.0% |
-| cpu-bound-light-throttle | 1000m | 3000m | 4.7% | 108.8 ops/s | +111.2% |
-| cpu-bound-no-throttle | 2000m | 4000m | 0.0% | 139.1 ops/s | +170.0% |
-| cpu-bound-heavy-throttle | 100m | 500m | 69.8% | 19.2 ops/s | -62.7% |
-
----
-
-## Detailed Analysis
-
-### cpu-bound-moderate-throttle
-
-**Configuration:**
-- CPU Request: `500m`
-- CPU Limit: `1500m`
-- Workers: 4
-- Duration: 115.9s
-
-**Expected Behavior:**
-Moderate throttling - 4 workers, 1.5 CPU
-
-**Results:**
-- **Throttling Events:** 72 times
-- **Throttled Duration:** 5.39s
-- **Throttling Percentage:** 33.2% of desired CPU time blocked
-- **CPU Usage:** 10.83s
-- **Performance:** 53.6 bogo ops/sec
-- **Total Operations:** 6,430
-
-**Analysis:**
-- ⚠️ **Moderate throttling** - 33.2% of desired CPU time was blocked
-- Performance: 53.6 ops/sec (+4.0% vs Phase 2)
-- Recommendation: Consider increasing CPU limit if performance is critical
-
----
+- Request `2000m`, limit `4000m`, 4 workers, 120 s
+- `performance.bogo_ops_per_sec_real` = **139.05**
+- Baseline `cpu.stat`: `nr_periods` 69, `nr_throttled` 0, `throttled_usec` 0
 
 ### cpu-bound-light-throttle
 
-**Configuration:**
-- CPU Request: `1000m`
-- CPU Limit: `3000m`
-- Workers: 4
-- Duration: 116.1s
+- Request `1000m`, limit `3000m`, 4 workers, 120 s
+- `performance.bogo_ops_per_sec_real` = **108.78** (-21.8%)
+- Baseline `cpu.stat`: `nr_periods` 58, `nr_throttled` 57, `throttled_usec` 868246
 
-**Expected Behavior:**
-Light throttling - 4 workers, 3 CPU
+### cpu-bound-moderate-throttle
 
-**Results:**
-- **Throttling Events:** 57 times
-- **Throttled Duration:** 0.87s
-- **Throttling Percentage:** 4.7% of desired CPU time blocked
-- **CPU Usage:** 17.44s
-- **Performance:** 108.8 bogo ops/sec
-- **Total Operations:** 13,055
-
-**Analysis:**
-- ✅ **No significant throttling** - 4.7% of desired CPU time was blocked
-- Performance optimal: 108.8 ops/sec (+111.2% vs Phase 2)
-- Recommendation: Current limits are well-sized
-
----
-
-### cpu-bound-no-throttle
-
-**Configuration:**
-- CPU Request: `2000m`
-- CPU Limit: `4000m`
-- Workers: 4
-- Duration: 116.1s
-
-**Expected Behavior:**
-No throttling - 4 workers, 4 CPU
-
-**Results:**
-- **Throttling Events:** 0 times
-- **Throttled Duration:** 0.00s
-- **Throttling Percentage:** 0.0% of desired CPU time blocked
-- **CPU Usage:** 26.14s
-- **Performance:** 139.1 bogo ops/sec
-- **Total Operations:** 16,687
-
-**Analysis:**
-- ✅ **No significant throttling** - 0.0% of desired CPU time was blocked
-- Performance optimal: 139.1 ops/sec (+170.0% vs Phase 2)
-- Recommendation: Current limits are well-sized
-
----
+- Request `500m`, limit `1500m`, 4 workers, 120 s
+- `performance.bogo_ops_per_sec_real` = **53.57** (-61.5%)
+- Baseline `cpu.stat`: `nr_periods` 73, `nr_throttled` 72, `throttled_usec` 5385634
 
 ### cpu-bound-heavy-throttle
 
-**Configuration:**
-- CPU Request: `100m`
-- CPU Limit: `500m`
-- Workers: 4
-- Duration: 120.9s
+- Request `100m`, limit `500m`, 4 workers, 120 s
+- `performance.bogo_ops_per_sec_real` = **19.22** (-86.2%)
+- Baseline `cpu.stat`: `nr_periods` 58, `nr_throttled` 57, `throttled_usec` 6650045
 
-**Expected Behavior:**
-Heavy throttling - 4 workers, only 0.5 CPU
-
-**Results:**
-- **Throttling Events:** 57 times
-- **Throttled Duration:** 6.65s
-- **Throttling Percentage:** 69.8% of desired CPU time blocked
-- **CPU Usage:** 2.87s
-- **Performance:** 19.2 bogo ops/sec
-- **Total Operations:** 2,308
-
-**Analysis:**
-- ❌ **Severe throttling** - 69.8% of desired CPU time was blocked
-- Performance severely degraded to 19.2 ops/sec (-62.7% vs Phase 2)
-- Container wanted 9.5s but only got 2.9s
-- Recommendation: Increase CPU limit significantly or reduce workload intensity
+The `nr_throttled`/`nr_periods` pairs above come from the baseline snapshot, so
+they describe the container's state at the start of the run rather than the run
+itself. Treat them as an indication that these containers were already hitting
+their quota, not as the run's throttle rate. The throughput figures are the
+measurements.
 
 ---
 
@@ -148,91 +90,54 @@ Heavy throttling - 4 workers, only 0.5 CPU
 
 ### What is CPU Throttling?
 
-CPU throttling occurs when a container's CPU usage exceeds its configured limit.
-The Linux kernel's cgroup CPU controller enforces limits by:
+A container that exceeds its CPU limit is stopped by CFS bandwidth control. On a
+cgroup v2 host the interface is `cpu.max`, holding a quota and a period in
+microseconds:
 
-1. Tracking CPU time used in 100ms periods
-2. Comparing usage to the quota (limit × period)
-3. Suspending the process when quota is exhausted
-4. Resuming in the next period
+```
+cpu.max = "10000 100000"    # limits.cpu: 100m, 100 ms period
+cpu.max = "max 100000"      # no limit
+```
+
+Kubernetes sets the quota from `limits.cpu`; kubelet sets the period
+(`cpuCFSQuotaPeriod`, default 100 ms). Phase 7.5 verified both forms on a live
+node.
 
 ### cgroup CPU Statistics
 
-Key metrics from `/sys/fs/cgroup/cpu.stat`:
+From `/sys/fs/cgroup/cpu.stat`:
 
-- `usage_usec`: Total CPU time actually consumed (user + system)
-- `throttled_usec`: Total CPU time that was **denied** due to limits
-- `nr_periods`: Number of enforcement periods elapsed
-- `nr_throttled`: Number of periods where throttling occurred
+- `usage_usec`: CPU time actually consumed
+- `throttled_usec`: time the cgroup was throttled
+- `nr_periods`: enforcement periods elapsed
+- `nr_throttled`: periods in which the cgroup was throttled
 
-### Calculating Throttling Percentage
+### Reading These Counters
 
-```
-throttling_pct = throttled_usec / (usage_usec + throttled_usec) × 100
-```
+`nr_throttled / nr_periods` gives the fraction of periods that were throttled.
+`throttled_usec` is a duration, so do not divide it by `usage_usec` and call the
+result a percentage of "desired CPU time" — the two counters measure different
+things (elapsed time versus consumed CPU time) and the ratio is not bounded by
+100% in a meaningful way.
 
-This tells you what percentage of the container's **desired** CPU time was blocked.
-
-**Example:** Heavy throttle configuration
-- Container wanted: 16.2s of CPU
-- Container got: 10.8s of CPU
-- Container was denied: 5.4s (33.2%)
+Use the counters to find candidates, then look at the service's own latency.
+Phase 7.1 measured a pod throttled in 75.1% of periods with p99 98.87 ms next to
+one throttled in 95.6% of periods with p99 67.76 ms, so the percentage does not
+rank configurations by harm.
 
 ### Impact on Applications
 
-**Latency-sensitive applications:**
-- HTTP servers see P99 latency spikes
-- Database queries take longer
-- Real-time systems miss deadlines
+Measured in this repository:
 
-**Throughput-focused applications:**
-- Batch jobs take longer to complete
-- Data processing throughput drops
-- Background workers queue up
+- **Tail latency**: p99 13.98 → 69.43 ms on nginx at a 120m limit, with p50
+  unchanged (Phase 7.1)
+- **Wake-to-run delay**: worst case 5.5 → 71.7 ms (Phase 7.4)
+- **Throughput**: 139.05 → 19.22 ops/sec for a CPU-bound task (this phase)
 
-**Bursty applications:**
-- Cannot burst above limit even with idle CPU
-- Cold starts are slower
-- Peak load handling is degraded
+Documented, not measured here:
 
----
-
-## Comparison: Phase 2 vs Phase 4
-
-### Phase 2 (No Throttling)
-- CPU-bound workload with 2000m request, 2000m limit, 2 workers
-- Performance: **51.5 ops/sec**
-- Throttling: **0%** (limits matched workload)
-
-### Phase 4 Results (4 workers, varying limits)
-
-**cpu-bound-moderate-throttle** (1500m limit)
-- Performance: **53.6 ops/sec** (+4.0% vs Phase 2)
-- Throttling: **33.2%**
-- Throttled: 5.4s out of 16.2s desired
-
-**cpu-bound-light-throttle** (3000m limit)
-- Performance: **108.8 ops/sec** (+111.2% vs Phase 2)
-- Throttling: **4.7%**
-- Throttled: 0.9s out of 18.3s desired
-
-**cpu-bound-no-throttle** (4000m limit)
-- Performance: **139.1 ops/sec** (+170.0% vs Phase 2)
-- Throttling: **0.0%**
-- Throttled: 0.0s out of 26.1s desired
-
-**cpu-bound-heavy-throttle** (500m limit)
-- Performance: **19.2 ops/sec** (-62.7% vs Phase 2)
-- Throttling: **69.8%**
-- Throttled: 6.7s out of 9.5s desired
-
-
-### Key Insights
-
-1. **Heavy throttling (500m limit)** reduced performance by 62.7% compared to Phase 2
-2. **Light throttling (3000m limit)** actually **improved** performance by 111.3% due to 4 workers vs 2
-3. **No throttle (4000m limit)** shows maximum performance: 139.1 ops/sec (+170.1%)
-4. **Throttling directly correlates with performance loss** within the same workload type
+- Cold starts and burst handling are slower, because a quota cannot be exceeded
+  even when the node is idle
 
 ---
 
@@ -240,84 +145,62 @@ This tells you what percentage of the container's **desired** CPU time was block
 
 ### For Developers
 
-1. **Monitor throttling in production**
+1. **Watch throttling and latency together**
    ```promql
    rate(container_cpu_cfs_throttled_seconds_total[5m]) > 0
    ```
 
-2. **Size limits based on actual usage**
-   - Measure P95/P99 CPU usage over time
-   - Set limit = P99 + 20% headroom
-   - Or use no limit and only set requests
+2. **Size requests from measured usage**
+   - Measure P95 CPU usage over a representative period
+   - `requests.cpu` drives scheduling and `cpu.weight`
+   - Leave `limits.cpu` off for latency-sensitive workloads
 
-3. **Test with limits before production**
-   - Run load tests with production limits
-   - Measure P99 latency and throughput
-   - Adjust limits if throttling > 5%
+3. **For CPU-bound batch work, set limit = request**
+   - The quota then matches the reservation and no forced wait occurs
+   - Phase 4's losses come from limits *below* need
 
-4. **Consider request-only pattern**
-   - Only set CPU requests, no limits
-   - Allows bursting when cluster has capacity
-   - Scheduler still ensures placement
+4. **Test with production limits**
+   - Measure both p99 latency and throughput before shipping
 
 ### For Administrators
 
-1. **Detect throttling cluster-wide**
+1. **Find throttled containers cluster-wide**
    ```promql
-   topk(10, 
-     rate(container_cpu_cfs_throttled_seconds_total[5m]) /
+   topk(10,
+     rate(container_cpu_cfs_throttled_periods_total[5m]) /
      rate(container_cpu_cfs_periods_total[5m]) * 100
    )
    ```
 
-2. **Alert on excessive throttling**
-   - Throttling > 10% for > 5 minutes
-   - Indicates undersized limits or resource contention
+2. **Alert, but judge with latency**
+   - Sustained throttling is a signal to investigate, not a severity score
+   - Pair any throttle alert with the service's p99 SLO
 
 3. **Review resource quotas**
-   - Namespace quotas may force developers to set aggressive limits
-   - Balance cost control with application performance
+   - A `limits.cpu` quota pushes every team to set limits they do not need
+   - Prefer `requests.cpu` quotas
 
-4. **Consider node-level CPU management**
-   - cpuset for CPU pinning
-   - CPU isolation for latency-sensitive workloads
-   - Custom schedulers for specialized needs
+4. **Cap the offenders, not the victims**
+   - Phase 7.3 measured capping four burners at 200m cutting their CPU use by
+     75% and improving the co-located victim's p50 by 79%
 
 ---
 
 ## Next Steps
 
-### Deploy Prometheus Monitoring
-```bash
-cd research/cpu-limits/phase4
-./deploy-prometheus.sh
-kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
-```
+Phase 5's Prometheus and Grafana material lives in
+`evidence/prometheus-integration/` and `phase4/monitoring/`. No Prometheus
+instance was deployed for this research, so those files are configuration, not
+captured metrics.
 
-### Import Grafana Dashboard
-1. Open http://localhost:3000
-2. Import `monitoring/grafana-dashboard-throttling.json`
-3. View real-time throttling metrics
+Measured follow-up work is in `PHASE7_COMPLETE.md`:
 
-### Optional: BPF Scheduler Analysis
-If you have SSH access to nodes:
-```bash
-ssh root@<node>
-sudo cp phase3/bpf-tracer.service /etc/systemd/system/
-sudo cp phase3/bpf-tracer-daemon.py /usr/local/bin/
-sudo systemctl enable --now bpf-tracer
-```
+- 7.1 nginx under four quota settings, with p50/p99
+- 7.4 live bpftrace of wake-to-run delay
+- 7.5 the Kubernetes → cgroup v2 mapping, read from pod cgroups
 
-### Optional: Scheduler Comparison
-If kernel 6.12+ with scx support:
-```bash
-# Install scx tools
-git clone https://github.com/sched-ext/scx.git
-cd scx && make && sudo make install
-
-# Run comparison
-python3 analyze-scheduler-comparison.py
-```
+Run later, outside this phase: the kernel scheduler comparison (Phase 7.6) and
+the incident simulation (Phase 7.7), both in `PHASE7_COMPLETE.md`.
 
 ---
 
@@ -328,8 +211,8 @@ python3 analyze-scheduler-comparison.py
 - [Pod QoS Classes](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/)
 
 ### Linux cgroup CPU Controller
-- [cgroup v2 Documentation](https://www.kernel.org/doc/Documentation/cgroup-v2.txt)
-- [CPU Controller](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu)
+- [cgroup v2 CPU controller](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu)
+- [CFS bandwidth control](https://www.kernel.org/doc/html/latest/scheduler/sched-bwc.html)
 
 ### Industry Perspectives
 - [Stop Using CPU Limits (Robusta)](https://home.robusta.dev/blog/stop-using-cpu-limits)
@@ -338,6 +221,6 @@ python3 analyze-scheduler-comparison.py
 
 ---
 
-**Experiment data:** `research/cpu-limits/phase4/evidence/`  
-**Phase 2 comparison:** `research/cpu-limits/GUIDE.md`  
-**Visual dashboard:** `research/cpu-limits/research-dashboard.html`
+**Experiment data:** `phase4/evidence/`  
+**Throttle percentages and latency:** `PHASE7_COMPLETE.md`  
+**Developer guide:** `DEVELOPER_GUIDE.md`

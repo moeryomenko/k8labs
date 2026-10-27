@@ -67,21 +67,25 @@ ps -p $CONTAINER_PID -o pid,comm,cmd
 
 #### CPU Throttle Events
 
+There is no `sched:sched_cfs_quota_throttled` tracepoint. CFS bandwidth
+transitions are traced with kprobes:
+
 ```bash
 sudo bpftrace -e '
-tracepoint:sched:sched_cfs_quota_throttled {
-  printf("%s[%d] throttled for %d us\n",
-    args->comm, args->pid, args->throttled_usec);
-  @throttle_events++;
-  @total_throttled_us += args->throttled_usec;
-}
+kprobe:sched_cfs_period_timer { @periods++; }
+kprobe:throttle_cfs_rq_work { @throttled++; }
+kprobe:unthrottle_cfs_rq   { @unthrottled++; }
 
 END {
-  printf("\nTotal throttle events: %d\n", @throttle_events);
-  printf("Total throttled time: %d us\n", @total_throttled_us);
+  printf("\nQuota period ticks: %d\n", @periods);
+  printf("Throttle transitions: %d\n", @throttled);
+  printf("Unthrottle transitions: %d\n", @unthrottled);
 }
 '
 ```
+
+These are node-wide event counts. Per-cgroup throttle percentages come from
+`cpu.stat` (`nr_periods` / `nr_throttled` deltas), not from BPF.
 
 #### Scheduler Context Switches
 
@@ -161,7 +165,12 @@ POD_UID=$(kubectl get pod cpu-bound-burstable -n cpu-limits-research -o jsonpath
 CGROUP_PATH="/sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod${POD_UID}.slice"
 CONTAINER_PID=$(cat ${CGROUP_PATH}/cgroup.procs | head -1)
 
-sudo bpftrace -e 'tracepoint:sched:sched_cfs_quota_throttled { ... }'
+sudo bpftrace -e '
+kprobe:sched_cfs_period_timer { @periods++; }
+kprobe:throttle_cfs_rq_work { @throttled++; }
+kprobe:unthrottle_cfs_rq { @unthrottled++; }
+END { printf("periods=%d throttled=%d unthrottled=%d\n", @periods, @throttled, @unthrottled); }
+'
 
 # Terminal 3: Monitor cgroup (on node)
 watch -n 1 "cat ${CGROUP_PATH}/cpu.stat"
