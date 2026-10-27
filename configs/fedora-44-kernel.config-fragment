@@ -11,6 +11,20 @@ CONFIG_CGROUPS=y
 CONFIG_CGROUP_SCHED=y
 CONFIG_CFS_BANDWIDTH=y
 CONFIG_CGROUP_CPUACCT=y
+# The kernel/sched/debug.c cgroup_mode switch (up, smp, concur, max, tasks) is
+# compiled only under CONFIG_FAIR_GROUP_SCHED and lives in debugfs under
+# /sys/kernel/debug/sched/cgroup_mode, so both must be enabled.
+CONFIG_FAIR_GROUP_SCHED=y
+CONFIG_DEBUG_FS=y
+CONFIG_DEBUG_FS_ALLOW_ALL=y
+# /sys/kernel/debug/sched/preempt is registered under PREEMPT_DYNAMIC; the
+# preempt=lazy and preempt=full boot parameters select the mode at boot.
+CONFIG_PREEMPT_DYNAMIC=y
+CONFIG_PREEMPT_LAZY=y
+CONFIG_EXPERT=y
+# PREEMPT_RT is deliberately left disabled: it replaces the scheduler locking
+# and is not compatible with sched_ext in the same image (see research/cpu-limits
+# phase 7.6 for the scope note).
 # Secure Boot needs a signed EFI-stub kernel image.
 CONFIG_EFI_STUB=y
 # Module signatures so the signed release can be verified.

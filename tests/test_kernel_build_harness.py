@@ -34,11 +34,14 @@ def test_nvr_rejects_a_non_pinned_source_commit() -> None:
 
 
 def test_nvr_matches_the_kernel_ark_build_output() -> None:
-    # Verified against the SRPM the build system emitted:
+    # Verified against the SRPM the build system emitted for the fragment
+    # without the scheduler-mode options:
     # kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44.src.rpm
+    # The fragment now also selects FAIR_GROUP_SCHED, DEBUG_FS and
+    # PREEMPT_DYNAMIC, so the dist localversion follows the new fragment hash.
     assert (
         kbh.derive_nvr(kbh.PINNED_SOURCE_COMMIT, kbh.config_fragment_hash())
-        == "kernel-7.3.0-0.0.next.20261016.64.k8.46c58e1.fc44"
+        == "kernel-7.3.0-0.0.next.20261016.64.k8.10439ac.fc44"
     )
 
 

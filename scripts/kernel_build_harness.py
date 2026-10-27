@@ -114,6 +114,7 @@ def reproducible_build_macros() -> str:
     """Content of ~/.rpmmacros required for a reproducible build."""
     return RPM_MACROS_LINE + "\n"
 
+
 RUNTIME_RPMS = (
     "kernel-core",
     "kernel-modules",
@@ -167,6 +168,9 @@ REQUIRED_CONFIG_OPTIONS = (
     "CONFIG_CGROUPS",
     "CONFIG_CGROUP_SCHED",
     "CONFIG_CFS_BANDWIDTH",
+    "CONFIG_FAIR_GROUP_SCHED",
+    "CONFIG_DEBUG_FS",
+    "CONFIG_PREEMPT_DYNAMIC",
     "CONFIG_EFI_STUB",
     "CONFIG_MODULE_SIG",
 )
