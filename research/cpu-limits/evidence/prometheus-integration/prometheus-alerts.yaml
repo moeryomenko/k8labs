@@ -1,0 +1,29 @@
+groups:
+- interval: 30s
+  name: cpu_throttling
+  rules:
+  - alert: HighCPUThrottling
+    annotations:
+      description: Container {{ $labels.pod }} in namespace {{ $labels.namespace }}
+        is being throttled {{ $value }}% of the time.
+      summary: Container {{ $labels.pod }} is being throttled
+    expr: "\n100 * rate(container_cpu_cfs_throttled_seconds_total{namespace!=\"kube-system\"\
+      }[5m])\n/\n(rate(container_cpu_cfs_throttled_seconds_total{namespace!=\"kube-system\"\
+      }[5m])\n + rate(container_cpu_usage_seconds_total{namespace!=\"kube-system\"\
+      }[5m]))\n> 25\n"
+    for: 5m
+    labels:
+      severity: warning
+  - alert: CriticalCPUThrottling
+    annotations:
+      description: Container {{ $labels.pod }} in namespace {{ $labels.namespace }}
+        is being throttled {{ $value }}% of the time. Consider increasing CPU limit
+        or removing it.
+      summary: Container {{ $labels.pod }} is severely throttled
+    expr: "\n100 * rate(container_cpu_cfs_throttled_seconds_total{namespace!=\"kube-system\"\
+      }[5m])\n/\n(rate(container_cpu_cfs_throttled_seconds_total{namespace!=\"kube-system\"\
+      }[5m])\n + rate(container_cpu_usage_seconds_total{namespace!=\"kube-system\"\
+      }[5m]))\n> 50\n"
+    for: 5m
+    labels:
+      severity: critical

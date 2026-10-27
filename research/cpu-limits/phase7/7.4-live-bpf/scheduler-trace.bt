@@ -1,0 +1,78 @@
+#!/usr/bin/env bpftrace
+/*
+ * Phase 7 Topic 7.4: scheduling delay under CPU quota
+ *
+ * Answers one question with kernel data: when a task becomes runnable, how
+ * long does it wait before a CPU runs it, and how often does it lose the CPU?
+ *
+ * Probes:
+ *   sched:sched_wakeup      a task is made runnable (its wait starts here)
+ *   sched:sched_switch      a CPU changes task (last wait ends for the new
+ *                           task; context switches are counted here)
+ *
+ * Only tasks whose comm matches the filter are recorded, so the result is
+ * specific to the container under test rather than the whole node.
+ *
+ * Usage:
+ *   bpftrace -c "sleep 30" scheduler-trace.bt
+ *
+ * Output: one JSON object on exit.
+ */
+
+BEGIN
+{
+    @start = nsecs;
+    @switches = 0;
+    @wakeups = 0;
+    @missing_wakeup = 0;
+}
+
+tracepoint:sched:sched_wakeup
+/args->comm == $1/
+{
+    @wakeups++;
+    @queued[args->pid] = nsecs;
+}
+
+tracepoint:sched:sched_switch
+/args->next_comm == $1/
+{
+    @switches++;
+
+    $pid = args->next_pid;
+    if (@queued[$pid] != 0) {
+        $wait = nsecs - @queued[$pid];
+        @wait_ns = hist($wait);
+        @wait_sum += $wait;
+        @wait_count++;
+        if ($wait > @wait_max) {
+            @wait_max = $wait;
+        }
+        delete(@queued[$pid]);
+    } else {
+        // The task never slept in the traced window, or its wakeup was
+        // outside the filter. Counted so the ratio is visible.
+        @missing_wakeup++;
+    }
+}
+
+tracepoint:sched:sched_switch
+/args->prev_comm == $1/
+{
+    @switched_away++;
+}
+
+END
+{
+    // bpftrace printf accepts only integer and string specifiers, so each
+    // value is scaled to integers and the decimal point is written as text.
+    printf("{\"duration_ms\": %d,", (nsecs - @start) / 1000000);
+    printf("\"wakeups\": %d,", @wakeups);
+    printf("\"switches_in\": %d,", @switches);
+    printf("\"switches_out\": %d,", @switched_away);
+    printf("\"waits_measured\": %d,", @wait_count);
+    printf("\"waits_without_wakeup\": %d,", @missing_wakeup);
+    printf("\"wait_total_us\": %d,", @wait_sum / 1000);
+    printf("\"wait_mean_us\": %d.%d,", @wait_count ? (@wait_sum / 1000) / @wait_count : 0, @wait_count ? ((@wait_sum / 1000) % @wait_count) * 10 / @wait_count : 0);
+    printf("\"wait_max_us\": %d}\n", @wait_max / 1000);
+}
