@@ -1,0 +1,380 @@
+# Phase 8 campaign environment.
+#
+# Images come from the k8labs host registry at 192.168.124.1:5000, which the
+# node image already configures as an insecure registry
+# (`etc/containers/registries.conf.d/10-k8s-labs.conf`). Docker Hub rate-limits
+# the worker nodes, so pulling directly from it makes a campaign non-repeatable.
+#
+# One namespace holds the measuring instrument and its real dependencies. The
+# campaign runner creates per-cell Deployments from `workload-template.yaml` and
+# deletes them between cells; everything else here is long-lived and shared so a
+# cell's wall-clock time is measurement, not provisioning.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bench-postgres
+  namespace: cpu-limit-autoscale
+type: Opaque
+stringData:
+  # Development credentials for a lab namespace. Never reuse outside a cluster
+  # that is reserved for this campaign.
+  POSTGRES_USER: bench
+  POSTGRES_PASSWORD: bench
+  POSTGRES_DB: bench
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  replicas: 1
+  # A single writer with local storage: never run two of these at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: cpu-limit-autoscale
+    spec:
+      containers:
+        - name: postgres
+          image: 192.168.124.1:5000/library/postgres:17-alpine
+          envFrom:
+            - secretRef:
+                name: bench-postgres
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            # Tuned for a measurement backend: predictable fsync and enough
+            # connections for several replicas without hiding pool starvation.
+            - name: POSTGRES_INITDB_ARGS
+              value: --data-checksums
+          args:
+            - -c
+            - max_connections=200
+            - -c
+            - shared_buffers=256MB
+            - -c
+            - synchronous_commit=on
+            - -c
+            - log_min_duration_statement=500
+          ports:
+            - name: postgres
+              containerPort: 5432
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, bench, -d, bench]
+            periodSeconds: 5
+            failureThreshold: 12
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        # Measurement backend, not a database of record. The cluster has no
+        # StorageClass, and durability across a cell would not change any CPU
+        # measurement. A cell starts from an empty data directory by design.
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/part-of: cpu-limit-autoscale
+    spec:
+      containers:
+        - name: redis
+          image: 192.168.124.1:5000/library/redis:7-alpine
+          # No persistence and a bounded cache: measurement needs a fast, empty
+          # cache at the start of each cell, not durability across it.
+          args:
+            - redis-server
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxmemory
+            - 256mb
+            - --maxmemory-policy
+            - allkeys-lru
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: [redis-cli, ping]
+            periodSeconds: 5
+            failureThreshold: 12
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: cpu-limit-autoscale
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cpu-limit-autoscale-otel
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets, deployments]
+    verbs: [get, list, watch]
+# The campaign harness runs in this namespace and needs to read the metrics it
+# just caused. It gets no write access outside its own namespace.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: campaign-runner
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: campaign-runner
+  namespace: cpu-limit-autoscale
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/exec]
+    verbs: [get, list, watch, create]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list]
+  - apiGroups: ["apps"]
+    resources: [deployments]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: campaign-runner
+  namespace: cpu-limit-autoscale
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: campaign-runner
+subjects:
+  - kind: ServiceAccount
+    name: campaign-runner
+    namespace: cpu-limit-autoscale
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cpu-limit-autoscale-otel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cpu-limit-autoscale-otel
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: cpu-limit-autoscale
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: cpu-limit-autoscale
+data:
+  config.yaml: |
+    # Mirrors `manifests/otel-collector.yaml`; kept inline so the namespace is
+    # self-contained for a campaign run.
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch:
+        timeout: 2s
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 20
+      k8sattributes:
+        auth_type: serviceAccount
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.container.name
+            - k8s.deployment.name
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: connection
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        resource_to_telemetry_conversion:
+          enabled: true
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [prometheus, debug]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/part-of: cpu-limit-autoscale
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          image: 192.168.124.1:5000/otel/opentelemetry-collector-contrib:0.140.0
+          args: [--config=/etc/otel/config.yaml]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+            - name: metrics
+              containerPort: 8889
+          resources:
+            # The collector must not compete with the measured workload. A
+            # guaranteed class keeps its own measurements stable.
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+    - name: metrics
+      port: 8889
+      targetPort: metrics

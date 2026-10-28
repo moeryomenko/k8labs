@@ -1,0 +1,262 @@
+# Prometheus configuration for the cpu-limit-autoscale cell.
+#
+# The recording rules in `fitter-live-contract` are the normalisation layer
+# between the instrumented sources (bench service, cAdvisor, kube-state-metrics)
+# and the frozen telemetry contract consumed by fitter. They exist because the
+# sources expose different metric names and identity labels than the contract
+# requires, and because `resource.cpu.*` must be derived with `rate()`.
+#
+# Every rule output carries the full identity set that fitter filters on:
+#   service_name="cpu-limit-bench"
+#   workload_profile="mixed-http"
+#   workload_mix="balanced"
+#   k8s_container_name="app"
+#
+# The rules are cell-specific on purpose. A generic rule would label unrelated
+# workloads as this cell, and fitter's query has no cell selector to tell them
+# apart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fitter-prometheus-config
+  namespace: cpu-limit-autoscale
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    rule_files:
+      - /etc/prometheus/rules.yml
+    scrape_configs:
+    - job_name: otel-collector
+      static_configs:
+      - targets: [otel-collector.cpu-limit-autoscale.svc:8889]
+    - job_name: kube-state-metrics
+      static_configs:
+      - targets: [kube-state-metrics.cpu-limit-autoscale.svc:8080]
+    - job_name: kubelet-cadvisor
+      scheme: https
+      kubernetes_sd_configs:
+      - role: node
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        insecure_skip_verify: true
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+      metric_relabel_configs:
+      - source_labels: [container]
+        regex: ""
+        action: drop
+      - source_labels: [pod]
+        regex: ""
+        action: drop
+  rules.yml: |
+    groups:
+      - name: fitter-live-contract
+        interval: 5s
+        rules:
+          # Service signals. The bench service already exposes workload_profile,
+          # workload_mix and service_name; only the container identity is absent.
+          - record: http_server_request_rate_per_second
+            expr: |
+              label_replace(
+                sum by (workload_profile, workload_mix, service_name) (
+                  http_server_request_rate_per_second{
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live",
+                    service_name="cpu-limit-bench"
+                  }
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+
+          - record: http_server_request_duration_milliseconds_bucket
+            expr: |
+              label_replace(
+                sum by (le, workload_profile, workload_mix, service_name) (
+                  http_server_request_duration_milliseconds_bucket{
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live",
+                    service_name="cpu-limit-bench"
+                  }
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+
+          # A healthy workload never increments the error counter, so the raw
+          # series does not exist. The zero is emitted only while real requests
+          # are being counted, so a dead workload still yields no series and
+          # fitter still refuses to act.
+          - record: http_server_request_errors_total
+            expr: |
+              label_replace(
+                sum by (workload_profile, workload_mix, service_name) (
+                  rate(http_server_request_errors_total{
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live"
+                  }[1m])
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+              or
+              label_replace(
+                0 * sum by (workload_profile, workload_mix, service_name) (
+                  rate(http_server_request_duration_milliseconds_count{
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live"
+                  }[1m])
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+
+          - record: db_client_operation_duration_milliseconds_bucket
+            expr: |
+              label_replace(
+                sum by (le, workload_profile, workload_mix, service_name) (
+                  db_client_operation_duration_milliseconds_bucket{
+                    db_system="postgresql",
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live",
+                    service_name="cpu-limit-bench"
+                  }
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+
+          - record: db_client_pool_wait_duration_milliseconds_bucket
+            expr: |
+              label_replace(
+                sum by (le, workload_profile, workload_mix, service_name) (
+                  db_client_pool_wait_duration_milliseconds_bucket{
+                    db_system="postgresql",
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live",
+                    service_name="cpu-limit-bench"
+                  }
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+
+          - record: cache_client_operation_duration_milliseconds_bucket
+            expr: |
+              label_replace(
+                sum by (le, workload_profile, workload_mix, service_name) (
+                  cache_client_operation_duration_milliseconds_bucket{
+                    cache_system="redis",
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live",
+                    service_name="cpu-limit-bench"
+                  }
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+
+          - record: cache_client_pool_wait_duration_milliseconds_bucket
+            expr: |
+              label_replace(
+                sum by (le, workload_profile, workload_mix, service_name) (
+                  cache_client_pool_wait_duration_milliseconds_bucket{
+                    cache_system="redis",
+                    k8s_namespace_name="cpu-limit-autoscale",
+                    k8s_deployment_name="fitter-live",
+                    service_name="cpu-limit-bench"
+                  }
+                ),
+                "k8s_container_name", "app", "service_name", ".+"
+              )
+
+          # Kubernetes signals. cAdvisor exposes cumulative counters with
+          # `container`/`namespace`/`pod` labels, so the contract gauge values
+          # are derived here and the container identity is copied from the real
+          # series rather than invented.
+          - record: k8s_container_cpu_usage
+            expr: |
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      sum by (container, pod) (
+                        rate(container_cpu_usage_seconds_total{
+                          namespace="cpu-limit-autoscale",
+                          container="app",
+                          pod=~"fitter-live-.*"
+                        }[1m]) * 1000
+                      ),
+                      "k8s_container_name", "$1", "container", "(.+)"
+                    ),
+                    "service_name", "cpu-limit-bench", "container", ".+"
+                  ),
+                  "workload_profile", "mixed-http", "container", ".+"
+                ),
+                "workload_mix", "balanced", "container", ".+"
+              )
+
+          - record: k8s_container_cpu_throttling
+            expr: |
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      sum by (container, pod) (
+                        rate(container_cpu_cfs_throttled_seconds_total{
+                          namespace="cpu-limit-autoscale",
+                          container="app",
+                          pod=~"fitter-live-.*"
+                        }[1m])
+                      ),
+                      "k8s_container_name", "$1", "container", "(.+)"
+                    ),
+                    "service_name", "cpu-limit-bench", "container", ".+"
+                  ),
+                  "workload_profile", "mixed-http", "container", ".+"
+                ),
+                "workload_mix", "balanced", "container", ".+"
+              )
+
+          - record: k8s_hpa_desired_replicas
+            expr: |
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      sum by (horizontalpodautoscaler) (
+                        kube_horizontalpodautoscaler_status_desired_replicas{
+                          namespace="cpu-limit-autoscale",
+                          horizontalpodautoscaler="fitter-live"
+                        }
+                      ),
+                      "service_name", "cpu-limit-bench", "horizontalpodautoscaler", ".+"
+                    ),
+                    "workload_profile", "mixed-http", "horizontalpodautoscaler", ".+"
+                  ),
+                  "workload_mix", "balanced", "horizontalpodautoscaler", ".+"
+                ),
+                "k8s_container_name", "app", "horizontalpodautoscaler", ".+"
+              )
+
+          - record: k8s_hpa_current_replicas
+            expr: |
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      sum by (horizontalpodautoscaler) (
+                        kube_horizontalpodautoscaler_status_current_replicas{
+                          namespace="cpu-limit-autoscale",
+                          horizontalpodautoscaler="fitter-live"
+                        }
+                      ),
+                      "service_name", "cpu-limit-bench", "horizontalpodautoscaler", ".+"
+                    ),
+                    "workload_profile", "mixed-http", "horizontalpodautoscaler", ".+"
+                  ),
+                  "workload_mix", "balanced", "horizontalpodautoscaler", ".+"
+                ),
+                "k8s_container_name", "app", "horizontalpodautoscaler", ".+"
+              )

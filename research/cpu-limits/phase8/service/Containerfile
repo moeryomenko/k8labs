@@ -1,0 +1,33 @@
+# Build the reference service image.
+#
+# Build context is the `service/` directory so the campaign can rebuild the
+# measuring instrument from a clean checkout without network access beyond the
+# crate registry.
+FROM docker.io/library/rust:1.88-slim AS builder
+
+WORKDIR /build
+
+COPY Cargo.toml Cargo.lock ./
+# Cache dependency compilation separately from the source tree so iteration on
+# the service does not rebuild the whole graph.
+RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+    && cargo build --release \
+    && rm -rf src
+
+COPY src ./src
+RUN touch src/main.rs && cargo build --release
+
+FROM docker.io/library/debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/cpu-limit-bench /usr/local/bin/cpu-limit-bench
+
+# Run unprivileged. The campaign measures CPU throttling, not root access.
+RUN useradd --uid 10001 --create-home bench
+USER 10001
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/cpu-limit-bench"]

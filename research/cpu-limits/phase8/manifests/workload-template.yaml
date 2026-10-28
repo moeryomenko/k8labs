@@ -1,0 +1,147 @@
+# Workload template for one campaign cell.
+#
+# This file is a template, not an object to apply directly. The campaign runner
+# substitutes every `NAME` field wrapped in double braces, then applies the
+# result. Placeholders appear only as YAML values, never inside comments.
+#
+# Two containers by design:
+#   app      - the measured service; its CPU limit is the factor under test.
+#   sidecar  - an explicit second container so the model must declare CPU
+#              policy for more than one container and the autosizer must never
+#              infer a value for it.
+#
+# The sidecar is a pause-like, near-idle process: it must be present and
+# attributable, but it must not consume CPU in a way that confounds the app's
+# throttling measurement.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-{{CELL}}
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: cpu-limit-bench
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+    cpu-limit-autoscale/experiment: "phase8"
+    cpu-limit-autoscale/cell: "{{CELL}}"
+spec:
+  replicas: 1
+  # Resize experiments must not trigger a rollout: an in-place resize keeps the
+  # pod identity and cgroup, and a replacement pod would invalidate the
+  # measurement window.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cpu-limit-bench
+      cpu-limit-autoscale/cell: "{{CELL}}"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cpu-limit-bench
+        app.kubernetes.io/part-of: cpu-limit-autoscale
+        cpu-limit-autoscale/experiment: "phase8"
+        cpu-limit-autoscale/cell: "{{CELL}}"
+      annotations:
+        # Workload identity the model must match exactly before fitter acts.
+        cpu-limit-autoscale/profile: db-cache-mixed
+        cpu-limit-autoscale/contract-version: db-cache-mixed/v1
+    spec:
+      # Required, not preferred: a cell measures its own CPU limit, and a cell
+      # that lands on a neighbour's node would measure the neighbour instead.
+      # One replica per cell means the only way a cell waits for a node is
+      # exclusivity, which a stampede would otherwise violate silently.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: cpu-limit-bench
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: app
+          image: 192.168.124.1:5000/cpu-limit-bench:0.1.0
+          env:
+            - name: POSTGRES_URL
+              value: postgres://bench:bench@postgres:5432/bench
+            - name: REDIS_URL
+              value: redis://redis:6379
+            - name: WORKLOAD_PROFILE
+              value: db-cache-mixed
+            - name: WORKLOAD_MIX
+              value: "{{MIX}}"
+            - name: CPU_ITERATIONS
+              value: "{{CPU_ITERATIONS}}"
+            - name: POSTGRES_POOL_SIZE
+              value: "{{POSTGRES_POOL_SIZE}}"
+            - name: REDIS_POOL_SIZE
+              value: "{{REDIS_POOL_SIZE}}"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector:4317
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: "{{TRACE_SAMPLE_RATIO}}"
+            - name: RUST_LOG
+              value: "warn"
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            # The CPU limit is the factor under test. Requests stay fixed within
+            # a QoS class so a resize never changes the pod's QoS class, which
+            # is immutable after creation.
+            requests:
+              cpu: "{{CPU_REQUEST}}"
+              memory: 256Mi
+            limits:
+              cpu: "{{CPU_LIMIT}}"
+              memory: 256Mi
+          # Probes deliberately avoid dependency latency: a throttled service
+          # must not be killed, or the run measures restarts instead of limits.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+        - name: sidecar
+          # A second explicit container. Idle by construction: it exists so the
+          # model and the autosizer must carry a declared policy for every
+          # selected container rather than inferring one.
+          image: 192.168.124.1:5000/library/redis:7-alpine
+          command: ["sh", "-c", "exec sleep infinity"]
+          resources:
+            requests:
+              cpu: "{{SIDECAR_CPU_REQUEST}}"
+              memory: 32Mi
+            limits:
+              cpu: "{{SIDECAR_CPU_LIMIT}}"
+              memory: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bench-{{CELL}}
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: cpu-limit-bench
+    cpu-limit-autoscale/cell: "{{CELL}}"
+spec:
+  selector:
+    app.kubernetes.io/name: cpu-limit-bench
+    cpu-limit-autoscale/cell: "{{CELL}}"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

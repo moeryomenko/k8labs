@@ -1,0 +1,78 @@
+# Temporary in-cluster registry for image delivery.
+#
+# The worker nodes are rate-limited by Docker Hub and are not reachable over
+# SSH, so campaign images must be transferred over the cluster network. This
+# registry exists only to serve images to kubelet; it has no persistent volume
+# and no authentication because it is reachable only inside the cluster.
+#
+# This is a research tool, not a production registry. Delete it after the
+# campaign with `kubectl delete -f 01-registry.yaml`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-registry
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: image-registry
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: image-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: image-registry
+        app.kubernetes.io/part-of: cpu-limit-autoscale
+    spec:
+      containers:
+        - name: registry
+          image: docker.io/library/registry:2
+          env:
+            # Storage is memory-backed: the registry serves images during a
+            # campaign and is disposable afterwards.
+            - name: REGISTRY_STORAGE
+              value: filesystem
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
+            - name: REGISTRY_HTTP_ADDR
+              value: 0.0.0.0:5000
+          ports:
+            - name: registry
+              containerPort: 5000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/registry
+          readinessProbe:
+            httpGet:
+              path: /v2/
+              port: registry
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-registry
+  namespace: cpu-limit-autoscale
+  labels:
+    app.kubernetes.io/name: image-registry
+    app.kubernetes.io/part-of: cpu-limit-autoscale
+spec:
+  selector:
+    app.kubernetes.io/name: image-registry
+  ports:
+    - name: registry
+      port: 5000
+      targetPort: registry

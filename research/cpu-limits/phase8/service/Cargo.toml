@@ -1,0 +1,29 @@
+[package]
+name = "cpu-limit-bench"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "PostgreSQL/Redis request service used to measure CPU-limit throttling"
+
+[dependencies]
+axum = "0.8"
+deadpool-postgres = "0.14"
+deadpool-redis = "0.23"
+rand = "0.9"
+redis = { version = "1.8", default-features = false, features = ["tokio-comp"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tokio-postgres = "0.7"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+opentelemetry = "0.33"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace", "metrics"] }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio", "metrics"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
