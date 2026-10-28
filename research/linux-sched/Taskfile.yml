@@ -51,7 +51,7 @@ tasks:
   linux-sched-setup:
     desc: Verify linux-sched prerequisites (tools, cluster, worker VM access)
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       echo "=== linux-sched — prerequisites ==="
       fail=0
       for cmd in kubectl jq python3; do
@@ -204,7 +204,7 @@ tasks:
   linux-sched-otel-up:
     desc: Start the host-side Pyroscope profile store
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       PROFILE_VOLUME="{{.PROFILE_VOLUME}}" "{{.LINUX_SCHED_OTEL_DIR}}/host/provision-volume.sh"
       cd "{{.LINUX_SCHED_OTEL_DIR}}/host"
       PROFILE_VOLUME="{{.PROFILE_VOLUME}}" docker compose up -d

@@ -5,6 +5,9 @@
 # hyphenated task names.
 version: '3'
 
+# Task 3.54 executes recipes in its internal shell, so bash-only flags such as
+# `set -E` (errtrace) fail; recipes use `set -euo pipefail`, matching `set:`
+# below. `shell: bash` stays for older Task releases that still honored it.
 shell: bash
 silent: true
 set: [errexit, nounset, pipefail]
@@ -93,7 +96,7 @@ tasks:
       CAPI_CORE_COMPONENTS: '{{.CAPI_CORE_COMPONENTS | default ""}}'
       CAPI_RENDERED_OUTPUT: '{{.CAPI_RENDERED_OUTPUT | default ""}}'
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       input="${CAPI_CORE_COMPONENTS:-{{.K8LABS_CACHE_ROOT}}/bootstrap/cluster-api-v1.14.2/core-components.yaml}"
       output="${CAPI_RENDERED_OUTPUT:-{{.K8LABS_CACHE_ROOT}}/manifests/cluster-api-v1.14.2-core-components.yaml}"
       test -f "$input" || { echo "ERROR: verified CAPI manifest not found: $input" >&2; exit 1; }
@@ -104,7 +107,7 @@ tasks:
     desc: Require a verified artifact cache for offline execution
     deps: [versions-check]
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       lock_sha=$(python3 scripts/lock.py --lock versions.lock.yaml | sed -n 's/^lock_sha256=//p')
       python3 scripts/offline.py --cache-root "{{.K8LABS_CACHE_ROOT}}" --lock-digest "$lock_sha"
 
@@ -116,7 +119,7 @@ tasks:
   registry-install:
     desc: Install the k8labs rootless registry quadlet
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       qdir="${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
       mkdir -p "$qdir" "$HOME/.local/state/k8slab/registry"
       install -m 0644 quadlet/registry.container "$qdir/k8slabs-registry.container"
@@ -139,14 +142,14 @@ tasks:
     desc: Download and verify artifacts into the lock-keyed cache
     deps: [versions-check]
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       mkdir -p "{{.K8LABS_CACHE_ROOT}}"
       python3 scripts/cache.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --populate
 
   run-bundle:
     desc: Create a redacted schema-versioned run bundle
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       args=(--lock versions.lock.yaml)
       if [ -n "{{.RUN_ID}}" ]; then args+=(--run-id "{{.RUN_ID}}"); fi
       python3 scripts/run_bundle.py "${args[@]}"
@@ -154,7 +157,7 @@ tasks:
   prune-runs:
     desc: Remove successful run bundles older than RUN_RETENTION_DAYS
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       days="{{.RUN_RETENTION_DAYS}}"
       find build/runs -mindepth 1 -maxdepth 1 -type d -mtime "+$days" -exec rm -rf -- {} + 2>/dev/null || true
 
@@ -162,7 +165,7 @@ tasks:
     desc: Create or reuse the cached-image Kind management cluster
     deps: [prepare-check]
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       command -v kind >/dev/null 2>&1 || { echo "ERROR: kind is required; install the locked kind version" >&2; exit 1; }
       python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --image-id kind-node
       if kind get clusters 2>/dev/null | grep -qx "{{.MGMT_CLUSTER_NAME}}"; then
@@ -179,7 +182,7 @@ tasks:
   kind-down:
     desc: Delete the owned Kind management cluster only when it has no CAPI Clusters (MGMT_FORCE=1 overrides)
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       if ! kind get clusters 2>/dev/null | grep -qx "{{.MGMT_CLUSTER_NAME}}"; then
         echo 'Kind management cluster does not exist'
         exit 0
@@ -197,7 +200,7 @@ tasks:
   base-deps:
     desc: Download CLOUDHV.fd firmware and Fedora Cloud Base image
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       echo '==> Downloading Cloud-Hypervisor UEFI firmware (CLOUDHV.fd)...'
       mkdir -p build
       if [ ! -f "{{.FIRMWARE_DEST}}" ]; then
@@ -228,7 +231,7 @@ tasks:
   base-ssh-key:
     desc: Generate SSH keypair for Packer provisioning
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       echo '==> Generating Packer SSH keypair...'
       if [ ! -f "{{.SSH_KEY}}" ]; then
         ssh-keygen -t ed25519 -f "{{.SSH_KEY}}" -N "" -q
@@ -241,7 +244,7 @@ tasks:
     desc: Generate cloud-init CIDATA disk for Packer build
     deps: [base-ssh-key]
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       echo '==> Generating cloud-init disk for Packer build...'
       tmp=$(mktemp)
       trap 'rm -f "$tmp"' EXIT
@@ -271,7 +274,7 @@ tasks:
     desc: Build base image via Packer in the rootless bake container
     deps: [bake-image, base-deps, base-cloudinit, sysexts, confexts]
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       if [ -f "{{.BASE_IMAGE_DEST}}" ]; then
         newest_raw="$(ls -t extensions/release/*.raw 2>/dev/null | head -n1)"
         if [ -n "$newest_raw" ] && [ "$newest_raw" -nt "{{.BASE_IMAGE_DEST}}" ]; then
@@ -299,7 +302,7 @@ tasks:
   bake-run:
     desc: Run the Packer build inside the rootless bake container
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       podman run --rm \
         --device /dev/kvm --device /dev/net/tun \
         --cap-add NET_ADMIN,NET_RAW \
@@ -319,7 +322,7 @@ tasks:
     desc: Force rebuild of the base image
     deps: [bake-image, base-deps, base-cloudinit, sysexts, confexts]
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       echo 'Forcing base image rebuild via Packer in the bake container...'
       rm -f "{{.BASE_IMAGE_DEST}}"
       rm -rf build/base-image packer/output-base
@@ -496,7 +499,7 @@ tasks:
       - task: kind-up
       - task: host-agent-up
       - cmd: |
-          set -Eeuo pipefail
+          set -euo pipefail
           python3 scripts/load_management_images.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --image-id cluster-api-hypervisor --kind-name "{{.MGMT_CLUSTER_NAME}}"
           python3 scripts/bootstrap_management.py --lock versions.lock.yaml --cache-root "{{.K8LABS_CACHE_ROOT}}" --context "{{.MGMT_CONTEXT}}" --host-agent-config "{{.HOST_AGENT_CONFIG}}"
 
@@ -506,7 +509,7 @@ tasks:
       - task: kind-check
       - task: host-agent-check
       - cmd: |
-          set -Eeuo pipefail
+          set -euo pipefail
           kubectl --context "{{.MGMT_CONTEXT}}" -n cert-manager wait --for=condition=Available deployment --all --timeout=5m
           kubectl --context "{{.MGMT_CONTEXT}}" -n hypervisor-system wait --for=condition=Available deployment/controller-manager --timeout=5m
           python3 scripts/host_agent.py check --config-dir "{{.HOST_AGENT_CONFIG}}"
@@ -600,7 +603,7 @@ tasks:
     cmds:
       - task: mgmt-up
       - cmd: |
-          set -Eeuo pipefail
+          set -euo pipefail
           "{{.TASK_EXE}}" cluster-up
           "{{.TASK_EXE}}" addons-up
           echo '==> Waiting for Cluster {{.CLUSTER_NAME}} to become Available...'
@@ -654,7 +657,7 @@ tasks:
       - task: prereq
       - task: mgmt-up
       - cmd: |
-          set -Eeuo pipefail
+          set -euo pipefail
           echo '==> Applying both Cluster manifests (server-side)...'
           kubectl --context "{{.MGMT_CONTEXT}}" apply --server-side -f capi/cluster.yaml
           kubectl --context "{{.MGMT_CONTEXT}}" apply --server-side -f "{{.MULTI_CLUSTER2_MANIFEST}}"

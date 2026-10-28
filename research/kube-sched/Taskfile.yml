@@ -30,7 +30,7 @@ tasks:
   kube-sched-setup:
     desc: Verify kube-sched prerequisites (kubectl, workload cluster)
     cmd: |
-      set -Eeuo pipefail
+      set -euo pipefail
       echo "=== kube-sched — prerequisites ==="
       for cmd in kubectl python3; do
         command -v "$cmd" >/dev/null 2>&1 && echo "  [OK] $cmd" || { echo "  [MISSING] $cmd" >&2; exit 1; }
